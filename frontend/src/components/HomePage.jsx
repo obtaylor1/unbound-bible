@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import './HomePage.css'
-import heroImage from '../assets/images/garden-of-eden-hero.png'
-import textualComparisonIcon from '../assets/images/textual-comparison-icon.png'
+import heroImage from '../assets/images/garden-of-eden-hero.jpg'
+import textualComparisonIcon from '../assets/images/textual-comparison-icon.jpg'
 
 function HomePage({ onPageChange }) {
   const [searchQuery, setSearchQuery] = useState('')
