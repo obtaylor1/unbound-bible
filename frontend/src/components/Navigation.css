@@ -1,0 +1,282 @@
+/* Modern Dark Navigation Header */
+.navigation {
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  padding: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.3);
+}
+
+.nav-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 32px;
+  height: 64px;
+}
+
+.nav-left {
+  display: flex;
+  align-items: center;
+}
+
+.nav-logo {
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.logo-icon {
+  font-size: 24px;
+  color: #8b5cf6;
+}
+
+.logo-text {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: white;
+  margin-right: 8px;
+}
+
+.logo-tagline {
+  font-size: 0.75rem;
+  color: #888;
+  font-weight: 400;
+}
+
+.nav-logo:hover .logo-text {
+  color: #8b5cf6;
+}
+
+.nav-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-item {
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  color: #ccc;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  position: relative;
+}
+
+.nav-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.nav-item.active {
+  background-color: #8b5cf6;
+  color: white;
+}
+
+.nav-item.active:hover {
+  background-color: #7c3aed;
+}
+
+.nav-icon {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+}
+
+.nav-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.nav-tag {
+  background: #8b5cf6;
+  color: white;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+  letter-spacing: 0.5px;
+}
+
+.nav-tag.beta {
+  background: #f59e0b;
+}
+
+.nav-tag.interactive {
+  background: #10b981;
+}
+
+.nav-tag.ai-powered {
+  background: #6366f1;
+  font-size: 0.65rem;
+  text-transform: none;
+  font-weight: 500;
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-action-btn {
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: #ccc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nav-action-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.action-icon {
+  font-size: 16px;
+}
+
+.nav-signin {
+  background: #8b5cf6;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  margin-left: 8px;
+}
+
+.nav-signin:hover {
+  background-color: #7c3aed;
+}
+
+.signin-icon {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+}
+
+.signin-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Responsive Design */
+@media (max-width: 968px) {
+  .nav-center {
+    gap: 2px;
+  }
+  
+  .nav-item {
+    padding: 6px 12px;
+  }
+  
+  .nav-text {
+    font-size: 0.8rem;
+  }
+  
+  .nav-tag {
+    font-size: 0.55rem;
+    padding: 1px 4px;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-container {
+    padding: 0 16px;
+    height: 56px;
+  }
+  
+  .logo-text {
+    font-size: 1rem;
+  }
+  
+  .logo-tagline {
+    display: none;
+  }
+  
+  .nav-center {
+    gap: 2px;
+  }
+  
+  .nav-item {
+    padding: 6px 10px;
+  }
+  
+  .nav-text {
+    display: none;
+  }
+  
+  .nav-tag {
+    display: none;
+  }
+  
+  .signin-text {
+    display: none;
+  }
+  
+  .nav-icon, .signin-icon, .action-icon {
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-container {
+    padding: 0 12px;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 56px;
+  }
+  
+  .nav-center {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    padding: 8px 0;
+    border-top: 1px solid #333;
+    margin-top: 8px;
+  }
+  
+  .logo-text {
+    font-size: 0.9rem;
+  }
+  
+  .nav-action-btn {
+    width: 32px;
+    height: 32px;
+  }
+}

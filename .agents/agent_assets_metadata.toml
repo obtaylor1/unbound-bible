@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "K5ltZGQFJujUxXed-2p3F"
+uri = "file://unbound-bible.zip"
+type = "unspecified"
+title = "The Unbound Bible — Full Source Code"

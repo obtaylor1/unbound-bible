@@ -1,0 +1,342 @@
+/* Word Context Popover Styles - Matching screenshot design */
+
+.popover-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 998;
+}
+
+.word-context-popover {
+  position: fixed;
+  z-index: 999;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid #4a90e2;
+  border-radius: 12px;
+  min-width: 400px;
+  max-width: 500px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 
+              0 0 20px rgba(74, 144, 226, 0.2);
+  color: #ffffff;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+  backdrop-filter: blur(10px);
+  animation: popoverFadeIn 0.3s ease-out;
+}
+
+@keyframes popoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -100%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1);
+  }
+}
+
+.word-popover-content {
+  padding: 0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Header Section */
+.popover-header {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+  border-bottom: 1px solid rgba(74, 144, 226, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.original-word-title {
+  color: #4a90e2;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.bias-alert-title {
+  color: #e74c3c;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bias-alert-icon {
+  font-size: 16px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #bdc3c7;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* Original Word Section */
+.original-word-section {
+  padding: 20px;
+}
+
+.word-display {
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.english-word {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.original-text {
+  display: block;
+  font-size: 20px;
+  color: #4a90e2;
+  font-weight: 500;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.word-details {
+  space-y: 12px;
+}
+
+.language-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  color: #ecf0f1;
+  font-size: 14px;
+}
+
+.strongs-number {
+  background: #34495e;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4a90e2;
+}
+
+.meaning {
+  margin-bottom: 12px;
+  color: #ecf0f1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.detailed-context {
+  color: #bdc3c7;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.detailed-context > div {
+  margin-bottom: 8px;
+}
+
+/* Cross References Section */
+.cross-references-section {
+  border-top: 1px solid rgba(74, 144, 226, 0.3);
+  padding: 16px 20px;
+}
+
+.view-cross-refs-btn {
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 16px;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.view-cross-refs-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+}
+
+.translation-comparison h4 {
+  color: #ecf0f1;
+  font-size: 14px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.translation-variants {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.translation-item {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-left: 3px solid transparent;
+}
+
+.translation-item:last-child {
+  margin-bottom: 0;
+}
+
+.translation-header {
+  margin-bottom: 6px;
+}
+
+.translation-code {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #34495e;
+  color: #ecf0f1;
+}
+
+.translation-code.kjv {
+  background: #e67e22;
+  color: white;
+}
+
+.translation-code.web {
+  background: #27ae60;
+  color: white;
+}
+
+.translation-code.webbe {
+  background: #8e44ad;
+  color: white;
+}
+
+.translation-text {
+  font-size: 13px;
+  color: #bdc3c7;
+  line-height: 1.4;
+}
+
+/* Bias Alert Specific Styles */
+.word-popover-content.bias-alert {
+  border-color: #e74c3c;
+}
+
+.bias-alert .popover-header {
+  background: linear-gradient(135deg, #c0392b 0%, #e74c3c 100%);
+}
+
+.bias-content {
+  padding: 20px;
+}
+
+.bias-explanation {
+  font-size: 14px;
+  color: #ecf0f1;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.original-vs-translation {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.original-section, .literal-section {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.original-script {
+  font-size: 16px;
+  color: #4a90e2;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+.literal-text {
+  font-size: 14px;
+  color: #27ae60;
+  font-style: italic;
+}
+
+.click-details-note {
+  font-size: 12px;
+  color: #95a5a6;
+  text-align: center;
+  margin-top: 12px;
+}
+
+/* Loading State */
+.word-popover-content.loading {
+  padding: 40px;
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(74, 144, 226, 0.3);
+  border-top: 3px solid #4a90e2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Not Found State */
+.word-popover-content.not-found {
+  padding: 20px;
+  text-align: center;
+}
+
+.not-found-message p {
+  color: #bdc3c7;
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .word-context-popover {
+    min-width: 320px;
+    max-width: 90vw;
+    left: 50% !important;
+    transform: translate(-50%, -100%);
+  }
+}

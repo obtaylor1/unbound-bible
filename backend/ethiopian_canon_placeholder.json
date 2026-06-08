@@ -1,0 +1,162 @@
+{
+  "ethiopian_orthodox_tewahedo_bible": {
+    "metadata": {
+      "name": "Ethiopian Orthodox Tewahedo Bible",
+      "description": "The biblical canon used by the Ethiopian Orthodox Tewahedo Church, containing 81 books",
+      "language": "Ge'ez (Classical Ethiopic)",
+      "total_books": 81,
+      "old_testament_books": 46,
+      "new_testament_books": 35,
+      "deuterocanonical_books": [
+        "1 Enoch",
+        "Jubilees", 
+        "1 Esdras",
+        "2 Esdras",
+        "Rest of Esther",
+        "Tobit",
+        "Judith",
+        "1 Maccabees",
+        "2 Maccabees",
+        "3 Maccabees",
+        "Wisdom of Solomon",
+        "Ecclesiasticus (Sirach)",
+        "Baruch",
+        "Letter of Jeremiah",
+        "Prayer of Azariah",
+        "Susanna",
+        "Bel and the Dragon",
+        "Prayer of Manasseh",
+        "4 Ezra"
+      ],
+      "unique_books": [
+        "1 Enoch (complete 108 chapters)",
+        "Jubilees",
+        "1 Meqabyan",
+        "2 Meqabyan", 
+        "3 Meqabyan"
+      ],
+      "source_notes": "This is a placeholder structure. The Ethiopian Orthodox canon includes books not found in other Christian traditions. Full public domain texts need to be sourced from Ethiopian Orthodox institutions or academic repositories.",
+      "copyright_status": "Public domain texts in Ge'ez are difficult to obtain. Academic collaboration with Ethiopian Orthodox scholars recommended."
+    },
+    "old_testament": {
+      "law": [
+        {"book": "Genesis", "chapters": 50, "available": false},
+        {"book": "Exodus", "chapters": 40, "available": false},
+        {"book": "Leviticus", "chapters": 27, "available": false},
+        {"book": "Numbers", "chapters": 36, "available": false},
+        {"book": "Deuteronomy", "chapters": 34, "available": false}
+      ],
+      "historical_books": [
+        {"book": "Joshua", "chapters": 24, "available": false},
+        {"book": "Judges", "chapters": 21, "available": false},
+        {"book": "Ruth", "chapters": 4, "available": false},
+        {"book": "1 Samuel", "chapters": 31, "available": false},
+        {"book": "2 Samuel", "chapters": 24, "available": false},
+        {"book": "1 Kings", "chapters": 22, "available": false},
+        {"book": "2 Kings", "chapters": 25, "available": false},
+        {"book": "1 Chronicles", "chapters": 29, "available": false},
+        {"book": "2 Chronicles", "chapters": 36, "available": false},
+        {"book": "1 Esdras", "chapters": 9, "available": false},
+        {"book": "Ezra", "chapters": 10, "available": false},
+        {"book": "Nehemiah", "chapters": 13, "available": false},
+        {"book": "Tobit", "chapters": 14, "available": false},
+        {"book": "Judith", "chapters": 16, "available": false},
+        {"book": "Esther", "chapters": 16, "available": false, "note": "Including additions"},
+        {"book": "1 Maccabees", "chapters": 16, "available": false},
+        {"book": "2 Maccabees", "chapters": 15, "available": false},
+        {"book": "3 Maccabees", "chapters": 7, "available": false}
+      ],
+      "wisdom_literature": [
+        {"book": "Job", "chapters": 42, "available": false},
+        {"book": "Psalms", "chapters": 151, "available": false, "note": "151 psalms in Ethiopian tradition"},
+        {"book": "Proverbs", "chapters": 31, "available": false},
+        {"book": "Ecclesiastes", "chapters": 12, "available": false},
+        {"book": "Song of Songs", "chapters": 8, "available": false},
+        {"book": "Wisdom of Solomon", "chapters": 19, "available": false},
+        {"book": "Ecclesiasticus (Sirach)", "chapters": 51, "available": false}
+      ],
+      "prophetic_books": [
+        {"book": "Isaiah", "chapters": 66, "available": false},
+        {"book": "Jeremiah", "chapters": 52, "available": false},
+        {"book": "Lamentations", "chapters": 5, "available": false},
+        {"book": "Baruch", "chapters": 6, "available": false},
+        {"book": "Ezekiel", "chapters": 48, "available": false},
+        {"book": "Daniel", "chapters": 14, "available": false, "note": "Including Susanna, Bel and Dragon"},
+        {"book": "Hosea", "chapters": 14, "available": false},
+        {"book": "Joel", "chapters": 3, "available": false},
+        {"book": "Amos", "chapters": 9, "available": false},
+        {"book": "Obadiah", "chapters": 1, "available": false},
+        {"book": "Jonah", "chapters": 4, "available": false},
+        {"book": "Micah", "chapters": 7, "available": false},
+        {"book": "Nahum", "chapters": 3, "available": false},
+        {"book": "Habakkuk", "chapters": 3, "available": false},
+        {"book": "Zephaniah", "chapters": 3, "available": false},
+        {"book": "Haggai", "chapters": 2, "available": false},
+        {"book": "Zechariah", "chapters": 14, "available": false},
+        {"book": "Malachi", "chapters": 4, "available": false}
+      ],
+      "ethiopian_deuterocanonical": [
+        {"book": "1 Enoch", "chapters": 108, "available": false, "note": "Complete Book of Enoch - unique to Ethiopian canon"},
+        {"book": "Jubilees", "chapters": 50, "available": false, "note": "Little Genesis - creation to Moses"}
+      ]
+    },
+    "new_testament": {
+      "gospels": [
+        {"book": "Matthew", "chapters": 28, "available": false},
+        {"book": "Mark", "chapters": 16, "available": false},
+        {"book": "Luke", "chapters": 24, "available": false},
+        {"book": "John", "chapters": 21, "available": false}
+      ],
+      "acts_and_epistles": [
+        {"book": "Acts", "chapters": 28, "available": false},
+        {"book": "Romans", "chapters": 16, "available": false},
+        {"book": "1 Corinthians", "chapters": 16, "available": false},
+        {"book": "2 Corinthians", "chapters": 13, "available": false},
+        {"book": "Galatians", "chapters": 6, "available": false},
+        {"book": "Ephesians", "chapters": 6, "available": false},
+        {"book": "Philippians", "chapters": 4, "available": false},
+        {"book": "Colossians", "chapters": 4, "available": false},
+        {"book": "1 Thessalonians", "chapters": 5, "available": false},
+        {"book": "2 Thessalonians", "chapters": 3, "available": false},
+        {"book": "1 Timothy", "chapters": 6, "available": false},
+        {"book": "2 Timothy", "chapters": 4, "available": false},
+        {"book": "Titus", "chapters": 3, "available": false},
+        {"book": "Philemon", "chapters": 1, "available": false},
+        {"book": "Hebrews", "chapters": 13, "available": false},
+        {"book": "James", "chapters": 5, "available": false},
+        {"book": "1 Peter", "chapters": 5, "available": false},
+        {"book": "2 Peter", "chapters": 3, "available": false},
+        {"book": "1 John", "chapters": 5, "available": false},
+        {"book": "2 John", "chapters": 1, "available": false},
+        {"book": "3 John", "chapters": 1, "available": false},
+        {"book": "Jude", "chapters": 1, "available": false}
+      ],
+      "ethiopian_catholic_epistles": [
+        {"book": "1 Meqabyan", "chapters": 42, "available": false, "note": "Ethiopian Catholic Epistle - not found in other traditions"},
+        {"book": "2 Meqabyan", "chapters": 17, "available": false, "note": "Ethiopian Catholic Epistle - not found in other traditions"},
+        {"book": "3 Meqabyan", "chapters": 9, "available": false, "note": "Ethiopian Catholic Epistle - not found in other traditions"}
+      ],
+      "apocalyptic": [
+        {"book": "Revelation", "chapters": 22, "available": false}
+      ]
+    },
+    "import_strategy": {
+      "phase_1": "Research academic sources for public domain Ge'ez texts",
+      "phase_2": "Contact Ethiopian Orthodox Tewahedo Church institutions",
+      "phase_3": "Collaborate with Ethiopian studies scholars",
+      "phase_4": "Implement gradual import as texts become available",
+      "priority_books": [
+        "1 Enoch (complete)",
+        "Jubilees", 
+        "1-3 Meqabyan",
+        "Extended Psalms (151 psalms)"
+      ]
+    },
+    "technical_notes": {
+      "encoding": "UTF-8 with Ge'ez script support required",
+      "database_ready": "Schema supports Ethiopian canon when texts become available",
+      "transliteration": "Consider adding romanized versions for broader access",
+      "academic_partnerships": "Essential for authentic texts and cultural context"
+    }
+  }
+}
