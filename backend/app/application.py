@@ -7,6 +7,7 @@ from app.database import Base, create_database_engine, create_session_factory
 from app.auth import models as auth_models  # noqa: F401
 from app.studies import models as study_models  # noqa: F401
 from app.sharing import models as sharing_models  # noqa: F401
+from app.notifications import models as notification_models  # noqa: F401
 
 
 def create_application(settings: Settings | None = None) -> FastAPI:

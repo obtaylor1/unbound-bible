@@ -10,6 +10,7 @@ from app.sharing.policies import can_view, is_owner
 from app.sharing.schemas import ShareCreate, ShareUpdate
 from app.sharing.service import create_snapshot, find_share, revoke
 from app.studies.models import StudyMessage, StudySession
+from app.notifications.service import create_notification
 
 
 router = APIRouter(prefix='/shares', tags=['sharing'])
@@ -68,4 +69,7 @@ def duplicate(share_id: str, user: User = Depends(get_current_user), session: Se
     if not share or not can_view(share, user) or share.revoked_at is not None: raise HTTPException(404, 'Shared study not found')
     study = StudySession(owner_id=user.id, title=share.title); session.add(study); session.flush()
     for item in share.messages_snapshot: session.add(StudyMessage(study_id=study.id, role=item['role'], content=item['content']))
-    session.commit(); session.refresh(study); return {'id': study.id, 'title': study.title}
+    session.commit(); session.refresh(study)
+    if user.id != share.owner_id:
+        create_notification(session, recipient_id=share.owner_id, actor_id=user.id, event_type='shared_study_activity', target_type='share', target_id=share_id, message='Someone saved a copy of your shared study.', deduplication_key=f'share-duplicate:{share.id}:{user.id}')
+    return {'id': study.id, 'title': study.title}

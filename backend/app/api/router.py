@@ -5,6 +5,7 @@ from app.ai.factory import provider_diagnostics
 from app.ai.router import router as ai_router
 from app.sharing.router import router as sharing_router
 from app.search.router import router as search_router
+from app.notifications.router import router as notifications_router
 
 
 api_router = APIRouter()
@@ -13,6 +14,7 @@ api_router.include_router(studies_router)
 api_router.include_router(ai_router)
 api_router.include_router(sharing_router)
 api_router.include_router(search_router)
+api_router.include_router(notifications_router)
 
 
 @api_router.get("/health", tags=["system"])

@@ -4,6 +4,7 @@ import AuthDialog from '../auth/AuthDialog'
 import AccountMenu from '../auth/AccountMenu'
 import { useAuth } from '../auth/authContext'
 import SearchDialog from '../search/SearchDialog'
+import NotificationInbox from '../notifications/NotificationInbox'
 
 const GROUPS = [
   {
@@ -167,9 +168,7 @@ function Navigation({ currentPage, onPageChange }) {
           <button className="nav-action-btn" type="button" aria-label="Search" onClick={() => setSearchOpen(true)}>
             <span aria-hidden="true">⌕</span>
           </button>
-          <button className="nav-action-btn" type="button" aria-label="Notifications" onClick={() => navigate('notes')}>
-            <span aria-hidden="true">◌</span>
-          </button>
+          {user ? <NotificationInbox /> : <button className="nav-action-btn" type="button" aria-label="Notifications" onClick={() => setAuthOpen(true)}><span aria-hidden="true">◌</span></button>}
           {user ? <AccountMenu /> : <button className="nav-signin" type="button" onClick={() => setAuthOpen(true)}>
             <span aria-hidden="true">◉</span><span>Sign in</span>
           </button>}

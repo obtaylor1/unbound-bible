@@ -364,3 +364,13 @@
 .search-results strong { display: block; margin-top: 3px; }
 .search-results p { margin: 4px 0 0; color: #aeb4be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .search-hint, .search-results > p { padding: 18px; color: #959ca8; text-align: center; }
+.notification-inbox { position: relative; }
+.notification-badge { position: absolute; top: -4px; right: -4px; min-width: 17px; height: 17px; display: grid; place-items: center; padding: 0 4px; border-radius: 10px; background: #d45d4c; color: white; font-size: .62rem; font-weight: 800; }
+.notification-popover { position: absolute; top: calc(100% + 12px); right: 0; width: min(380px, calc(100vw - 24px)); padding: 10px; border: 1px solid #383e49; border-radius: 14px; background: #171a20; box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+.notification-header { display: flex; align-items: center; justify-content: space-between; padding: 9px; }
+.notification-header button, .notification-popover > a { border: 0; background: transparent; color: #d9b45b; font-size: .78rem; cursor: pointer; }
+.notification-list { display: grid; max-height: 420px; overflow: auto; }
+.notification-list button { display: grid; gap: 4px; padding: 12px; border: 0; border-radius: 8px; text-align: left; color: #eee; background: transparent; cursor: pointer; }
+.notification-list button.unread { background: rgba(217,180,91,.1); }
+.notification-list small { color: #969daa; }
+.notification-popover > a { display: block; padding: 12px; text-align: center; }
