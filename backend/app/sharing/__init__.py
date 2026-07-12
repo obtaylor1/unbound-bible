@@ -1,0 +1,1 @@
+"""Immutable shared study snapshots."""

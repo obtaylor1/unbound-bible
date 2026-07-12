@@ -33,3 +33,17 @@ def get_current_user(
     if user is None or not user.is_active:
         raise unauthorized
     return user
+
+
+def get_optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    session: Session = Depends(get_session),
+) -> User | None:
+    if credentials is None: return None
+    try:
+        claims = decode_token(credentials.credentials, request.app.state.settings, "access")
+        user = session.get(User, uuid.UUID(claims["sub"]))
+        return user if user and user.is_active else None
+    except (ValueError, TypeError):
+        return None
