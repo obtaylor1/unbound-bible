@@ -11,6 +11,7 @@ from app.sharing.schemas import ShareCreate, ShareUpdate
 from app.sharing.service import create_snapshot, find_share, revoke
 from app.studies.models import StudyMessage, StudySession
 from app.notifications.service import create_notification
+from app.security.rate_limits import enforce_rate_limit
 
 
 router = APIRouter(prefix='/shares', tags=['sharing'])
@@ -20,7 +21,7 @@ def serialize(share: SharedStudy, identifier: str) -> dict:
     return {'share_id': identifier, 'title': share.title, 'visibility': share.visibility, 'messages': share.messages_snapshot, 'sources': share.sources_snapshot, 'created_at': share.created_at, 'revoked': share.revoked_at is not None}
 
 
-@router.post('', status_code=201)
+@router.post('', status_code=201, dependencies=[Depends(enforce_rate_limit('sharing', 'sharing_rate_limit', 3600))])
 def create(payload: ShareCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     try: share, identifier = create_snapshot(session, user.id, payload.study_id, payload.visibility, payload.title)
     except LookupError as error: raise HTTPException(404, str(error)) from error

@@ -7,6 +7,7 @@ from app.ai.factory import create_chat_provider
 from app.ai.references import parse_reference
 from app.ai.retrieval import retrieve_exact_reference
 from app.auth.dependencies import get_session
+from app.security.rate_limits import enforce_rate_limit
 
 
 router = APIRouter(prefix="/chat", tags=["AI study"])
@@ -16,7 +17,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=10_000)
 
 
-@router.post("/ask")
+@router.post("/ask", dependencies=[Depends(enforce_rate_limit('ai', 'ai_rate_limit', 60))])
 async def ask(payload: AskRequest, request: Request, session: Session = Depends(get_session)) -> dict:
     reference = parse_reference(payload.question)
     sources = retrieve_exact_reference(session, reference) if reference else []

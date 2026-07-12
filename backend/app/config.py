@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     access_token_minutes: int = 15
     refresh_token_days: int = 30
+    auth_rate_limit: int = 10
+    ai_rate_limit: int = 30
+    search_rate_limit: int = 60
+    sharing_rate_limit: int = 20
+    sermon_rate_limit: int = 5
+    upload_max_bytes: int = 100 * 1024 * 1024
+    upload_max_duration_seconds: int = 3 * 60 * 60
+    upload_temp_dir: str | None = None
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

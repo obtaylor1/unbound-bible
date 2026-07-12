@@ -9,6 +9,8 @@ from app.studies import models as study_models  # noqa: F401
 from app.sharing import models as sharing_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
 from app.community import models as community_models  # noqa: F401
+from app.security.rate_limits import InMemoryRateLimiter
+from app.observability.logging import configure_logging
 
 
 def create_application(settings: Settings | None = None) -> FastAPI:
@@ -24,6 +26,8 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     engine = create_database_engine(settings)
     application.state.database_engine = engine
     application.state.session_factory = create_session_factory(engine)
+    application.state.rate_limiter = InMemoryRateLimiter()
+    configure_logging()
     if settings.environment == "test":
         Base.metadata.create_all(engine)
     application.add_middleware(

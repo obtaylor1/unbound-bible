@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.116.1",
     "langchain>=0.3.27",
     "langchain-openai>=0.3.33",
+    "mutagen>=1.47.0",
     "openai>=1.107.2",
     "passlib[bcrypt]>=1.7.4",
     "pgvector>=0.4.1",

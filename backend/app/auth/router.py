@@ -6,6 +6,7 @@ from app.auth.dependencies import get_current_user, get_session
 from app.auth.models import User
 from app.auth.schemas import LoginRequest, ProfileUpdate, RefreshRequest, TokenPair, UserCreate, UserRead
 from app.auth.service import AuthService, AuthenticationError, ConflictError
+from app.security.rate_limits import enforce_rate_limit
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -15,7 +16,7 @@ def service(request: Request, session: Session = Depends(get_session)) -> AuthSe
     return AuthService(session, request.app.state.settings)
 
 
-@router.post("/register", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=TokenPair, status_code=status.HTTP_201_CREATED, dependencies=[Depends(enforce_rate_limit('register', 'auth_rate_limit', 3600))])
 def register(payload: UserCreate, auth: AuthService = Depends(service)) -> TokenPair:
     try:
         _, access, refresh = auth.register(payload.email, payload.username, payload.password)
@@ -24,7 +25,7 @@ def register(payload: UserCreate, auth: AuthService = Depends(service)) -> Token
     return TokenPair(access_token=access, refresh_token=refresh)
 
 
-@router.post("/login", response_model=TokenPair)
+@router.post("/login", response_model=TokenPair, dependencies=[Depends(enforce_rate_limit('login', 'auth_rate_limit', 900))])
 def login(payload: LoginRequest, auth: AuthService = Depends(service)) -> TokenPair:
     try:
         _, access, refresh = auth.login(payload.email, payload.password)
