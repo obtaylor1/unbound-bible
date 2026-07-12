@@ -104,6 +104,9 @@ function AskTheBible({ onPageChange }) {
         sources: result.sources,
         followUps: result.followUps,
         provenance: result.provenance,
+        groundingStatus: result.groundingStatus,
+        provider: result.provider,
+        model: result.model,
         timestamp: new Date()
       }])
     } catch (err) {
@@ -265,9 +268,11 @@ function AskTheBible({ onPageChange }) {
                         <div className={`confidence-indicator-tag ${msg.provenance || 'unsourced'}`}>
                           {msg.provenance === 'demo'
                             ? 'Demonstration answer — local study preview'
+                            : msg.groundingStatus === 'insufficient'
+                              ? 'Insufficient verified evidence — no answer was invented'
                             : msg.sources?.length
-                              ? 'Live answer — cited library sources'
-                              : 'Live answer — no sources returned'}
+                              ? `Verified library evidence · ${msg.provider || 'configured provider'}`
+                              : 'No verified sources returned'}
                         </div>
                         
                         <div className="answer-text-area">{renderFormattedAnswer(msg.content)}</div>

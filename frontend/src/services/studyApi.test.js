@@ -7,13 +7,15 @@ describe('askStudyQuestion', () => {
   it('normalizes a grounded API answer', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ answer: 'A grounded answer', context_used: ['Library source A'] })
+      json: async () => ({ answer: 'A grounded answer', sources: [{ reference: 'Genesis 1:1', text: 'In the beginning' }], is_demo: false, provider: 'ollama', model: 'local', grounding_status: 'grounded' })
     }))
 
     await expect(askStudyQuestion('Question')).resolves.toMatchObject({
       answer: 'A grounded answer',
       provenance: 'live',
-      sources: [{ citation: 'Library source A' }]
+      sources: [{ citation: 'Genesis 1:1' }],
+      groundingStatus: 'grounded',
+      provider: 'ollama'
     })
   })
 
@@ -22,10 +24,10 @@ describe('askStudyQuestion', () => {
     await expect(askStudyQuestion('Question')).rejects.toThrow('unreadable answer')
   })
 
-  it('labels backend fallback content as demo rather than live', async () => {
+  it('uses authoritative backend demo metadata', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ answer: 'Preview response. Set your OPENAI_API_KEY to run live GPT audits.', context_used: [] })
+      json: async () => ({ answer: 'Preview response.', sources: [], is_demo: true, provider: 'demo', model: 'bundled-demo', grounding_status: 'demo' })
     }))
     await expect(askStudyQuestion('Question')).resolves.toMatchObject({ provenance: 'demo' })
   })

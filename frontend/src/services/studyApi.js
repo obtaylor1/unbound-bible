@@ -46,13 +46,14 @@ export async function askStudyQuestion(question, { allowDemo = true } = {}) {
       throw new Error('The study library returned an unreadable answer.')
     }
 
-    const backendIsDemo = /OPENAI_API_KEY|\bmock (mode|answer|response)\b|\bdemo(?:nstration)? answer\b/i.test(data.answer)
-
     return {
       answer: data.answer,
       sources: normalizeSources(data.context_used || data.sources || []),
       followUps: data.follow_ups || [],
-      provenance: backendIsDemo ? 'demo' : 'live'
+      provenance: data.is_demo ? 'demo' : 'live',
+      groundingStatus: data.grounding_status || 'unknown',
+      provider: data.provider || 'legacy',
+      model: data.model || 'unknown'
     }
   } catch (error) {
     if (!allowDemo) throw error
@@ -63,7 +64,10 @@ export async function askStudyQuestion(question, { allowDemo = true } = {}) {
       answer: demo.answer,
       sources: normalizeSources(demo.sources || []),
       followUps: demo.followUps || [],
-      provenance: 'demo'
+      provenance: 'demo',
+      groundingStatus: 'demo',
+      provider: 'demo',
+      model: 'bundled-demo'
     }
   }
 }
