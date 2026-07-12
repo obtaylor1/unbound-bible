@@ -40,6 +40,7 @@ const PAGE_TO_HASH = {
 
 export const pageFromHash = (hash = '') => HASH_TO_PAGE[hash.replace(/^#/, '').toLowerCase()] ?? 'home'
 export const hashForPage = (page) => PAGE_TO_HASH[page] ?? '#home'
+export const shareIdFromPath = (path = '') => /^\/share\/([A-Za-z0-9_-]+)\/?$/.exec(path)?.[1] ?? null
 
 const PAGE_TITLES = {
   home: 'The Unbound Bible',

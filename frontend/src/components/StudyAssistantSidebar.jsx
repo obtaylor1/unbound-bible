@@ -27,6 +27,7 @@ function StudyAssistantSidebar({
   const [chatLoading, setChatLoading] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [shareData, setShareData] = useState(null)
+  const [studyId, setStudyId] = useState(null)
 
   const chatEndRef = useRef(null)
 
@@ -237,8 +238,17 @@ function StudyAssistantSidebar({
   }
 
   // Share conversation
-  const handleShareSession = () => {
+  const handleShareSession = async () => {
+    let persistedId = studyId
+    if (authStatus === 'authenticated' && !persistedId) {
+      try {
+        const study = await api.post('/studies', { title: `Study of ${book} ${chapter}:${verse}` })
+        for (const message of chatMessages.filter((item) => item.id !== 'welcome')) await api.post(`/studies/${study.id}/messages`, { role: message.type === 'ai' ? 'assistant' : 'user', content: message.content })
+        persistedId = study.id; setStudyId(study.id)
+      } catch (error) { console.error('Could not save study before sharing:', error); return }
+    }
     setShareData({
+      studyId: persistedId,
       title: `Decolonized Study of ${book} ${chapter}:${verse}`,
       verses: [`${book} ${chapter}:${verse}`],
       type: 'Study Assistant Conversation',

@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import './AskTheBible.css'
 import ShareStudyModal from './ShareStudyModal'
 import { askStudyQuestion } from '../services/studyApi'
+import { api } from '../api/client'
+import { useAuth } from '../auth/authContext'
 
 const POPULAR_SUGGESTIONS = [
   "What does the Bible say about forgiveness?",
@@ -54,6 +56,7 @@ const EXPLORE_TOPICS = [
 ];
 
 function AskTheBible({ onPageChange }) {
+  const { status: authStatus } = useAuth()
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
@@ -61,6 +64,7 @@ function AskTheBible({ onPageChange }) {
   const [shareData, setShareData] = useState(null)
   const [statusMessage, setStatusMessage] = useState('')
   const [showHelp, setShowHelp] = useState(false)
+  const [studyId, setStudyId] = useState(null)
   
   const chatEndRef = useRef(null)
 
@@ -124,8 +128,21 @@ function AskTheBible({ onPageChange }) {
   }
 
   // Save conversation
-  const handleSaveConversation = () => {
+  const persistConversation = async () => {
+    if (studyId) return studyId
+    const title = `Grounded Q&A: ${messages[0]?.content.slice(0, 30) || 'New study'}...`
+    const study = await api.post('/studies', { title })
+    for (const message of messages) await api.post(`/studies/${study.id}/messages`, { role: message.type === 'ai' ? 'assistant' : 'user', content: message.content })
+    setStudyId(study.id)
+    return study.id
+  }
+
+  const handleSaveConversation = async () => {
     if (messages.length === 0) return
+    if (authStatus === 'authenticated') {
+      try { await persistConversation(); setStatusMessage('Study session saved privately to My Library.'); return }
+      catch (error) { setStatusMessage(`Could not save to your account: ${error.message}`); return }
+    }
     const session = {
       id: 'session_' + Date.now(),
       title: `Grounded Q&A: ${messages[0].content.slice(0, 30)}...`,
@@ -143,8 +160,13 @@ function AskTheBible({ onPageChange }) {
   }
 
   // Trigger Share Modal
-  const handleShare = () => {
+  const handleShare = async () => {
+    let persistedId = studyId
+    if (authStatus === 'authenticated' && !persistedId) {
+      try { persistedId = await persistConversation() } catch (error) { setStatusMessage(`Save failed: ${error.message}`); return }
+    }
     setShareData({
+      studyId: persistedId,
       title: "Library-Grounded Biblical Q&A Session",
       verses: [],
       type: 'Ask the Bible Q&A',
