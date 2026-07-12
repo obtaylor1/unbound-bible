@@ -351,3 +351,16 @@
 .account-popover { position: absolute; top: calc(100% + 10px); right: 0; width: 220px; display: grid; gap: 7px; padding: 16px; border: 1px solid #343945; border-radius: 12px; background: #171a20; box-shadow: 0 18px 44px rgba(0,0,0,.45); }
 .account-popover small { color: #9da3ae; overflow: hidden; text-overflow: ellipsis; }
 .account-popover button { padding: 9px; border: 0; border-radius: 7px; text-align: left; background: #22262e; color: #eee; cursor: pointer; }
+.search-backdrop { position: fixed; inset: 0; z-index: 1000; padding: 12vh 20px 20px; background: rgba(5,7,10,.76); backdrop-filter: blur(9px); }
+.search-dialog { width: min(680px, 100%); margin: auto; overflow: hidden; border: 1px solid #3a404b; border-radius: 16px; background: #15181e; box-shadow: 0 30px 90px rgba(0,0,0,.6); }
+.search-field { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 17px 20px; border-bottom: 1px solid #303640; font-size: 1.3rem; }
+.search-field input { border: 0; outline: 0; background: transparent; color: white; font: inherit; }
+.search-field kbd { padding: 4px 7px; border: 1px solid #444b57; border-radius: 5px; color: #9fa6b1; font-size: .7rem; }
+.search-results { max-height: min(58vh, 520px); overflow: auto; padding: 8px; }
+.search-results button { width: 100%; display: flex; justify-content: space-between; gap: 16px; padding: 13px; border: 0; border-radius: 9px; text-align: left; background: transparent; color: #eee; cursor: pointer; }
+.search-results button.active, .search-results button:hover { background: #242932; }
+.search-results button span:first-child { min-width: 0; }
+.search-results small { display: block; color: #d9b45b; text-transform: uppercase; }
+.search-results strong { display: block; margin-top: 3px; }
+.search-results p { margin: 4px 0 0; color: #aeb4be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-hint, .search-results > p { padding: 18px; color: #959ca8; text-align: center; }

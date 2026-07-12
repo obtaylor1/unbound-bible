@@ -3,6 +3,7 @@ import './Navigation.css'
 import AuthDialog from '../auth/AuthDialog'
 import AccountMenu from '../auth/AccountMenu'
 import { useAuth } from '../auth/authContext'
+import SearchDialog from '../search/SearchDialog'
 
 const GROUPS = [
   {
@@ -49,6 +50,7 @@ function Navigation({ currentPage, onPageChange }) {
   const [openDropdown, setOpenDropdown] = useState(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const { user } = useAuth()
   const triggerRefs = useRef({})
 
@@ -80,6 +82,14 @@ function Navigation({ currentPage, onPageChange }) {
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [openDropdown])
+
+  useEffect(() => {
+    const shortcut = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setSearchOpen(true) }
+    }
+    document.addEventListener('keydown', shortcut)
+    return () => document.removeEventListener('keydown', shortcut)
+  }, [])
 
   return (
     <nav className="navigation" aria-label="Primary navigation">
@@ -154,7 +164,7 @@ function Navigation({ currentPage, onPageChange }) {
         </div>
 
         <div className="nav-actions">
-          <button className="nav-action-btn" type="button" aria-label="Search" onClick={() => navigate('factbook')}>
+          <button className="nav-action-btn" type="button" aria-label="Search" onClick={() => setSearchOpen(true)}>
             <span aria-hidden="true">⌕</span>
           </button>
           <button className="nav-action-btn" type="button" aria-label="Notifications" onClick={() => navigate('notes')}>
@@ -166,6 +176,7 @@ function Navigation({ currentPage, onPageChange }) {
         </div>
       </div>
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+      <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} onNavigate={(url) => { setSearchOpen(false); if (url.startsWith('/#')) window.location.hash = url.slice(1); else window.location.assign(url) }} />
     </nav>
   )
 }
