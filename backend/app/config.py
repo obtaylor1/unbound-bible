@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     ai_chat_provider: str = "demo"
     ai_embedding_provider: str = "demo"
     ai_transcription_provider: str = "demo"
+    ai_api_key: str | None = None
+    ai_chat_model: str = "gpt-4o-mini"
+    ai_embedding_model: str = "text-embedding-3-small"
+    ai_transcription_model: str = "whisper-1"
+    openai_compatible_base_url: str = "https://api.openai.com/v1"
+    ollama_base_url: str = "http://localhost:11434"
     access_token_minutes: int = 15
     refresh_token_days: int = 30
 
