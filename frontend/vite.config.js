@@ -18,11 +18,6 @@ export default defineConfig({
       'Cache-Control': 'no-cache, no-store, must-revalidate'
     },
     proxy: {
-      '/api/forum': {
-        target: 'http://localhost:8008',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/forum/, '')
-      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
