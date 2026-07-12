@@ -329,3 +329,25 @@
     clip: rect(0 0 0 0);
   }
 }
+
+.auth-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center;
+  padding: 20px; background: rgba(5, 7, 10, 0.78); backdrop-filter: blur(10px);
+}
+.auth-dialog {
+  position: relative; width: min(440px, 100%); padding: 34px; border: 1px solid rgba(224, 188, 99, 0.32);
+  border-radius: 18px; background: #171a20; box-shadow: 0 30px 90px rgba(0,0,0,.55); color: #f4efe3;
+}
+.auth-dialog h2 { margin: 5px 0 8px; font-family: Georgia, serif; font-size: 2rem; }
+.auth-dialog form { display: grid; gap: 14px; margin-top: 24px; }
+.auth-dialog label { display: grid; gap: 7px; color: #d8d2c4; font-size: .86rem; font-weight: 700; }
+.auth-dialog input { min-height: 46px; padding: 0 13px; border: 1px solid #414650; border-radius: 9px; background: #0f1217; color: white; font: inherit; }
+.auth-dialog input:focus { outline: 2px solid #d9b45b; outline-offset: 2px; }
+.auth-close { position: absolute; top: 14px; right: 16px; border: 0; background: none; color: #aaa; font-size: 1.6rem; cursor: pointer; }
+.auth-switch { margin-top: 18px; border: 0; background: none; color: #dfbd68; cursor: pointer; }
+.auth-error { color: #ff9b8f; }
+.primary-button { min-height: 46px; border: 0; border-radius: 9px; background: #dfbd68; color: #17140d; font-weight: 800; cursor: pointer; }
+.account-menu { position: relative; }
+.account-popover { position: absolute; top: calc(100% + 10px); right: 0; width: 220px; display: grid; gap: 7px; padding: 16px; border: 1px solid #343945; border-radius: 12px; background: #171a20; box-shadow: 0 18px 44px rgba(0,0,0,.45); }
+.account-popover small { color: #9da3ae; overflow: hidden; text-overflow: ellipsis; }
+.account-popover button { padding: 9px; border: 0; border-radius: 7px; text-align: left; background: #22262e; color: #eee; cursor: pointer; }

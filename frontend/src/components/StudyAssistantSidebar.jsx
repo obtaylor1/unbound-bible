@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import './StudyAssistantSidebar.css'
 import { MOCK_ASK_ANSWERS } from '../data/mockData'
 import ShareStudyModal from './ShareStudyModal'
+import { api } from '../api/client'
+import { useAuth } from '../auth/authContext'
 
 function StudyAssistantSidebar({ 
   book = 'Genesis', 
@@ -10,6 +12,7 @@ function StudyAssistantSidebar({
   onClose,
   onAddNote // Callback to add note to verse
 }) {
+  const { status: authStatus } = useAuth()
   const [activeTab, setActiveTab] = useState('insights') // 'insights' or 'chat'
   const [activeInsightSubTab, setActiveInsightSubTab] = useState('crossrefs') // crossrefs, commentary, translation, lexicon, canon
   const [verseDetails, setVerseDetails] = useState(null)
@@ -50,74 +53,18 @@ function StudyAssistantSidebar({
     
     // Fetch and sync notes for this verse
     const loadNotes = async () => {
-      try {
-        const response = await fetch(`/api/v1/notes?book=${encodeURIComponent(book)}`)
-        if (response.ok) {
-          const apiNotes = await response.json()
-          
-          // Check for legacy localStorage notes to migrate
-          const local = localStorage.getItem('unbound_notes')
-          if (local) {
-            const localNotes = JSON.parse(local)
-            const migrated = []
-            const remainingLocal = []
-            
-            for (const note of localNotes) {
-              try {
-                const res = await fetch('/api/v1/notes', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    book: note.book || null,
-                    chapter: note.chapter ? parseInt(note.chapter) : null,
-                    verse: note.verse ? parseInt(note.verse) : null,
-                    text: note.text,
-                    tags: note.tags || []
-                  })
-                })
-                if (res.ok) {
-                  const savedNote = await res.json()
-                  migrated.push(savedNote)
-                } else {
-                  remainingLocal.push(note)
-                }
-              } catch (err) {
-                console.error("Migration of note failed:", err)
-                remainingLocal.push(note)
-              }
-            }
-            
-            if (remainingLocal.length > 0) {
-              localStorage.setItem('unbound_notes', JSON.stringify(remainingLocal))
-            } else {
-              localStorage.removeItem('unbound_notes')
-            }
-            
-            const allNotes = [...apiNotes, ...migrated]
-            const verseNotes = allNotes.filter(
-              n => n.book === book && n.chapter === parseInt(chapter) && n.verse === parseInt(verse)
-            )
-            setNotesList(verseNotes)
-          } else {
-            const verseNotes = apiNotes.filter(
-              n => n.chapter === parseInt(chapter) && n.verse === parseInt(verse)
-            )
-            setNotesList(verseNotes)
-          }
-        } else {
-          throw new Error("API response not OK")
-        }
-      } catch (err) {
-        console.error("Failed to fetch notes from API, falling back to local storage:", err)
-        const saved = localStorage.getItem('unbound_notes')
-        if (saved) {
-          const allNotes = JSON.parse(saved)
-          const verseNotes = allNotes.filter(
-            n => n.book === book && n.chapter === parseInt(chapter) && n.verse === parseInt(verse)
-          )
-          setNotesList(verseNotes)
-        }
+      const reference = `${book} ${chapter}:${verse}`
+      if (authStatus === 'authenticated') {
+        try {
+          const remote = await api.get('/notes')
+          setNotesList(remote.filter((note) => note.passage_reference === reference))
+          return
+        } catch (err) { console.error('Failed to load private notes:', err) }
       }
+      try {
+        const local = JSON.parse(localStorage.getItem('unbound_notes') || '[]')
+        setNotesList(local.filter((note) => note.passage_reference === reference || (note.book === book && Number(note.chapter) === Number(chapter) && Number(note.verse) === Number(verse))))
+      } catch { setNotesList([]) }
     }
     loadNotes()
 
@@ -131,7 +78,7 @@ function StudyAssistantSidebar({
         timestamp: new Date()
       }
     ])
-  }, [book, chapter, verse])
+  }, [book, chapter, verse, authStatus])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -141,33 +88,22 @@ function StudyAssistantSidebar({
   const handleSaveNote = async () => {
     if (!noteText.trim()) return
     
-    const notePayload = {
-      book,
-      chapter: parseInt(chapter),
-      verse: parseInt(verse),
-      text: noteText,
-      tags: ['Study Session', book]
-    }
+    const notePayload = { passage_reference: `${book} ${chapter}:${verse}`, content: noteText }
 
     try {
-      const res = await fetch('/api/v1/notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(notePayload)
-      })
-      if (res.ok) {
-        const savedNote = await res.json()
+      if (authStatus === 'authenticated') {
+        const savedNote = await api.post('/notes', notePayload)
         setNotesList(prev => [...prev, savedNote])
         setNoteText('')
         if (onAddNote) onAddNote(savedNote)
-      } else {
-        throw new Error('Failed to save note to API')
+        return
       }
+      throw new Error('Guest note')
     } catch (err) {
-      console.error("Failed to save note to API, falling back to local storage:", err)
+      if (authStatus === 'authenticated') console.error("Failed to save note to API, keeping a local copy:", err)
       const fallbackNote = {
         id: 'note_' + Date.now(),
-        ...notePayload,
+        ...notePayload, text: noteText, book, chapter: Number(chapter), verse: Number(verse),
         timestamp: new Date().toISOString()
       }
       const saved = localStorage.getItem('unbound_notes')

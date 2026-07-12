@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import './Navigation.css'
+import AuthDialog from '../auth/AuthDialog'
+import AccountMenu from '../auth/AccountMenu'
+import { useAuth } from '../auth/authContext'
 
 const GROUPS = [
   {
@@ -45,6 +48,8 @@ const GROUPS = [
 function Navigation({ currentPage, onPageChange }) {
   const [openDropdown, setOpenDropdown] = useState(null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
+  const { user } = useAuth()
   const triggerRefs = useRef({})
 
   const navigate = (page) => {
@@ -155,12 +160,12 @@ function Navigation({ currentPage, onPageChange }) {
           <button className="nav-action-btn" type="button" aria-label="Notifications" onClick={() => navigate('notes')}>
             <span aria-hidden="true">◌</span>
           </button>
-          <button className="nav-signin" type="button" onClick={() => navigate('forum')}>
-            <span aria-hidden="true">◉</span>
-            <span>Sign in</span>
-          </button>
+          {user ? <AccountMenu /> : <button className="nav-signin" type="button" onClick={() => setAuthOpen(true)}>
+            <span aria-hidden="true">◉</span><span>Sign in</span>
+          </button>}
         </div>
       </div>
+      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
     </nav>
   )
 }
