@@ -104,7 +104,7 @@ const ChatInterface = () => {
     }
   };
 
-  const generateFollowUps = (question, answer) => {
+  const generateFollowUps = (question) => {
     const q = question.toLowerCase();
     if (q.includes('enoch') || q.includes('watcher')) {
       return ['What is the Book of Jubilees?', 'How does 1 Enoch relate to the New Testament?', 'What are the Nephilim?'];

@@ -1,17 +1,8 @@
-import { useState, useEffect } from 'react'
 import './HomePage.css'
 import heroImage from '../assets/images/garden-of-eden-hero.jpg'
 import textualComparisonIcon from '../assets/images/textual-comparison-icon.jpg'
 
 function HomePage({ onPageChange }) {
-  const [searchQuery, setSearchQuery] = useState('')
-
-  const handleSearch = (e) => {
-    e.preventDefault()
-    // Handle search functionality
-    console.log('Searching for:', searchQuery)
-  }
-
   const handleFeatureClick = (featurePage) => {
     if (onPageChange) {
       onPageChange(featurePage)

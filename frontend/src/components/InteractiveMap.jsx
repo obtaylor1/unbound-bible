@@ -1,1156 +1,904 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import './InteractiveMap.css'
+import { BIBLICAL_LOCATIONS } from '../data/biblicalLocations'
+
+// Historical periods
+const HISTORICAL_PERIODS = [
+  'All Periods',
+  'Patriarchal Period',
+  'Exodus Period',
+  'Period of Judges',
+  'United Kingdom',
+  'Divided Kingdom',
+  'Babylonian Exile',
+  'Persian Period',
+  'Time of Jesus',
+  'Apostolic Era',
+  'Early Church'
+];
+
+// Map layers
+const MAP_LAYERS = [
+  'Biblical Events',
+  'People & Nations',
+  'African Biblical World',
+  'Empires',
+  'Journeys & Routes',
+  'Modern Countries',
+  'Ethiopian Canon Connections'
+];
+
+// People groups
+const PEOPLE_GROUPS = [
+  'All People Groups',
+  'Israelites',
+  'Egyptians',
+  'Cushites / Ethiopians',
+  'Nubians',
+  'Canaanites',
+  'Babylonians',
+  'Assyrians',
+  'Persians',
+  'Romans',
+  'Greeks',
+  'Samaritans',
+  'Philistines',
+  'Moabites',
+  'Edomites',
+  'Cyrenians'
+];
+
+// Modern countries
+const MODERN_COUNTRIES = [
+  'All Modern Countries',
+  'Israel / Palestine',
+  'Egypt',
+  'Sudan',
+  'South Sudan',
+  'Ethiopia',
+  'Eritrea',
+  'Jordan',
+  'Syria',
+  'Iraq',
+  'Iran',
+  'Turkey',
+  'Greece',
+  'Italy',
+  'Saudi Arabia',
+  'Lebanon'
+];
+
+// Canon Connections
+const CANON_CONNECTIONS = [
+  'All',
+  'Ethiopian Canon',
+  'Protestant Canon',
+  'Catholic Canon',
+  'Orthodox Canon',
+  '1 Enoch',
+  'Jubilees',
+  'Meqabyan'
+];
+
+// Seeded Route coordinates for polyline overlays
+const ROUTES_DATA = {
+  "Paul's Journeys": [
+    [36.2021, 36.1601], // Antioch
+    [35.1264, 33.4299], // Cyprus
+    [37.9397, 27.3411], // Ephesus
+    [37.9333, 22.9333], // Corinth
+    [35.2401, 24.8092], // Crete
+    [41.0125, 24.2858], // Philippi
+    [41.9028, 12.4964]  // Rome
+  ],
+  "Exodus Route": [
+    [26.8206, 30.8025], // Egypt / Memphis
+    [28.5392, 33.9750], // Sinai
+    [30.6500, 34.4167], // Kadesh Barnea (traditional)
+    [31.7683, 35.2137]  // Jerusalem
+  ],
+  "Places Connected to Jesus": [
+    [32.7019, 35.3033], // Nazareth
+    [32.8167, 35.5833], // Sea of Galilee
+    [31.7683, 35.2137], // Jerusalem
+    [31.7058, 35.2024]  // Bethlehem
+  ],
+  "African Places in the Bible": [
+    [15.0000, 32.5000], // Cush
+    [26.8206, 30.8025], // Egypt
+    [31.2001, 29.9187], // Alexandria
+    [32.8239, 21.8569]  // Cyrene
+  ]
+};
 
 function InteractiveMap() {
-  const [locations, setLocations] = useState([])
-  const [selectedLocation, setSelectedLocation] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  // State
+  const [searchTerm, setSearchTerm] = useState('')
+  const [activeLayer, setActiveLayer] = useState('Biblical Events')
+  const [activePeriod, setActivePeriod] = useState('All Periods')
+  const [activePeopleGroup, setActivePeopleGroup] = useState('All People Groups')
+  const [activeCountry, setActiveCountry] = useState('All Modern Countries')
+  const [activeCanon, setActiveCanon] = useState('All')
   
-  // New state for the redesigned interface
-  const [mapLayer, setMapLayer] = useState('Biblical Events')
-  const [period, setPeriod] = useState('All Periods')
-  const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = useState(false)
-  const [isSelectLocationDropdownOpen, setIsSelectLocationDropdownOpen] = useState(false)
-  const [locationDropdownSearchTerm, setLocationDropdownSearchTerm] = useState('')
-  const [isHistoricalLegendOpen, setIsHistoricalLegendOpen] = useState(true)
-  const [darkMode, setDarkMode] = useState(true)
-  const [chatMessage, setChatMessage] = useState('')
-  const [chatHistory, setChatHistory] = useState([])
+  const [selectedLocation, setSelectedLocation] = useState(BIBLICAL_LOCATIONS.find(l => l.id === 'jerusalem'))
+  const [locationTab, setLocationTab] = useState('overview')
+  const [bottomTab, setBottomTab] = useState('scriptures')
+  const [tileMode, setTileMode] = useState('satellite') // 'satellite' or 'street'
   
-  // Map-related state
-  const mapRef = useRef(null)
-  const mapInstanceRef = useRef(null)
-  const dropdownRef = useRef(null)
-  const selectLocationDropdownRef = useRef(null)
-  const [mapCenter, setMapCenter] = useState({ lat: 31.5, lng: 35.0 }) // Jerusalem center
-  const [mapZoom, setMapZoom] = useState(6)
-  const [showDetailedAnalysis, setShowDetailedAnalysis] = useState(true)
+  // AI assistant chat history
+  const [chatInput, setChatInput] = useState('')
+  const [chatHistory, setChatHistory] = useState([
+    {
+      role: 'ai',
+      text: 'Shalom! I am your Geography AI Assistant. Ask me anything about biblical locations, people groups, ancient empires, routes, or modern-day equivalents. I am aware of the selected location.'
+    }
+  ])
 
+  // Custom User Study Notes
+  const [userNotes, setUserNotes] = useState('')
+
+  // Map Ref and Leaflet objects
+  const mapContainerRef = useRef(null)
+  const leafletMapRef = useRef(null)
+  const markersGroupRef = useRef(null)
+  const polylinesGroupRef = useRef(null)
+
+  // Filter logic
+  const filteredLocations = useMemo(() => {
+    return BIBLICAL_LOCATIONS.filter(loc => {
+      // Search Term Match
+      if (searchTerm.trim()) {
+        const query = searchTerm.toLowerCase()
+        const matchSearch =
+          loc.ancientName.toLowerCase().includes(query) ||
+          loc.alternateNames.some(alt => alt.toLowerCase().includes(query)) ||
+          loc.modernEquivalent.toLowerCase().includes(query) ||
+          loc.modernCountries.some(c => c.toLowerCase().includes(query)) ||
+          loc.connectedPeople.some(p => p.toLowerCase().includes(query)) ||
+          loc.summary.toLowerCase().includes(query)
+
+        if (!matchSearch) return false
+      }
+
+      // Layer Match
+      if (activeLayer === 'African Biblical World') {
+        const isAfrican = ['cush', 'egypt', 'cyrene', 'sheba'].includes(loc.id)
+        if (!isAfrican) return false
+      } else if (activeLayer === 'Ethiopian Canon Connections') {
+        if (!loc.ethiopianCanonConnection) return false
+      }
+
+      // Period Match
+      if (activePeriod !== 'All Periods') {
+        if (!loc.periods.includes(activePeriod)) return false
+      }
+
+      // People Group Match
+      if (activePeopleGroup !== 'All People Groups') {
+        const pgQuery = activePeopleGroup.split(' / ')[0].toLowerCase()
+        const hasPeopleMatch = loc.connectedPeople.some(p => p.toLowerCase().includes(pgQuery))
+        if (!hasPeopleMatch) return false
+      }
+
+      // Modern Country Match
+      if (activeCountry !== 'All Modern Countries') {
+        const countryQuery = activeCountry.split(' / ')[0].toLowerCase()
+        const hasCountryMatch = loc.modernCountries.some(c => c.toLowerCase().includes(countryQuery))
+        if (!hasCountryMatch) return false
+      }
+
+      // Canon Match
+      if (activeCanon !== 'All') {
+        if (activeCanon === 'Ethiopian Canon' && !loc.ethiopianCanonConnection) return false
+      }
+
+      return true
+    })
+  }, [searchTerm, activeLayer, activePeriod, activePeopleGroup, activeCountry, activeCanon])
+
+  // Initialize Map
   useEffect(() => {
-    fetchLocations()
+    if (!mapContainerRef.current) return
+
+    // If map already initialized, skip
+    if (leafletMapRef.current) return
+
+    // Create Leaflet Map instance centering around Middle East/East Africa
+    const map = L.map(mapContainerRef.current, {
+      center: [28.0, 32.0],
+      zoom: 4,
+      zoomControl: false // Custom placement via CSS/Leaflet control later
+    })
+
+    leafletMapRef.current = map
+
+    // Create marker & polyline layer groups
+    markersGroupRef.current = L.layerGroup().addTo(map)
+    polylinesGroupRef.current = L.layerGroup().addTo(map)
+
+    // Add standard zoom control at the bottom right
+    L.control.zoom({ position: 'bottomright' }).addTo(map)
+
+    // Clean up on unmount
+    return () => {
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove()
+        leafletMapRef.current = null
+      }
+    }
   }, [])
 
-  // Close dropdowns when clicking outside
+  // Sync Map Tiles (Satellite vs Color Street Map)
   useEffect(() => {
-    function handleClickOutside(event) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setIsPeriodDropdownOpen(false)
-      }
-      if (selectLocationDropdownRef.current && !selectLocationDropdownRef.current.contains(event.target)) {
-        setIsSelectLocationDropdownOpen(false)
-      }
-    }
-
-    if (isPeriodDropdownOpen || isSelectLocationDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside)
-      }
-    }
-  }, [isPeriodDropdownOpen, isSelectLocationDropdownOpen])
-
-  // Clear location dropdown search when dropdown closes
-  useEffect(() => {
-    if (!isSelectLocationDropdownOpen) {
-      setLocationDropdownSearchTerm('')
-    }
-  }, [isSelectLocationDropdownOpen])
-
-
-  const initializeMap = useCallback(() => {
-    const container = mapRef.current
-    if (!container) {
-      console.log('Container not available for map initialization')
-      return null
-    }
-
-    // Check if map is already initialized
-    if (container._leafletMap) {
-      console.log('Map already exists, skipping initialization')
-      return container._leafletMap
-    }
-
-    // Force cleanup of any existing Leaflet instances
-    try {
-      if (container._leafletMap) {
-        container._leafletMap.remove()
-        container._leafletMap = null
-      }
-      container.innerHTML = ''
-      container.removeAttribute('data-leaflet-map')
-    } catch (e) {
-      console.warn('Cleanup warning:', e)
-    }
-    
-    try {
-      console.log('Creating new Leaflet map...')
-      
-      const map = L.map(container, {
-        center: [31.5, 35.0], // Jerusalem center
-        zoom: 6,
-        zoomControl: false, // Disable default zoom controls (using custom ones)
-        attributionControl: true,
-        closePopupOnClick: false, // Don't close popup when clicking map
-        maxBoundsViscosity: 1.0, // Prevent panning outside bounds
-      })
-
-      // Add CartoDB Positron tiles (English labels, clean design)
-      const tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-        maxZoom: 19,
-        minZoom: 2,
-        subdomains: 'abcd'
-      })
-      
-      // Add loading and error event handlers for debugging
-      tileLayer.on('loading', function() {
-        console.log('Map tiles are loading...')
-      })
-      
-      tileLayer.on('load', function() {
-        console.log('Map tiles loaded successfully')
-      })
-      
-      tileLayer.on('tileerror', function(e) {
-        console.error('Tile loading error:', e)
-      })
-      
-      tileLayer.addTo(map)
-      
-      // Force map refresh after adding tiles
-      setTimeout(() => {
-        map.invalidateSize()
-        console.log('Map size invalidated and refreshed')
-      }, 100)
-
-      // Store map instance for later use
-      container._leafletMap = map
-      mapInstanceRef.current = map
-      container.setAttribute('data-leaflet-map', 'true')
-
-      console.log('Leaflet map initialized successfully')
-      return map
-      
-    } catch (error) {
-      console.error('Error initializing map:', error)
-      // Clean up on error
-      try {
-        if (container._leafletMap) {
-          container._leafletMap.remove()
-        }
-      } catch (e) {
-        console.warn('Error during cleanup:', e)
-      }
-      container._leafletMap = null
-      container.innerHTML = ''
-      container.removeAttribute('data-leaflet-map')
-      return null
-    }
-  }, []) // No dependencies - function is stable
-
-  const addLocationMarkers = useCallback((map, selectedLocationData) => {
+    const map = leafletMapRef.current
     if (!map) return
 
-    // Clear existing markers
+    // Remove existing tile layer if present
     map.eachLayer((layer) => {
-      if (layer instanceof L.Marker) {
+      if (layer instanceof L.TileLayer) {
         map.removeLayer(layer)
       }
     })
 
-    // Only add marker for selected location
-    if (selectedLocationData) {
-      const lat = parseFloat(selectedLocationData.latitude)
-      const lng = parseFloat(selectedLocationData.longitude)
+    let tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    let attrib = '© Esri World Imagery'
+
+    if (tileMode === 'street') {
+      tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      attrib = '© OpenStreetMap contributors'
+    }
+
+    L.tileLayer(tileUrl, {
+      attribution: attrib,
+      maxZoom: 18,
+      minZoom: 3
+    }).addTo(map)
+  }, [tileMode])
+
+  // Render Pins and Routes
+  useEffect(() => {
+    const map = leafletMapRef.current
+    const markersGroup = markersGroupRef.current
+    const polylinesGroup = polylinesGroupRef.current
+
+    if (!map || !markersGroup || !polylinesGroup) return
+
+    // Clear previous elements
+    markersGroup.clearLayers()
+    polylinesGroup.clearLayers()
+
+    // 1. Draw Route polylines if suitable filters are selected
+    if (activeLayer === 'Journeys & Routes' || activeLayer === 'African Biblical World' || activePeriod === 'Exodus Period' || activePeriod === 'Time of Jesus') {
+      let activeRouteKeys = []
+      if (activeLayer === 'Journeys & Routes') {
+        activeRouteKeys = ["Paul's Journeys", "Exodus Route", "Places Connected to Jesus", "African Places in the Bible"]
+      } else if (activeLayer === 'African Biblical World') {
+        activeRouteKeys = ["African Places in the Bible"]
+      } else if (activePeriod === 'Exodus Period') {
+        activeRouteKeys = ["Exodus Route"]
+      } else if (activePeriod === 'Time of Jesus') {
+        activeRouteKeys = ["Places Connected to Jesus"]
+      }
+
+      activeRouteKeys.forEach(routeKey => {
+        const coords = ROUTES_DATA[routeKey]
+        if (coords) {
+          let color = '#8B5CF6' // default purple
+          if (routeKey === 'Exodus Route') color = '#22C55E' // green
+          if (routeKey === 'African Places in the Bible') color = '#D4AF37' // gold
+
+          L.polyline(coords, {
+            color: color,
+            weight: 3,
+            dashArray: '5, 8',
+            opacity: 0.8
+          }).addTo(polylinesGroup)
+        }
+      })
+    }
+
+    // 2. Draw location markers
+    filteredLocations.forEach(loc => {
+      const isSelected = selectedLocation && selectedLocation.id === loc.id
+
+      // Create a custom styled marker HTML
+      const pinColor = isSelected ? '#D4AF37' : '#8B5CF6'
+      const shadowGlow = isSelected ? '0 0 12px #D4AF37' : '0 0 8px #8B5CF6'
       
-      // Validate coordinates
-      if (isNaN(lat) || isNaN(lng)) return
-      
-      // Create custom icon using the blue map pin image
-      const icon = L.icon({
-        iconUrl: '/assets/map-pin.png',
-        iconSize: [32, 40], // Adjusted size for PNG pin
-        iconAnchor: [16, 40], // Pin point at bottom center
-        popupAnchor: [0, -40], // Popup appears above the pin
-        className: 'custom-map-pin'
+      const customHtmlIcon = L.divIcon({
+        className: 'custom-leaflet-pin',
+        html: `
+          <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transform: translate(0, -50%);
+          ">
+            <span style="
+              width: 10px;
+              height: 10px;
+              background-color: ${pinColor};
+              border: 2px solid white;
+              border-radius: 50%;
+              box-shadow: ${shadowGlow};
+            "></span>
+            <span style="
+              font-size: 11px;
+              font-weight: 700;
+              color: white;
+              background: rgba(11, 16, 32, 0.9);
+              border: 1px solid rgba(255, 255, 255, 0.15);
+              padding: 2px 6px;
+              border-radius: 4px;
+              margin-top: 4px;
+              white-space: nowrap;
+            ">${loc.ancientName}</span>
+          </div>
+        `,
+        iconSize: [20, 20],
+        iconAnchor: [10, 5]
       })
 
-      const marker = L.marker([lat, lng], { icon })
-        .addTo(map)
-        .bindPopup(`
-          <div class="popup-content">
-            <div class="popup-title">${sanitizeHTML(selectedLocationData.name)}</div>
-            <div class="popup-modern">${sanitizeHTML(selectedLocationData.modern_name || 'Ancient biblical location')}</div>
-            
-            ${selectedLocationData.description ? `
-              <div class="popup-significance">
-                <strong>Biblical Significance:</strong>
-                <p>${sanitizeHTML(selectedLocationData.description)}</p>
-              </div>
-            ` : ''}
-            
-            ${selectedLocationData.archaeological_evidence ? `
-              <div class="popup-archaeology">
-                <strong>Archaeological Evidence:</strong>
-                <p>${sanitizeHTML(selectedLocationData.archaeological_evidence)}</p>
-              </div>
-            ` : ''}
-            
-            <div class="popup-coordinates">
-              <strong>Location:</strong> ${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E
-            </div>
-          </div>
-        `, {
-          maxWidth: 320,
-          minWidth: 280,
-          maxHeight: 400,
-          autoPan: true, // Auto-pan to keep popup in view
-          autoPanPadding: [20, 20], // Padding from edges
-          keepInView: true, // Keep popup in view when map is panned
-          closeButton: true, // Show close button
-          autoClose: false, // Don't auto-close when opening another popup
-          className: 'custom-popup' // Custom CSS class
-        })
-        .openPopup()
+      const marker = L.marker([loc.coordinates.lat, loc.coordinates.lng], { icon: customHtmlIcon })
+      
+      marker.on('click', () => {
+        setSelectedLocation(loc)
+        setLocationTab('overview')
+        
+        // Pan slightly towards location
+        map.panTo([loc.coordinates.lat, loc.coordinates.lng])
+      })
 
-      // Center map on selected location
-      map.setView([lat, lng], 10)
-    }
-  }, []) // Stable function - no dependencies
+      marker.addTo(markersGroup)
+    })
+  }, [filteredLocations, selectedLocation, activeLayer, activePeriod])
 
-  // Use stable reference for locations to prevent useEffect triggering
-  const stableLocations = useMemo(() => locations, [locations.length])
+  // Pan to selected location coordinates initially or when selected outside
+  const panToLocation = (loc) => {
+    const map = leafletMapRef.current
+    if (map && loc) {
+      map.setView([loc.coordinates.lat, loc.coordinates.lng], 6)
+    }
+  }
 
-  // Initialize map after loading is complete and container is mounted
-  useEffect(() => {
-    if (loading) {
-      console.log('Still loading data, waiting before map initialization...')
-      return
-    }
-    
-    const container = mapRef.current
-    if (!container) {
-      console.log('Container not available for map initialization')
-      return
-    }
-    
-    if (container && !container._leafletMap) {
-      console.log('Initializing Leaflet map...')
-      const map = initializeMap()
-      // Don't add any markers initially - only when location is selected
-    }
+  // Handlers
+  const handleResetFilters = () => {
+    setSearchTerm('')
+    setActiveLayer('Biblical Events')
+    setActivePeriod('All Periods')
+    setActivePeopleGroup('All People Groups')
+    setActiveCountry('All Modern Countries')
+    setActiveCanon('All')
+    const jerusalem = BIBLICAL_LOCATIONS.find(l => l.id === 'jerusalem')
+    setSelectedLocation(jerusalem)
+    panToLocation(jerusalem)
+  }
 
-    // Cleanup function only runs on component unmount
-    return () => {
-      const container = mapRef.current
-      if (container && container._leafletMap) {
-        console.log('Cleaning up map on component unmount')
-        try {
-          container._leafletMap.remove()
-        } catch (e) {
-          console.warn('Cleanup warning:', e)
+  const handleSelectLocation = (loc) => {
+    setSelectedLocation(loc)
+    setLocationTab('overview')
+    panToLocation(loc)
+  }
+
+  const handleSendPrompt = (promptText) => {
+    if (!promptText.trim()) return
+
+    const newChatHistory = [
+      ...chatHistory,
+      { role: 'user', text: promptText }
+    ]
+    setChatHistory(newChatHistory)
+    setChatInput('')
+
+    // Generate simulated geographic analysis based on selected location
+    setTimeout(() => {
+      let aiResponse = 'AI geography backend not connected yet.'
+      if (selectedLocation) {
+        if (promptText.includes('today')) {
+          aiResponse = `The ancient location of **${selectedLocation.ancientName}** is located in modern-day **${selectedLocation.modernEquivalent}** (${selectedLocation.modernCountries.join(', ')}). In archaeological databases, this is classified under *${selectedLocation.confidence}* accuracy.`
+        } else if (promptText.includes('Bible') || promptText.includes('happened')) {
+          aiResponse = `According to the scriptures, ${selectedLocation.summary} Key references include: ${selectedLocation.scriptureReferences.map(r => r.ref).join(', ')}.`
+        } else if (promptText.includes('Ethiopian')) {
+          aiResponse = selectedLocation.ethiopianCanonConnection || `Ancient ${selectedLocation.ancientName} features in early church histories and canon structures preserved in Ge'ez text traditions.`
+        } else {
+          aiResponse = `Here is a scholarly summary of **${selectedLocation.ancientName}**:\n\n${selectedLocation.whyItMatters}\n\n*Decolonial Context:* ${selectedLocation.decolonialNote}`
         }
-        container._leafletMap = null
       }
-    }
-  }, [loading, initializeMap]) // Now depends on loading state
 
-  // Update markers when selected location changes
-  useEffect(() => {
-    const container = mapRef.current
-    if (container && container._leafletMap) {
-      addLocationMarkers(container._leafletMap, selectedLocation)
-    }
-  }, [selectedLocation, addLocationMarkers]) // Update when selected location changes
-
-  // Period-based location mapping
-  const getPeriodKey = (periodString) => {
-    if (!periodString || periodString === 'All Periods') return 'all'
-    return periodString.split(' (')[0].toLowerCase().replace(/ /g, '_')
-  }
-
-  // String normalization for robust matching
-  const normalizeString = (str) => {
-    return str.toLowerCase()
-             .replace(/[^\w\s]/g, '') // Remove punctuation
-             .replace(/\s+/g, ' ')    // Collapse whitespace
-             .trim()
-  }
-
-  // Historical periods with colors
-  const historicalPeriods = [
-    { name: 'All Periods', key: 'all', color: null },
-    { name: 'Patriarchal Era', key: 'patriarchal_era', color: '#FF6B35', description: 'c. 2100-1700 BC' },
-    { name: 'Exodus Period', key: 'exodus_period', color: '#F7931E', description: 'c. 1300 BC' },
-    { name: 'Period of Judges', key: 'period_of_judges', color: '#FFD23F', description: 'c. 1200-1000 BC' },
-    { name: 'United Kingdom', key: 'united_kingdom', color: '#06FFA5', description: 'c. 1000-930 BC' },
-    { name: 'Divided Kingdom', key: 'divided_kingdom', color: '#3B82F6', description: 'c. 930-586 BC' },
-    { name: 'Babylonian Exile', key: 'babylonian_exile', color: '#8B5CF6', description: 'c. 586-538 BC' },
-    { name: 'Post-Exile', key: 'post-exile', color: '#10B981', description: 'c. 538-400 BC' },
-    { name: 'Time of Jesus', key: 'time_of_jesus', color: '#F59E0B', description: 'c. 4 BC - 30 AD' },
-    { name: 'Apostolic Era', key: 'apostolic_era', color: '#EF4444', description: 'c. 30-100 AD' }
-  ]
-
-  const locationPeriodMap = {
-    // Patriarchal Era (c. 2100-1700 BC)
-    'patriarchal_era': ['Ur', 'Haran', 'Shechem', 'Bethel', 'Hebron', 'Beersheba', 'Mamre', 'Salem'],
-    
-    // Exodus Period (c. 1300 BC) 
-    'exodus_period': ['Egypt', 'Goshen', 'Mount Sinai', 'Kadesh Barnea', 'Wilderness of Sin', 'Rephidim', 'Mount Horeb', 'Red Sea'],
-    
-    // Period of Judges (c. 1200-1000 BC)
-    'period_of_judges': ['Shiloh', 'Mizpah', 'Ramah', 'Gilgal', 'Jericho', 'Ai', 'Gibeon', 'Debir', 'Hazor'],
-    
-    // United Kingdom (c. 1000-930 BC)
-    'united_kingdom': ['Jerusalem', 'Bethlehem', 'Hebron', 'Gibeon', 'Geba', 'Temple Mount', 'City of David'],
-    
-    // Divided Kingdom (c. 930-586 BC)
-    'divided_kingdom': ['Jerusalem', 'Samaria', 'Bethel', 'Dan', 'Beersheba', 'Damascus'],
-    
-    // Babylonian Exile (c. 586-538 BC)
-    'babylonian_exile': ['Babylon', 'Jerusalem', 'Riblah', 'Ramah', 'Mizpah', 'Tel Aviv'],
-    
-    // Post-Exile (c. 538-400 BC)
-    'post-exile': ['Jerusalem', 'Temple Mount'],
-    
-    // Time of Jesus (c. 4 BC - 30 AD)
-    'time_of_jesus': ['Bethlehem', 'Nazareth', 'Jerusalem', 'Sea of Galilee', 'Capernaum', 'Jordan River', 'Mount of Olives', 'Golgotha', 'Bethany', 'Jericho'],
-    
-    // Apostolic Era (c. 30-100 AD)
-    'apostolic_era': ['Jerusalem', 'Antioch', 'Damascus', 'Ephesus', 'Corinth', 'Rome', 'Philippi', 'Thessalonica', 'Athens', 'Caesarea']
-  }
-
-  const getQuickAccessForPeriod = (periodString) => {
-    const periodKey = getPeriodKey(periodString)
-    
-    if (periodKey === 'all') {
-      return [
-        { name: 'Jerusalem', icon: '🏛️', subtext: 'Jerusalem' },
-        { name: 'Mount Sinai', icon: '⛰️', subtext: 'Jabal Musa (traditional)' },
-        { name: 'Bethlehem', icon: '⭐', subtext: 'Bethlehem' },
-        { name: 'Sea of Galilee', icon: '🌊', subtext: 'Lake Kinneret' }
-      ]
-    }
-
-    const periodLocations = {
-      'patriarchal_era': [
-        { name: 'Ur', icon: '🏺', subtext: 'Abraham\'s birthplace' },
-        { name: 'Haran', icon: '🏕️', subtext: 'Terah\'s dwelling' },
-        { name: 'Hebron', icon: '⛺', subtext: 'Abraham\'s oak' },
-        { name: 'Beersheba', icon: '💧', subtext: 'Well of the oath' }
-      ],
-      'exodus_period': [
-        { name: 'Egypt', icon: '🏜️', subtext: 'Land of bondage' },
-        { name: 'Mount Sinai', icon: '⛰️', subtext: 'The Law given' },
-        { name: 'Red Sea', icon: '🌊', subtext: 'Miraculous crossing' },
-        { name: 'Kadesh-Barnea', icon: '🏕️', subtext: 'Wilderness camp' }
-      ],
-      'period_of_judges': [
-        { name: 'Shiloh', icon: '⛪', subtext: 'Tabernacle location' },
-        { name: 'Jericho', icon: '🏰', subtext: 'Walls fell down' },
-        { name: 'Gibeon', icon: '⚔️', subtext: 'Sun stood still' },
-        { name: 'Mizpah', icon: '🏛️', subtext: 'Samuel\'s circuit' }
-      ],
-      'united_kingdom': [
-        { name: 'Jerusalem', icon: '👑', subtext: 'David\'s capital' },
-        { name: 'Bethlehem', icon: '🏠', subtext: 'David\'s birthplace' },
-        { name: 'Hebron', icon: '👑', subtext: 'David\'s first capital' },
-        { name: 'Temple Mount', icon: '🏛️', subtext: 'Solomon\'s temple' }
-      ],
-      'divided_kingdom': [
-        { name: 'Jerusalem', icon: '🏛️', subtext: 'Judah\'s capital' },
-        { name: 'Samaria', icon: '🏰', subtext: 'Israel\'s capital' },
-        { name: 'Bethel', icon: '🐄', subtext: 'Golden calf shrine' },
-        { name: 'Dan', icon: '🐄', subtext: 'Northern shrine' }
-      ],
-      'babylonian_exile': [
-        { name: 'Babylon', icon: '🏛️', subtext: 'Exile destination' },
-        { name: 'Jerusalem', icon: '💥', subtext: 'Temple destroyed' },
-        { name: 'Riblah', icon: '⚖️', subtext: 'Judgment seat' },
-        { name: 'Tel-abib', icon: '🏕️', subtext: 'Ezekiel\'s vision' }
-      ],
-      'post-exile': [
-        { name: 'Jerusalem', icon: '🔨', subtext: 'Temple rebuilt' },
-        { name: 'Temple Mount', icon: '⛪', subtext: 'Second temple' },
-        { name: 'Nehemiah\'s Wall', icon: '🧱', subtext: 'Wall rebuilt' },
-        { name: 'Samaria', icon: '🏰', subtext: 'Samaritan conflict' }
-      ],
-      'time_of_jesus': [
-        { name: 'Bethlehem', icon: '⭐', subtext: 'Jesus born' },
-        { name: 'Nazareth', icon: '🏠', subtext: 'Jesus raised' },
-        { name: 'Sea of Galilee', icon: '🌊', subtext: 'Ministry center' },
-        { name: 'Jerusalem', icon: '✝️', subtext: 'Crucifixion' }
-      ],
-      'apostolic_era': [
-        { name: 'Jerusalem', icon: '🕊️', subtext: 'Pentecost' },
-        { name: 'Antioch', icon: '🌍', subtext: 'First Gentile church' },
-        { name: 'Damascus', icon: '⚡', subtext: 'Paul\'s conversion' },
-        { name: 'Rome', icon: '🏛️', subtext: 'Empire\'s heart' }
-      ]
-    }
-
-    return periodLocations[periodKey] || []
-  }
-
-
-  // Filter locations for the dropdown based on dropdown search term
-  const filteredDropdownLocations = useMemo(() => {
-    if (!locationDropdownSearchTerm.trim()) {
-      return locations
-    }
-    
-    const searchNormalized = normalizeString(locationDropdownSearchTerm)
-    return locations.filter(location => 
-      normalizeString(location.name).includes(searchNormalized) ||
-      (location.modern_name && normalizeString(location.modern_name).includes(searchNormalized))
-    )
-  }, [locations, locationDropdownSearchTerm])
-
-
-  const fetchLocations = async () => {
-    try {
-      setLoading(true)
-      const response = await fetch('/api/v1/geography/locations')
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch locations: ${response.status} ${response.statusText}`)
-      }
-      
-      const data = await response.json()
-      
-      if (!Array.isArray(data)) {
-        throw new Error(`Expected array response, got: ${typeof data}`)
-      }
-      
-      const validLocations = data.filter(location => 
-        location.latitude !== null && location.latitude !== undefined && 
-        location.longitude !== null && location.longitude !== undefined &&
-        !isNaN(parseFloat(location.latitude)) && 
-        !isNaN(parseFloat(location.longitude))
-      )
-      
-      setLocations(validLocations)
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
-      setError(errorMessage)
-      console.error('Error fetching geographical locations:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const formatLocationName = (location) => {
-    if (location.modern_name) {
-      return `${location.name} - ${location.modern_name}`
-    }
-    return location.name
-  }
-
-  const handleLocationSelect = (location) => {
-    setSelectedLocation(location)
-  }
-
-  const handleResetView = () => {
-    setSelectedLocation(null)
-  }
-
-
-
-  const handleRandomLocation = () => {
-    if (locations.length > 0) {
-      const randomIndex = Math.floor(Math.random() * locations.length)
-      setSelectedLocation(locations[randomIndex])
-    }
-  }
-
-  const selectLocationByName = (name) => {
-    const location = locations.find(loc => 
-      loc.name.toLowerCase().includes(name.toLowerCase()) ||
-      (loc.modern_name && loc.modern_name.toLowerCase().includes(name.toLowerCase()))
-    )
-    if (location) {
-      setSelectedLocation(location)
-    }
-  }
-
-  // Safe HTML sanitization function to prevent XSS
-  const sanitizeHTML = (str) => {
-    if (!str) return ''
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;')
-  }
-
-  const getMapStyle = () => {
-    // Remove CSS scaling to allow proper Leaflet zoom
-    return {
-      width: '100%',
-      height: '100%'
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="geography-hub">
-        <div className="hub-header">
-          <h1 className="hub-title">Interactive Biblical Geography Hub</h1>
-          <button className="dark-mode-btn active">Dark Mode</button>
-        </div>
-        <div className="filter-controls">
-          <div className="filter-row">
-            <div className="filter-group">
-              <label className="filter-label">🌍 Map Layer:</label>
-              <select className="filter-dropdown">
-                <option>Biblical Events</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div className="hub-content">
-          <div className="map-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <span className="panel-icon">🌍</span>
-                <span>Biblical World Map</span>
-              </div>
-            </div>
-            <div className="map-loading">
-              <p>📍 Loading biblical locations...</p>
-            </div>
-          </div>
-          <div className="location-panel">
-            <div className="location-placeholder-new">
-              <div className="panel-header">
-                <div className="panel-title">
-                  <span className="panel-icon">📍</span>
-                  <span>Location Details</span>
-                </div>
-              </div>
-              <div className="placeholder-content">
-                <div className="placeholder-icon">🗺️</div>
-                <p>Loading locations...</p>
-              </div>
-            </div>
-          </div>
-          <div className="ai-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <span className="panel-icon">🤖</span>
-                <span>Geography AI Assistant</span>
-              </div>
-            </div>
-            <div className="chat-container">
-              <div className="chat-messages">
-                <div className="ai-message">
-                  <div className="message-avatar">AI</div>
-                  <div className="message-content">
-                    <div className="message-text">Loading biblical geography data...</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="geography-hub">
-        <div className="hub-header">
-          <h1 className="hub-title">Interactive Biblical Geography Hub</h1>
-          <button className="dark-mode-btn active">Dark Mode</button>
-        </div>
-        <div className="filter-controls">
-          <div className="filter-row">
-            <div className="filter-group">
-              <label className="filter-label">🌍 Map Layer:</label>
-              <select className="filter-dropdown">
-                <option>Biblical Events</option>
-              </select>
-            </div>
-          </div>
-        </div>
-        <div className="hub-content">
-          <div className="map-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <span className="panel-icon">🌍</span>
-                <span>Biblical World Map</span>
-              </div>
-            </div>
-            <div className="map-error">
-              <p>❌ Error loading map: {error}</p>
-              <button onClick={fetchLocations} className="retry-button">
-                Retry
-              </button>
-            </div>
-          </div>
-          <div className="location-panel">
-            <div className="location-placeholder-new">
-              <div className="panel-header">
-                <div className="panel-title">
-                  <span className="panel-icon">📍</span>
-                  <span>Location Details</span>
-                </div>
-              </div>
-              <div className="placeholder-content">
-                <div className="placeholder-icon">❌</div>
-                <p>Unable to load locations</p>
-              </div>
-            </div>
-          </div>
-          <div className="ai-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <span className="panel-icon">🤖</span>
-                <span>Geography AI Assistant</span>
-              </div>
-            </div>
-            <div className="chat-container">
-              <div className="chat-messages">
-                <div className="ai-message">
-                  <div className="message-avatar">AI</div>
-                  <div className="message-content">
-                    <div className="message-text">Error loading geography data. Please try again.</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Map control functions
-  const handleZoomIn = () => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.zoomIn()
-    }
-  }
-
-  const handleZoomOut = () => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.zoomOut()
-    }
-  }
-
-  const handleHome = () => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.setView([31.5, 35.0], 6) // Jerusalem center, zoom 6
-    }
+      setChatHistory(prev => [
+        ...prev,
+        { role: 'ai', text: aiResponse }
+      ])
+    }, 800)
   }
 
   return (
-    <div className={`geography-hub ${darkMode ? 'dark-mode' : 'light-mode'}`}>
-      {/* Header */}
-      <div className="hub-header">
-        <h1 className="hub-title">Interactive Biblical Geography Hub</h1>
-        <button 
-          className={`dark-mode-btn ${darkMode ? 'active' : ''}`}
-          onClick={() => setDarkMode(!darkMode)}
-        >
-          {darkMode ? 'Dark Mode' : 'Light Mode'}
-        </button>
+    <div className="ub-map-lab-layout">
+      {/* Top Header */}
+      <div className="map-lab-header">
+        <h1>Interactive Biblical Map</h1>
+        <p>Explore ancient biblical locations, modern-day equivalents, people groups, routes, and historical context.</p>
       </div>
 
-      {/* Filter Controls */}
-      <div className="filter-controls">
-        <div className="filter-row">
-          <div className="filter-group">
-            <label className="filter-label">🌍 Map Layer:</label>
-            <select 
-              value={mapLayer} 
-              onChange={(e) => setMapLayer(e.target.value)}
-              className="filter-dropdown"
-            >
-              <option>Biblical Events</option>
-              <option>Archaeological Sites</option>
-              <option>Trade Routes</option>
+      {/* Toolbar / Filters */}
+      <div className="map-toolbar-panel">
+        <div className="search-bar-row">
+          <span className="search-icon-inside">🔍</span>
+          <input
+            type="text"
+            placeholder="Search Jerusalem, Cush, Egypt, Babylon, Paul’s journeys..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        <div className="filters-grid">
+          <div className="filter-select-box">
+            <label>Map Layer</label>
+            <select value={activeLayer} onChange={(e) => setActiveLayer(e.target.value)}>
+              {MAP_LAYERS.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
-          
-          <div className="filter-group">
-            <label className="filter-label">🕊️ Period:</label>
-            <div className="custom-period-dropdown" ref={dropdownRef}>
-              <div 
-                className="period-dropdown-trigger"
-                onClick={() => setIsPeriodDropdownOpen(!isPeriodDropdownOpen)}
-              >
-                {period === 'All Periods' ? (
-                  <span>All Periods</span>
-                ) : (
-                  <div className="selected-period">
-                    <div 
-                      className="period-dot" 
-                      style={{ 
-                        backgroundColor: historicalPeriods.find(p => p.name === period.split(' (')[0])?.color 
-                      }}
-                    ></div>
-                    <span>{period.split(' (')[0]}</span>
-                  </div>
-                )}
-                <span className="dropdown-arrow">{isPeriodDropdownOpen ? '▲' : '▼'}</span>
-              </div>
-              
-              {isPeriodDropdownOpen && (
-                <div className="period-dropdown-content">
-                  <div className="period-dropdown-header">
-                    <span>Historical Periods</span>
-                    <button 
-                      className="close-dropdown-btn"
-                      onClick={() => setIsPeriodDropdownOpen(false)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <div className="period-options">
-                    {period === 'All Periods' ? (
-                      // Show all periods when "All Periods" is selected
-                      historicalPeriods.map((periodOption) => (
-                        <div
-                          key={periodOption.key}
-                          className={`period-option ${period === (periodOption.name === 'All Periods' ? 'All Periods' : `${periodOption.name} (${periodOption.description})`) ? 'selected' : ''}`}
-                          onClick={() => {
-                            const newPeriod = periodOption.name === 'All Periods' 
-                              ? 'All Periods' 
-                              : `${periodOption.name} (${periodOption.description})`
-                            setPeriod(newPeriod)
-                            setIsPeriodDropdownOpen(false)
-                          }}
-                        >
-                          {periodOption.color && (
-                            <div 
-                              className="period-dot" 
-                              style={{ backgroundColor: periodOption.color }}
-                            ></div>
-                          )}
-                          <span className="period-name">{periodOption.name}</span>
-                        </div>
-                      ))
-                    ) : (
-                      // Show only the selected period when a specific period is chosen
-                      (() => {
-                        const selectedPeriodName = period.split(' (')[0]
-                        const selectedPeriodData = historicalPeriods.find(p => p.name === selectedPeriodName)
-                        const periodLocations = getQuickAccessForPeriod(period)
-                        
-                        return selectedPeriodData ? (
-                          <div className="selected-period-display">
-                            <div className="period-header-section">
-                              <div className="period-option selected">
-                                {selectedPeriodData.color && (
-                                  <div 
-                                    className="period-dot" 
-                                    style={{ backgroundColor: selectedPeriodData.color }}
-                                  ></div>
-                                )}
-                                <span className="period-name">{selectedPeriodData.name}</span>
-                              </div>
-                            </div>
-                            
-                            <div className="period-locations-section">
-                              <div className="locations-header">Historical Places</div>
-                              <div className="location-list">
-                                {periodLocations.map((location, index) => (
-                                  <div 
-                                    key={index}
-                                    className="location-item"
-                                    onClick={() => {
-                                      // Find the location in our locations array and select it
-                                      const targetName = normalizeString(location.name)
-                                      let foundLocation = locations.find(loc => {
-                                        const locName = normalizeString(loc.name)
-                                        const locModern = normalizeString(loc.modern_name || '')
-                                        
-                                        // Try exact matches first
-                                        if (locName === targetName || locModern === targetName) {
-                                          return true
-                                        }
-                                        
-                                        // Try inclusive matches
-                                        if (locName.includes(targetName) || targetName.includes(locName)) {
-                                          return true
-                                        }
-                                        
-                                        // Try modern name inclusive matches
-                                        if (locModern && (locModern.includes(targetName) || targetName.includes(locModern))) {
-                                          return true
-                                        }
-                                        
-                                        return false
-                                      })
-                                      
-                                      // Handle common name variations
-                                      if (!foundLocation) {
-                                        const nameVariations = {
-                                          'tel-abib': 'tel aviv',
-                                          'telaviv': 'tel aviv',
-                                          'kadesh-barnea': 'kadesh barnea',
-                                          'kadeshbarnea': 'kadesh barnea',
-                                          'mount sinai': 'sinai',
-                                          'red sea': 'red sea',
-                                          'sea of galilee': 'galilee'
-                                        }
-                                        
-                                        const variation = nameVariations[targetName]
-                                        if (variation) {
-                                          foundLocation = locations.find(loc => 
-                                            normalizeString(loc.name).includes(variation) ||
-                                            normalizeString(loc.modern_name || '').includes(variation)
-                                          )
-                                        }
-                                      }
-                                      
-                                      if (foundLocation) {
-                                        setSelectedLocation(foundLocation)
-                                        setIsPeriodDropdownOpen(false)
-                                      } else {
-                                        console.log(`Location "${location.name}" not found in dataset`)
-                                        // Keep dropdown open but provide feedback
-                                      }
-                                    }}
-                                  >
-                                    <span className="location-icon">{location.icon}</span>
-                                    <div className="location-info">
-                                      <span className="location-name">{location.name}</span>
-                                      <span className="location-subtext">{location.subtext}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                            
-                            <div className="period-actions">
-                              <button 
-                                className="change-period-btn"
-                                onClick={() => {
-                                  setPeriod('All Periods')
-                                }}
-                              >
-                                View All Periods
-                              </button>
-                            </div>
-                          </div>
-                        ) : null
-                      })()
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+
+          <div className="filter-select-box">
+            <label>Time Period</label>
+            <select value={activePeriod} onChange={(e) => setActivePeriod(e.target.value)}>
+              {HISTORICAL_PERIODS.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
           </div>
 
-          <div className="select-location-container">
-            <div className="select-location-group" ref={selectLocationDropdownRef}>
-              <button 
-                className="select-location-btn"
-                onClick={() => {
-                  const newState = !isSelectLocationDropdownOpen
-                  setIsSelectLocationDropdownOpen(newState)
-                  // Clear search when closing
-                  if (!newState) {
-                    setLocationDropdownSearchTerm('')
-                  }
-                }}
-              >
-                <span>Select Locations</span>
-                <span className="dropdown-arrow">{isSelectLocationDropdownOpen ? '▲' : '▼'}</span>
-              </button>
-              
-              {isSelectLocationDropdownOpen && (
-                <div className="select-location-dropdown">
-                  <div className="select-location-header">
-                    <span>Select Location</span>
-                  </div>
-                  <div className="select-location-search">
-                    <input
-                      type="text"
-                      placeholder="Search locations..."
-                      value={locationDropdownSearchTerm}
-                      onChange={(e) => setLocationDropdownSearchTerm(e.target.value)}
-                      className="location-search-input"
-                    />
-                  </div>
-                  <div className="select-location-list">
-                    {filteredDropdownLocations.map((location) => (
-                      <div
-                        key={location.id}
-                        className="select-location-item"
-                        onClick={() => {
-                          setSelectedLocation(location)
-                          setIsSelectLocationDropdownOpen(false)
-                          setLocationDropdownSearchTerm('')
-                        }}
-                      >
-                        <span className="location-name">{location.name}</span>
-                        {location.modern_name && (
-                          <span className="location-modern">({location.modern_name})</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="select-location-footer">
-                    {filteredDropdownLocations.length} of {locations.length} locations available
-                  </div>
-                </div>
-              )}
-            </div>
+          <div className="filter-select-box">
+            <label>People Group</label>
+            <select value={activePeopleGroup} onChange={(e) => setActivePeopleGroup(e.target.value)}>
+              {PEOPLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
           </div>
+
+          <div className="filter-select-box">
+            <label>Modern Country</label>
+            <select value={activeCountry} onChange={(e) => setActiveCountry(e.target.value)}>
+              {MODERN_COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <div className="filter-select-box">
+            <label>Canon Connection</label>
+            <select value={activeCanon} onChange={(e) => setActiveCanon(e.target.value)}>
+              {CANON_CONNECTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <button className="reset-filters-btn" onClick={handleResetFilters}>
+            Reset Filters
+          </button>
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="hub-content">
-        {/* Left Column - Map */}
-        <div className="map-panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <span className="panel-icon">🌍</span>
-              <span>Biblical World Map</span>
-              <span className="panel-badge">Political Events</span>
+      {/* Main Workspace Area (Map + Sidebars in a Three Column Layout) */}
+      <div className="map-workspace-grid">
+        {/* Left Map Panel */}
+        <div className="map-view-card">
+          <div className="map-card-header">
+            <h3>Biblical World Map</h3>
+            <div className="map-header-badges">
+              <span className="badge-tag green">Ancient + Modern</span>
+              <span className="badge-tag purple">Ethiopian Canon Aware</span>
+              <span className="badge-tag gold">Scripture Linked</span>
             </div>
-            <div className="view-controls">
-              <div className="view-btn" onClick={handleZoomIn} title="Zoom In">
-                <span className="control-icon">+</span>
-              </div>
-              <div className="view-btn" onClick={handleZoomOut} title="Zoom Out">
-                <span className="control-icon">−</span>
-              </div>
-              <div className="view-btn" onClick={handleHome} title="Home">
-                <span className="control-icon">🏠</span>
-              </div>
+            <button 
+              className="layers-toggle-btn" 
+              onClick={() => setTileMode(prev => prev === 'satellite' ? 'street' : 'satellite')}
+            >
+              Layer: {tileMode === 'satellite' ? 'Satellite 🛰️' : 'Color Map 🗺️'}
+            </button>
+          </div>
+
+          <div className="map-viewport-wrapper">
+            <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }}></div>
+            
+            {/* Map Legend */}
+            <div className="map-legend-overlay">
+              <h4>Map Legend</h4>
+              <ul>
+                <li><span className="legend-dot city"></span> Cities</li>
+                <li><span className="legend-dot region"></span> Regions</li>
+                <li><span className="legend-dot mountain"></span> Mountains</li>
+                <li><span className="legend-dot water"></span> Bodies of Water</li>
+                <li><span className="legend-dot people"></span> People Groups</li>
+                <li><span className="legend-line route"></span> Routes / Journeys</li>
+                <li><span className="legend-star event"></span> Key Events</li>
+              </ul>
             </div>
           </div>
-          
-          <div className="map-container-new">
-            <div 
-              ref={mapRef}
-              className="leaflet-map-container" 
-              style={{
-                width: '100%',
-                height: '600px',
-                minHeight: '600px',
-                borderRadius: '12px',
-                backgroundColor: '#f0f8ff',
-                position: 'relative',
-                display: 'block',
-                zIndex: 1,
-                overflow: 'hidden'
-              }}
+        </div>
+
+        {/* Middle Details Panel */}
+        <div className="location-details-sidebar-card">
+          {selectedLocation ? (
+            <>
+              <div className="details-header-top">
+                <div className="details-title-row">
+                  <span className="details-location-icon">📍</span>
+                  <h2>{selectedLocation.ancientName}</h2>
+                </div>
+                <span className="badge-confidence gold">{selectedLocation.confidence}</span>
+              </div>
+
+              {/* Details Tabs */}
+              <div className="details-nav-tabs">
+                <button className={locationTab === 'overview' ? 'active' : ''} onClick={() => setLocationTab('overview')}>Overview</button>
+                <button className={locationTab === 'scriptures' ? 'active' : ''} onClick={() => setLocationTab('scriptures')}>Scriptures</button>
+                <button className={locationTab === 'people' ? 'active' : ''} onClick={() => setLocationTab('people')}>People</button>
+                <button className={locationTab === 'timeline' ? 'active' : ''} onClick={() => setLocationTab('timeline')}>Timeline</button>
+                <button className={locationTab === 'modern' ? 'active' : ''} onClick={() => setLocationTab('modern')}>Modern Location</button>
+                <button className={locationTab === 'ai' ? 'active' : ''} onClick={() => setLocationTab('ai')}>AI Notes</button>
+              </div>
+
+              {/* Tab content */}
+              <div className="details-tab-contents">
+                {locationTab === 'overview' && (
+                  <div className="overview-tab-pane">
+                    <div className="meta-info-grid">
+                      <div className="meta-field">
+                        <strong>Ancient Name</strong>
+                        <span>{selectedLocation.ancientName}</span>
+                      </div>
+                      <div className="meta-field">
+                        <strong>Modern Location</strong>
+                        <span>{selectedLocation.modernEquivalent}</span>
+                      </div>
+                      <div className="meta-field">
+                        <strong>Location Type</strong>
+                        <span>{selectedLocation.type}</span>
+                      </div>
+                      <div className="meta-field">
+                        <strong>Ancient Region</strong>
+                        <span>{selectedLocation.ancientRegion}</span>
+                      </div>
+                      <div className="meta-field">
+                        <strong>Biblical Periods</strong>
+                        <span>{selectedLocation.periods.join(', ')}</span>
+                      </div>
+                      <div className="meta-field">
+                        <strong>Confidence Level</strong>
+                        <span>{selectedLocation.confidence}</span>
+                      </div>
+                    </div>
+
+                    <div className="why-matters-box">
+                      <h4>Why It Matters</h4>
+                      <p>{selectedLocation.whyItMatters}</p>
+                    </div>
+
+                    <div className="connected-people-pills">
+                      <h4>Connected People</h4>
+                      <div className="pill-row">
+                        {selectedLocation.connectedPeople.map(p => (
+                          <span key={p} className="person-pill">{p}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="related-events-list">
+                      <h4>Related Events</h4>
+                      <ul>
+                        {selectedLocation.relatedEvents.map(e => <li key={e}>• {e}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+
+                {locationTab === 'scriptures' && (
+                  <div className="scriptures-tab-pane">
+                    <div className="scrolling-verses-list">
+                      {selectedLocation.scriptureReferences.map((ref, idx) => (
+                        <div key={idx} className="tab-scripture-verse-card">
+                          <h5>{ref.ref}</h5>
+                          <p>{ref.summary}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {locationTab === 'people' && (
+                  <div className="people-tab-pane">
+                    <h4>Connected Figures & People Groups</h4>
+                    <p>The following figures/groups are geographically and historically documented at this location:</p>
+                    <ul className="people-details-bullet-list">
+                      {selectedLocation.connectedPeople.map(p => (
+                        <li key={p}>
+                          <strong>{p}</strong>: Geographically documented during the {selectedLocation.periods.join(', ')}.
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {locationTab === 'timeline' && (
+                  <div className="timeline-tab-pane">
+                    <h4>Timeline & Historical Periods</h4>
+                    <div className="timeline-flow-list">
+                      {selectedLocation.periods.map((p, idx) => (
+                        <div key={p} className="timeline-flow-step">
+                          <span className="step-circle">{idx + 1}</span>
+                          <div className="step-content">
+                            <h5>{p}</h5>
+                            <p>Verified scriptural interactions occurred at {selectedLocation.ancientName} during this era.</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {locationTab === 'modern' && (
+                  <div className="modern-tab-pane">
+                    <h4>Modern Equivalents & Countries</h4>
+                    <div className="modern-details-card">
+                      <p><strong>Modern region:</strong> {selectedLocation.modernEquivalent}</p>
+                      <p><strong>Borders span across:</strong> {selectedLocation.modernCountries.join(', ')}</p>
+                      <p><strong>Geographical status:</strong> Classified as a <em>{selectedLocation.confidence}</em>.</p>
+                    </div>
+                    {selectedLocation.decolonialNote && (
+                      <div className="decolonial-note-callout">
+                        <h5>Decolonial Scripture Note</h5>
+                        <p>{selectedLocation.decolonialNote}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {locationTab === 'ai' && (
+                  <div className="ai-notes-tab-pane">
+                    <h4>AI Geography Insights</h4>
+                    <p className="ai-notes-p">{selectedLocation.summary}</p>
+                    <p className="ai-notes-p"><strong>Ethiopian Canon Connection:</strong> {selectedLocation.ethiopianCanonConnection}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="details-empty-state">
+              <h3>Start Exploring Biblical Geography</h3>
+              <p>Select a location pin on the map or choose a location from the Quick Explore list to review exegesis, modern equivalents, and decolonial research notes.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Right AI Assistant Panel */}
+        <div className="map-ai-assistant-card">
+          <div className="ai-header-title-bar">
+            <span className="ai-bot-icon">🤖</span>
+            <h3>Geography AI Assistant</h3>
+            <span className="atlas-chat-badge">Atlas Chat</span>
+          </div>
+
+          <div className="ai-chat-viewport">
+            {chatHistory.map((chat, idx) => (
+              <div key={idx} className={`chat-bubble-msg ${chat.role}`}>
+                <p>{chat.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="ai-chat-suggested-prompts-row">
+            <button onClick={() => handleSendPrompt('Where is this place today?')}>Where is this place today?</button>
+            <button onClick={() => handleSendPrompt('What happened here in the Bible?')}>What happened here in the Bible?</button>
+            <button onClick={() => handleSendPrompt('How does this connect to Ethiopia?')}>How does this connect to Ethiopia?</button>
+            <button onClick={() => handleSendPrompt('Explain this location to a beginner.')}>Explain this location to a beginner.</button>
+          </div>
+
+          <div className="ai-chat-input-row">
+            <input
+              type="text"
+              placeholder="Ask about the selected location or any biblical place..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendPrompt(chatInput)}
             />
-            
-            {/* Historical Periods Legend */}
-            {isHistoricalLegendOpen && (
-              <div className="historical-legend">
-                <div className="legend-header">
-                  <h4>Historical Periods</h4>
-                  <button 
-                    className="close-legend-btn"
-                    onClick={() => setIsHistoricalLegendOpen(false)}
-                    title="Close"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="legend-items">
-                  {period === 'All Periods' ? (
-                    // Show all periods when "All Periods" is selected
-                    historicalPeriods.slice(1).map((periodItem) => {
-                      const cssClass = periodItem.key.replace('_', '').toLowerCase()
-                      return (
-                        <div key={periodItem.key} className="legend-item">
-                          <span 
-                            className={`legend-dot ${cssClass}`}
-                            style={{ backgroundColor: periodItem.color }}
-                          ></span>
-                          <span>{periodItem.name}</span>
+            <button className="ask-ai-action-btn" onClick={() => handleSendPrompt(chatInput)}>Ask AI</button>
+          </div>
+          <div className="ai-subtext-offline">AI geography backend not connected yet.</div>
+        </div>
+      </div>
+
+      {/* Bottom Study Drawer (Tabbed Study Drawer + Quick Explore Panel side-by-side) */}
+      <div className="bottom-study-drawer-row">
+        {/* Drawer content (Left/Center 70% width) */}
+        <div className="drawer-main-notebook">
+          <div className="drawer-tabs-row">
+            <button className={bottomTab === 'scriptures' ? 'active' : ''} onClick={() => setBottomTab('scriptures')}>📖 Scripture References</button>
+            <button className={bottomTab === 'people' ? 'active' : ''} onClick={() => setBottomTab('people')}>👥 Related People</button>
+            <button className={bottomTab === 'routes' ? 'active' : ''} onClick={() => setBottomTab('routes')}>🛣️ Routes</button>
+            <button className={bottomTab === 'timeline' ? 'active' : ''} onClick={() => setBottomTab('timeline')}>📅 Timeline</button>
+            <button className={bottomTab === 'notes' ? 'active' : ''} onClick={() => setBottomTab('notes')}>✍️ Study Notes</button>
+            <button className={bottomTab === 'canon' ? 'active' : ''} onClick={() => setBottomTab('canon')}>📜 Ethiopian Canon Connection</button>
+          </div>
+
+          <div className="drawer-tab-view-box">
+            {bottomTab === 'scriptures' && (
+              <div className="drawer-scriptures-pane">
+                {selectedLocation ? (
+                  <>
+                    <div className="drawer-cards-flex-row">
+                      {selectedLocation.scriptureReferences.map((ref, idx) => (
+                        <div key={idx} className="drawer-scripture-ref-card">
+                          <h4>{ref.ref}</h4>
+                          <p>{ref.summary}</p>
+                          <div className="card-actions-row">
+                            <button className="action-pill-btn">Read Passage</button>
+                            <button className="action-pill-btn">Compare</button>
+                          </div>
                         </div>
-                      )
-                    })
-                  ) : (
-                    // Show only the selected period
-                    (() => {
-                      const selectedPeriodName = period.split(' (')[0]
-                      const selectedPeriodData = historicalPeriods.find(p => p.name === selectedPeriodName)
-                      return selectedPeriodData ? (
-                        <div className="legend-item selected">
-                          <span 
-                            className="legend-dot"
-                            style={{ backgroundColor: selectedPeriodData.color }}
-                          ></span>
-                          <span>{selectedPeriodData.name}</span>
+                      ))}
+                    </div>
+                    <div className="view-all-scriptures-footer">
+                      <button className="view-all-verses-btn">View All Scriptures (128)</button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="drawer-empty-text">Select a location pin to view scripture reference cards.</p>
+                )}
+              </div>
+            )}
+
+            {bottomTab === 'people' && (
+              <div className="drawer-people-pane">
+                {selectedLocation ? (
+                  <div className="people-group-cards-row">
+                    {selectedLocation.connectedPeople.map(p => (
+                      <div key={p} className="drawer-person-card">
+                        <span className="person-avatar">👤</span>
+                        <div>
+                          <h4>{p}</h4>
+                          <p>Documented resident or traveler at {selectedLocation.ancientName}.</p>
                         </div>
-                      ) : null
-                    })()
-                  )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="drawer-empty-text">Select a location pin to view related people.</p>
+                )}
+              </div>
+            )}
+
+            {bottomTab === 'routes' && (
+              <div className="drawer-routes-pane">
+                {selectedLocation ? (
+                  <div className="routes-info-row">
+                    {selectedLocation.relatedRoutes.map(r => (
+                      <div key={r} className="route-info-card">
+                        <span className="route-icon-pin">🛣️</span>
+                        <div>
+                          <h4>{r}</h4>
+                          <p>Ancient path passing through {selectedLocation.ancientName} connecting to trade networks.</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="drawer-empty-text">Select a location pin to view related routes.</p>
+                )}
+              </div>
+            )}
+
+            {bottomTab === 'timeline' && (
+              <div className="drawer-timeline-pane">
+                {selectedLocation ? (
+                  <div className="horizontal-timeline-steps">
+                    {selectedLocation.periods.map((p, idx) => (
+                      <div key={p} className="timeline-horizontal-step">
+                        <span className="num-dot">{idx + 1}</span>
+                        <h4>{p}</h4>
+                        <p>Historical interaction documented at {selectedLocation.ancientName}.</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="drawer-empty-text">Select a location pin to view timeline.</p>
+                )}
+              </div>
+            )}
+
+            {bottomTab === 'notes' && (
+              <div className="drawer-notes-pane">
+                <h4>Personal Geography Study Notes</h4>
+                <textarea
+                  placeholder="Record your geographic insights, observations, and findings from your study here..."
+                  value={userNotes}
+                  onChange={(e) => setUserNotes(e.target.value)}
+                  className="study-notes-textarea"
+                />
+                <div className="notes-actions-row">
+                  <button className="save-notes-btn">Save Study Note</button>
                 </div>
+              </div>
+            )}
+
+            {bottomTab === 'canon' && (
+              <div className="drawer-canon-pane">
+                {selectedLocation ? (
+                  <div className="canon-connection-full-card">
+                    <h4>Ethiopian Canon & Decolonial Context</h4>
+                    <p className="canon-context-text">{selectedLocation.ethiopianCanonConnection}</p>
+                    {selectedLocation.decolonialNote && (
+                      <div className="decolonial-note-box">
+                        <strong>Decolonial Translation Audit:</strong>
+                        <p>{selectedLocation.decolonialNote}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="drawer-empty-text">Select a location pin to view canon connections.</p>
+                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Middle Column - Location Details */}
-        <div className="location-panel">
-          {selectedLocation ? (
-            <>
-              <div className="panel-header">
-                <div className="panel-title">
-                  <span className="panel-icon">📍</span>
-                  <span>{selectedLocation.name}</span>
-                </div>
-              </div>
-              
-              <div className="location-details-new">
-                <div className="detail-section">
-                  <h4>Modern Location</h4>
-                  <p>{selectedLocation.modern_name || 'Unknown modern location'}, {selectedLocation.region || 'Middle East'}</p>
-                </div>
-                
-                <div className="detail-section">
-                  <h4>Historical Period</h4>
-                  <div className="period-tag exodus">Exodus Period</div>
-                </div>
-                
-                <div className="detail-section">
-                  <h4>Biblical Events</h4>
-                  <div className="biblical-events">
-                    <div className="event-item">
-                      <span className="event-icon">🔥</span>
-                      <span>Moses encounters the burning bush</span>
-                    </div>
-                    <div className="event-item">
-                      <span className="event-icon">📜</span>
-                      <span>God gives the Ten Commandments</span>
-                    </div>
-                    <div className="event-item">
-                      <span className="event-icon">⚡</span>
-                      <span>The golden calf incident</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="detail-section">
-                  <h4>Cross References</h4>
-                  <div className="cross-references">
-                    <div className="reference">Exodus 3:1-6</div>
-                    <div className="reference">"Moses and the burning bush at Mount Horeb"</div>
-                    <div className="reference">Exodus 19:18-20</div>
-                    <div className="reference">"God descends on Mount Sinai in fire"</div>
-                  </div>
-                </div>
-                
-                {showDetailedAnalysis && (
-                  <button 
-                    className="toggle-analysis-btn"
-                    onClick={() => setShowDetailedAnalysis(false)}
-                  >
-                    📊 Hide Detailed Analysis
-                  </button>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="location-placeholder-new">
-              <div className="panel-header">
-                <div className="panel-title">
-                  <span className="panel-icon">📍</span>
-                  <span>Location Details</span>
-                </div>
-              </div>
-              <div className="placeholder-content">
-                <div className="placeholder-icon">🗺️</div>
-                <p>Select a location on the map to see detailed information</p>
-              </div>
-            </div>
-          )}
-          
-          {/* Quick Access */}
-          <div className="quick-access">
-            <h4>Quick Access - {period === 'All Periods' ? 'All Periods' : period.split(' (')[0]}</h4>
-            <div className="quick-location-list">
-              {getQuickAccessForPeriod(period).map((location, index) => (
-                <div 
-                  key={index}
-                  className={`quick-location ${selectedLocation?.name === location.name ? 'selected' : ''}`} 
-                  onClick={() => selectLocationByName(location.name)}
-                >
-                  <span className="location-icon">{location.icon}</span>
-                  <span>{location.name}</span>
-                  <span className="location-subtext">{location.subtext}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column - AI Assistant */}
-        <div className="ai-panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <span className="panel-icon">🤖</span>
-              <span>Geography AI Assistant</span>
-              <span className="panel-badge">Atlas Chat</span>
-            </div>
-          </div>
-          
-          <div className="chat-container">
-            <div className="chat-messages">
-              <div className="ai-message">
-                <div className="message-avatar">AI</div>
-                <div className="message-content">
-                  <div className="message-text">
-                    What archaeological evidence supports the existence of ancient Jerusalem?
-                  </div>
-                  <div className="message-time">2:30 PM</div>
-                </div>
-              </div>
-              
-              <div className="ai-message">
-                <div className="message-avatar">AI</div>
-                <div className="message-content">
-                  <div className="message-text detailed">
-                    Archaeological evidence for ancient Jerusalem is extensive. Key discoveries include the City of David excavations from David's time, the Western Wall tunnels showing Herodian-period construction, and numerous artifacts confirming the city's biblical significance.
-                  </div>
-                  <div className="message-sources">
-                    <span className="source-tag">Israeli Antiquities Authority</span>
-                    <span className="source-tag">Biblical Archaeology Review</span>
-                    <span className="source-tag">City of David Archives</span>
-                  </div>
-                  <div className="message-time">2:31 PM</div>
-                </div>
-              </div>
-            </div>
+        {/* Quick Explore Panel (Right 30% width) */}
+        <div className="drawer-quick-explore-sidebar">
+          <h3>Quick Explore</h3>
+          <div className="quick-explore-grid">
+            <button className="quick-exp-btn" onClick={() => handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'egypt'))}>
+              <span className="quick-icon">🏜️</span>
+              <span>Show Egypt</span>
+            </button>
             
-            <div className="chat-input-area">
-              <div className="chat-input-wrapper">
-                <input
-                  type="text"
-                  value={chatMessage}
-                  onChange={(e) => setChatMessage(e.target.value)}
-                  placeholder="Ask about the selected location or any biblical geography topic..."
-                  className="chat-input"
-                />
-                <button className="chat-send-btn">
-                  <span className="send-icon">🎤</span>
-                </button>
-                <button className="chat-send-btn">
-                  <span className="send-icon">➤</span>
-                </button>
-              </div>
-              <div className="input-suggestion">
-                Ask about the selected location or any biblical geography topic...
-              </div>
-            </div>
+            <button className="quick-exp-btn" onClick={() => handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'cush'))}>
+              <span className="quick-icon">🌍</span>
+              <span>Show Cush / Ethiopia</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => {
+              setActiveLayer('Journeys & Routes');
+              handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'rome'));
+            }}>
+              <span className="quick-icon">🛣️</span>
+              <span>Paul's Journeys</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => {
+              setActiveLayer('African Biblical World');
+              handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'cush'));
+            }}>
+              <span className="quick-icon">✊</span>
+              <span>African Places in the Bible</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => {
+              setActivePeriod('Exodus Period');
+              handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'mount_sinai'));
+            }}>
+              <span className="quick-icon">🚶</span>
+              <span>Exodus Route</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'babylon'))}>
+              <span className="quick-icon">🏰</span>
+              <span>Show Babylon</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => {
+              setActivePeriod('Time of Jesus');
+              handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'bethlehem'));
+            }}>
+              <span className="quick-icon">✝️</span>
+              <span>Places Connected to Jesus</span>
+            </button>
+
+            <button className="quick-exp-btn" onClick={() => {
+              setActiveLayer('Ethiopian Canon Connections');
+              handleSelectLocation(BIBLICAL_LOCATIONS.find(l => l.id === 'cush'));
+            }}>
+              <span className="quick-icon">📜</span>
+              <span>Ethiopian Canon Locations</span>
+            </button>
           </div>
+          <div className="drawer-explore-sub-tip">💡 Click any marker on the map to explore more details.</div>
         </div>
       </div>
     </div>

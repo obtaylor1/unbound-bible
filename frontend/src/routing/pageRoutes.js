@@ -1,0 +1,61 @@
+const HASH_TO_PAGE = {
+  home: 'home',
+  aistudy: 'chat',
+  chat: 'chat',
+  sermon: 'sermon',
+  scriptures: 'apocrypha',
+  apocrypha: 'apocrypha',
+  compare: 'textual',
+  textual: 'textual',
+  canon: 'canon-compare',
+  'canon-compare': 'canon-compare',
+  'race-misuse': 'race-misuse',
+  'bias-explorer': 'bias-explorer',
+  factbook: 'factbook',
+  research: 'research',
+  media: 'media',
+  map: 'map',
+  library: 'notes',
+  notes: 'notes',
+  community: 'forum',
+  forum: 'forum'
+}
+
+const PAGE_TO_HASH = {
+  home: '#home',
+  chat: '#aistudy',
+  sermon: '#sermon',
+  apocrypha: '#scriptures',
+  textual: '#compare',
+  'canon-compare': '#canon',
+  'race-misuse': '#race-misuse',
+  'bias-explorer': '#bias-explorer',
+  factbook: '#factbook',
+  research: '#research',
+  media: '#media',
+  map: '#map',
+  notes: '#library',
+  forum: '#community'
+}
+
+export const pageFromHash = (hash = '') => HASH_TO_PAGE[hash.replace(/^#/, '').toLowerCase()] ?? 'home'
+export const hashForPage = (page) => PAGE_TO_HASH[page] ?? '#home'
+
+const PAGE_TITLES = {
+  home: 'The Unbound Bible',
+  chat: 'Ask the Bible',
+  sermon: 'Sermon Analysis',
+  apocrypha: 'Scripture Reader',
+  textual: 'Compare Scripture',
+  'canon-compare': 'Canon Comparison',
+  'race-misuse': 'Race and Scripture Misuse',
+  'bias-explorer': 'Translation Bias Explorer',
+  factbook: 'Biblical Factbook',
+  research: 'Research Hub',
+  media: 'Interactive Media',
+  map: 'Biblical Map',
+  notes: 'My Library',
+  forum: 'Community'
+}
+
+export const titleForPage = (page) => PAGE_TITLES[page] ?? 'The Unbound Bible'

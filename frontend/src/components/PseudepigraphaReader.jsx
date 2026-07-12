@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react'
-import './PseudepigrahaReader.css'
+import { useCallback, useEffect, useState } from 'react'
+import './PseudepigraphaReader.css'
 import WordPopover from './WordPopover'
 
-function PseudepigrahaReader({ selectedBook, selectedChapter, selectedVerse, onWordClick }) {
+function PseudepigraphaReader({ selectedBook }) {
   const [bookContent, setBookContent] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [bookInfo, setBookInfo] = useState(null)
+  const [, setBookInfo] = useState(null)
   
   // WordPopover state
   const [wordPopover, setWordPopover] = useState({
@@ -18,13 +18,7 @@ function PseudepigrahaReader({ selectedBook, selectedChapter, selectedVerse, onW
     loading: false
   })
 
-  useEffect(() => {
-    if (selectedBook) {
-      fetchBookContent()
-    }
-  }, [selectedBook])
-
-  const fetchBookContent = async () => {
+  const fetchBookContent = useCallback(async () => {
     setLoading(true)
     setError('')
     
@@ -43,7 +37,11 @@ function PseudepigrahaReader({ selectedBook, selectedChapter, selectedVerse, onW
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedBook])
+
+  useEffect(() => {
+    if (selectedBook) fetchBookContent()
+  }, [fetchBookContent, selectedBook])
 
   const formatChapterHeading = (chapter) => {
     // Handle different chapter numbering formats
@@ -318,4 +316,4 @@ function PseudepigrahaReader({ selectedBook, selectedChapter, selectedVerse, onW
   )
 }
 
-export default PseudepigrahaReader
+export default PseudepigraphaReader

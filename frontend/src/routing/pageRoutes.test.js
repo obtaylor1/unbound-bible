@@ -1,0 +1,22 @@
+import { describe, expect, it } from 'vitest'
+import { hashForPage, pageFromHash, titleForPage } from './pageRoutes'
+
+describe('page routes', () => {
+  it('maps the supplied AI Study deep link to Ask the Bible', () => {
+    expect(pageFromHash('#aistudy')).toBe('chat')
+  })
+
+  it('falls back to home for unknown hashes', () => {
+    expect(pageFromHash('#not-a-page')).toBe('home')
+  })
+
+  it('creates stable canonical hashes', () => {
+    expect(hashForPage('chat')).toBe('#aistudy')
+    expect(hashForPage('textual')).toBe('#compare')
+  })
+
+  it('provides a stable accessible page title', () => {
+    expect(titleForPage('textual')).toBe('Compare Scripture')
+    expect(titleForPage('missing')).toBe('The Unbound Bible')
+  })
+})

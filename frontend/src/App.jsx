@@ -1,18 +1,27 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import './App.css'
 import Navigation from './components/Navigation'
 import HomePage from './components/HomePage'
-import TextualComparison from './components/TextualComparison'
-import SermonAnalyzer from './components/SermonAnalyzer'
-import InteractiveMap from './components/InteractiveMap'
-import ForumPage from './components/ForumPage'
-import ChatInterface from './components/ChatInterface'
+import { hashForPage, pageFromHash, titleForPage } from './routing/pageRoutes'
+
+const TextualComparisonWorkspace = lazy(() => import('./components/TextualComparisonWorkspace'))
+const AncientTexts = lazy(() => import('./components/AncientTexts'))
+const SermonAnalyzer = lazy(() => import('./components/SermonAnalyzer'))
+const InteractiveMap = lazy(() => import('./components/InteractiveMap'))
+const ForumPage = lazy(() => import('./components/ForumPage'))
+const AskTheBible = lazy(() => import('./components/AskTheBible'))
+const ResearchHub = lazy(() => import('./components/ResearchHub'))
+const InteractiveMedia = lazy(() => import('./components/InteractiveMedia'))
+const SavedStudies = lazy(() => import('./components/SavedStudies'))
+const CanonComparison = lazy(() => import('./components/CanonComparison'))
+const RaceMisuse = lazy(() => import('./components/RaceMisuse'))
+const Factbook = lazy(() => import('./components/Factbook'))
 
 function App() {
-  const [currentPage, setCurrentPage] = useState('home')
-  const [selectedVerse, setSelectedVerse] = useState({ book: 'Genesis', chapter: 1, verse: 1 })
+  const [currentPage, setCurrentPage] = useState(() => pageFromHash(window.location.hash))
   const [availableBooks, setAvailableBooks] = useState(['Genesis']) // Default fallback
-  const [canonicalFilter, setCanonicalFilter] = useState('PROT66')
+  const [canonicalFilter, setCanonicalFilter] = useState('ETHIO81')
+  const mainRef = useRef(null)
   
   // Fetch available books from the API
   useEffect(() => {
@@ -32,8 +41,26 @@ function App() {
     fetchBooks()
   }, [canonicalFilter])
 
+  useEffect(() => {
+    const handleHashChange = () => setCurrentPage(pageFromHash(window.location.hash))
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  useEffect(() => {
+    document.title = `${titleForPage(currentPage)} · The Unbound Bible`
+    window.requestAnimationFrame(() => {
+      mainRef.current?.focus({ preventScroll: true })
+    })
+  }, [currentPage])
+
   const handlePageChange = (pageId) => {
     setCurrentPage(pageId)
+    const nextHash = hashForPage(pageId)
+    if (window.location.hash !== nextHash) window.location.hash = nextHash
+    if (pageId === 'apocrypha') {
+      setCanonicalFilter('BROADER')
+    }
   }
 
   const renderCurrentPage = () => {
@@ -42,20 +69,46 @@ function App() {
         return <HomePage onPageChange={handlePageChange} />
       
       case 'textual':
-        return <TextualComparison 
+        return <TextualComparisonWorkspace />
+      case 'apocrypha':
+        return <AncientTexts
           canonicalFilter={canonicalFilter} 
           setCanonicalFilter={setCanonicalFilter}
           availableBooks={availableBooks}
+          onPageChange={handlePageChange}
         />
       
+      case 'canon-compare':
+        return (
+          <div className="page-container">
+            <CanonComparison />
+          </div>
+        )
+
+      case 'race-misuse':
+        return (
+          <div className="page-container">
+            <RaceMisuse />
+          </div>
+        )
+
+      case 'factbook':
+        return (
+          <div className="page-container">
+            <Factbook />
+          </div>
+        )
+
+      case 'bias-explorer':
+        return (
+          <div className="page-container">
+            <ResearchHub initialTopicKey="translation_bias" />
+          </div>
+        )
       case 'sermon':
         return (
           <div className="page-container">
-            <div className="page-header">
-              <h1>Sermon Analysis</h1>
-              <p>Upload and analyze sermons for biblical and historical context</p>
-            </div>
-            <SermonAnalyzer />
+            <SermonAnalyzer onPageChange={handlePageChange} />
           </div>
         )
       
@@ -84,7 +137,28 @@ function App() {
       case 'chat':
         return (
           <div className="page-container">
-            <ChatInterface />
+            <AskTheBible onPageChange={handlePageChange} />
+          </div>
+        )
+
+      case 'research':
+        return (
+          <div className="page-container">
+            <ResearchHub />
+          </div>
+        )
+
+      case 'media':
+        return (
+          <div className="page-container">
+            <InteractiveMedia />
+          </div>
+        )
+
+      case 'notes':
+        return (
+          <div className="page-container">
+            <SavedStudies />
           </div>
         )
       
@@ -95,9 +169,12 @@ function App() {
 
   return (
     <div className="app">
-      <Navigation currentPage={currentPage} onPageChange={handlePageChange} />
-      <main className="app-main">
-        {renderCurrentPage()}
+      <a className="skip-link" href="#main-content">Skip to main content</a>
+      {currentPage !== 'apocrypha' && <Navigation currentPage={currentPage} onPageChange={handlePageChange} />}
+      <main ref={mainRef} id="main-content" tabIndex="-1" aria-label={titleForPage(currentPage)} className={currentPage === 'apocrypha' ? "app-main full-screen" : "app-main"}>
+        <Suspense fallback={<div className="page-loading" role="status">Opening study tools…</div>}>
+          {renderCurrentPage()}
+        </Suspense>
       </main>
     </div>
   )

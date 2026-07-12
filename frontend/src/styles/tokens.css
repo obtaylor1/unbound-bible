@@ -1,0 +1,34 @@
+:root {
+  --canvas: #0b0d10;
+  --canvas-soft: #111419;
+  --surface: #171a1f;
+  --surface-raised: #1d2127;
+  --paper: #eee5d4;
+  --ink: #17140f;
+  --text-primary: #f2ede3;
+  --text-secondary: #b8b0a4;
+  --text-muted: #827b71;
+  --amethyst: #9a7bd2;
+  --amethyst-deep: #7152a8;
+  --brass: #dab45a;
+  --brass-soft: #f0cf7d;
+  --danger: #e78b7e;
+  --success: #84b69a;
+  --focus-ring: #f3cf76;
+  --font-display: Charter, 'Bitstream Charter', 'Iowan Old Style', Georgia, serif;
+  --font-body: Avenir, 'Avenir Next', 'Segoe UI', sans-serif;
+  --font-reading: Charter, 'Bitstream Charter', 'Iowan Old Style', Georgia, serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --shadow-sm: 0 8px 20px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.42);
+}

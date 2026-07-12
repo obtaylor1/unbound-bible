@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react'
 import './WordContextPopover.css'
 
 function WordContextPopover({ 
   isVisible, 
   position, 
   word, 
-  verseRef, 
   onClose,
   contextData,
   loading = false

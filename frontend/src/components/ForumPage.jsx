@@ -340,7 +340,9 @@ function ForumPage() {
           setPosts([...data, ...MOCK_POSTS])
         }
       }
-    } catch {}
+    } catch (error) {
+      console.warn('Community posts are unavailable.', error)
+    }
     finally { setLoadingPosts(false) }
   }, [])
 
@@ -357,7 +359,9 @@ function ForumPage() {
         localStorage.removeItem('forum_token')
         setToken('')
       }
-    } catch {}
+    } catch (error) {
+      console.warn('Could not restore the signed-in community profile.', error)
+    }
   }, [])
 
   useEffect(() => {

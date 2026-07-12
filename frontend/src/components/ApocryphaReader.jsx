@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './ApocryphaReader.css'
 import WordPopover from './WordPopover'
 
-function ApocryphaReader({ selectedBook, selectedChapter, selectedVerse }) {
+function ApocryphaReader({ selectedBook }) {
   const [bookContent, setBookContent] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -18,13 +18,7 @@ function ApocryphaReader({ selectedBook, selectedChapter, selectedVerse }) {
     loading: false
   })
 
-  useEffect(() => {
-    if (selectedBook) {
-      fetchBookContent()
-    }
-  }, [selectedBook])
-
-  const fetchBookContent = async () => {
+  const fetchBookContent = useCallback(async () => {
     setLoading(true)
     setError('')
     
@@ -43,7 +37,11 @@ function ApocryphaReader({ selectedBook, selectedChapter, selectedVerse }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedBook])
+
+  useEffect(() => {
+    if (selectedBook) fetchBookContent()
+  }, [fetchBookContent, selectedBook])
 
   const formatChapterHeading = (chapter) => {
     // Handle different chapter numbering formats

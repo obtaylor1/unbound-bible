@@ -1,0 +1,465 @@
+.race-misuse-container {
+  height: calc(100vh - 64px);
+  background: var(--bg-main, #070A12);
+  color: var(--text-primary, #F8FAFC);
+  display: flex;
+  flex-direction: column;
+}
+
+.race-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+}
+
+.left-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+}
+
+.right-panel {
+  flex: 1.2;
+  display: flex;
+  flex-direction: column;
+  padding: 2rem;
+  overflow-y: auto;
+  background: rgba(8, 11, 20, 0.5);
+}
+
+.panel-header {
+  margin-bottom: 1.5rem;
+}
+
+.panel-header h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, #F8FAFC 0%, #F59E0B 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.panel-header p {
+  color: var(--text-muted, #8A93A6);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.search-box-container {
+  margin-bottom: 1.5rem;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(13, 18, 32, 0.8);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  color: var(--text-primary, #F8FAFC);
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--border-medium, rgba(139, 92, 246, 0.28));
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.1);
+}
+
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.record-card {
+  background: var(--bg-panel, rgba(13, 18, 32, 0.82));
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 1.25rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.record-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.15);
+  background: var(--bg-card-hover, rgba(30, 41, 59, 0.4));
+}
+
+.record-card.active {
+  border-color: #8B5CF6;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.15);
+  background: rgba(139, 92, 246, 0.04);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.reference-tag {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #A78BFA;
+  background: rgba(139, 92, 246, 0.12);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.severity-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.severity-badge.red {
+  background: rgba(239, 68, 68, 0.15);
+  color: #F87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.severity-badge.orange {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.severity-badge.purple {
+  background: rgba(168, 85, 247, 0.15);
+  color: #C084FC;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.record-card h4 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary, #F8FAFC);
+}
+
+.record-card p {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-muted, #8A93A6);
+}
+
+/* Sermon Auditor section styles */
+.sermon-auditor-card {
+  background: rgba(17, 24, 39, 0.6);
+  border: 1px solid var(--border-medium, rgba(139, 92, 246, 0.28));
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-top: 1rem;
+}
+
+.sermon-auditor-card h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #F8FAFC;
+  margin-bottom: 0.5rem;
+}
+
+.section-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted, #8A93A6);
+  margin-bottom: 1rem;
+}
+
+.sample-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.sample-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary, #CBD5E1);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sample-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #F8FAFC);
+}
+
+.sermon-textarea {
+  width: 100%;
+  background: rgba(8, 11, 20, 0.8);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary, #F8FAFC);
+  font-size: 0.85rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  resize: vertical;
+  margin-bottom: 1rem;
+}
+
+.audit-submit-btn {
+  width: 100%;
+  background: #8B5CF6;
+  border: none;
+  color: white;
+  padding: 0.75rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.audit-submit-btn:hover {
+  background: #7C3AED;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
+}
+
+.audit-submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.audit-results-panel {
+  margin-top: 1.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.audit-score-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.5rem;
+}
+
+.score-badge {
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+}
+
+.score-badge.good {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+}
+
+.score-badge.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FBBF24;
+}
+
+.score-badge.bad {
+  background: rgba(239, 68, 68, 0.15);
+  color: #F87171;
+}
+
+.audit-claim-card {
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 3px solid #CBD5E1;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.audit-claim-card.misuse {
+  border-left-color: #EF4444;
+  background: rgba(239, 68, 68, 0.02);
+}
+
+.audit-claim-card.questionable {
+  border-left-color: #F59E0B;
+  background: rgba(245, 158, 11, 0.02);
+}
+
+.audit-claim-card.supported {
+  border-left-color: #10B981;
+  background: rgba(16, 185, 129, 0.02);
+}
+
+.claim-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted, #8A93A6);
+  margin-bottom: 0.4rem;
+}
+
+.claim-status-badge {
+  text-transform: uppercase;
+}
+
+.claim-status-badge.misuse { color: #F87171; }
+.claim-status-badge.questionable { color: #FBBF24; }
+.claim-status-badge.supported { color: #34D399; }
+
+.claim-text {
+  font-size: 0.85rem;
+  font-style: italic;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary, #F8FAFC);
+}
+
+.claim-explanation, .claim-corrective {
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+  line-height: 1.4;
+}
+
+.claim-explanation { color: var(--text-muted, #8A93A6); }
+.claim-corrective { color: #A78BFA; }
+
+/* Right Details Panel styles */
+.details-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.details-header {
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  padding-bottom: 1.5rem;
+}
+
+.severity-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.severity-tag.red {
+  background: rgba(239, 68, 68, 0.15);
+  color: #F87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.severity-tag.orange {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.severity-tag.purple {
+  background: rgba(168, 85, 247, 0.15);
+  color: #C084FC;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.details-header h2 {
+  font-size: 1.85rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary, #F8FAFC);
+}
+
+.reference-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  color: var(--text-secondary, #CBD5E1);
+}
+
+.reference-header strong {
+  color: #A78BFA;
+  font-size: 1.05rem;
+}
+
+.detail-section {
+  margin-bottom: 1.75rem;
+}
+
+.detail-section h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted, #8A93A6);
+  letter-spacing: 0.05em;
+  margin-bottom: 0.75rem;
+}
+
+.detail-box {
+  padding: 1.25rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.misuse-box {
+  background: rgba(239, 68, 68, 0.03);
+  border: 1px solid rgba(239, 68, 68, 0.1);
+  color: var(--text-secondary, #CBD5E1);
+}
+
+.harm-box {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, #CBD5E1);
+}
+
+.corrective-box {
+  background: rgba(16, 185, 129, 0.04);
+  border: 1px solid rgba(16, 185, 129, 0.15);
+  color: #F8FAFC;
+  font-weight: 500;
+}
+
+.ethiopian-box {
+  background: rgba(139, 92, 246, 0.04);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  color: var(--text-secondary, #CBD5E1);
+}
+
+.decolonial-box {
+  background: rgba(245, 158, 11, 0.03);
+  border: 1px solid rgba(245, 158, 11, 0.1);
+  color: var(--text-secondary, #CBD5E1);
+}
+
+.study-notes-text {
+  font-size: 0.9rem;
+  font-style: italic;
+  color: #A78BFA;
+  padding-left: 0.75rem;
+  border-left: 2px solid #8B5CF6;
+}
+
+.empty-details {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted, #8A93A6);
+  text-align: center;
+  padding: 2rem;
+}
+
+.huge-icon {
+  font-size: 4rem;
+  margin-bottom: 1.5rem;
+  opacity: 0.25;
+}

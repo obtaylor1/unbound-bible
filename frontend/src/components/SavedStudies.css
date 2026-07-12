@@ -1,0 +1,404 @@
+/* SavedStudies.css - Notes and Saved Studies styles */
+
+.saved-studies-page {
+  padding: 30px;
+  background: rgba(11, 19, 43, 0.7);
+  backdrop-filter: blur(15px);
+  border: 1px solid rgba(212, 175, 55, 0.15);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: #FDFBF7;
+  margin: 10px;
+}
+
+.saved-header {
+  margin-bottom: 24px;
+}
+
+.saved-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: #D4AF37;
+  font-weight: 700;
+  letter-spacing: 1px;
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.saved-header h2 {
+  font-size: 1.8rem;
+  margin: 0 0 6px 0;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.saved-header .subtitle {
+  margin: 0;
+  font-size: 0.95rem;
+  color: rgba(253, 251, 247, 0.75);
+}
+
+/* Control Row */
+.controls-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 25px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.view-toggle {
+  display: flex;
+  background: rgba(0,0,0,0.15);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 4px;
+  border-radius: 8px;
+  gap: 4px;
+}
+
+.toggle-btn {
+  background: transparent;
+  border: none;
+  color: rgba(253, 251, 247, 0.65);
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.toggle-btn:hover {
+  color: #FDFBF7;
+  background: rgba(255,255,255,0.04);
+}
+
+.toggle-btn.active {
+  color: #D4AF37;
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+}
+
+.search-filter-wrapper {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.search-input {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #FDFBF7;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  width: 250px;
+}
+
+.export-btn {
+  background: transparent;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: #D4AF37;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.export-btn:hover {
+  background: rgba(212, 175, 55, 0.1);
+}
+
+/* Saved Content Grid Layout */
+.saved-content-grid {
+  min-height: 380px;
+}
+
+/* Notes View */
+.notes-view-layout {
+  display: flex;
+  gap: 24px;
+}
+
+.tags-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  padding-right: 20px;
+}
+
+.tags-sidebar h4 {
+  font-size: 0.85rem;
+  color: rgba(253, 251, 247, 0.5);
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tags-buttons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tag-filter-btn {
+  background: transparent;
+  border: none;
+  color: rgba(253, 251, 247, 0.7);
+  padding: 8px 12px;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-filter-btn:hover {
+  background: rgba(255,255,255,0.03);
+  color: #FDFBF7;
+}
+
+.tag-filter-btn.active {
+  background: rgba(255,255,255,0.08);
+  color: #FDFBF7;
+  font-weight: 600;
+}
+
+.notes-list-area {
+  flex: 1;
+}
+
+.notes-vertical-flex {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.note-item-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 18px;
+  border-left: 4px solid #D4AF37;
+}
+
+.note-card-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.note-verse-tag {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #D4AF37;
+}
+
+.note-date-txt {
+  font-size: 0.72rem;
+  color: rgba(253, 251, 247, 0.4);
+}
+
+.note-text-body {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: rgba(253, 251, 247, 0.9);
+  margin: 0 0 16px 0;
+  white-space: pre-wrap;
+}
+
+.note-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 12px;
+}
+
+.note-tags-flex {
+  display: flex;
+  gap: 6px;
+}
+
+.mini-tag {
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(253, 251, 247, 0.55);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.note-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.note-actions button {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  cursor: pointer;
+  color: rgba(253, 251, 247, 0.5);
+  transition: all 0.2s ease;
+}
+
+.note-actions .action-btn-edit:hover { color: #D4AF37; }
+.note-actions .action-btn-del:hover { color: #EF4444; }
+
+/* Note Editing */
+.note-editing-area {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.note-editing-area textarea {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: #FDFBF7;
+  padding: 10px;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  align-self: flex-end;
+}
+
+.edit-actions button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-save { background: #D4AF37; color: #0b132b; }
+.btn-cancel { background: rgba(255,255,255,0.1); color: #FDFBF7; }
+
+/* Sessions View */
+.sessions-grid-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.session-item-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.session-card-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #FDFBF7;
+  line-height: 1.4;
+  padding-right: 15px;
+}
+
+.session-del-btn {
+  background: transparent;
+  border: none;
+  color: rgba(253, 251, 247, 0.4);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px;
+  line-height: 1;
+}
+
+.session-del-btn:hover {
+  color: #EF4444;
+}
+
+.session-metadata {
+  display: flex;
+  gap: 15px;
+  font-size: 0.72rem;
+  color: rgba(253, 251, 247, 0.45);
+  margin-bottom: 12px;
+}
+
+.session-chat-preview {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-chat-preview h5 {
+  margin: 0 0 6px 0;
+  font-size: 0.75rem;
+  color: #D4AF37;
+}
+
+.preview-scroller {
+  background: rgba(0,0,0,0.15);
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preview-row p {
+  margin: 2px 0 0 0;
+  color: rgba(253, 251, 247, 0.75);
+}
+
+.preview-row.user strong { color: #93C5FD; }
+.preview-row.ai strong { color: #D4AF37; }
+
+/* Empty state */
+.empty-workspace-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.1);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 50px 20px;
+  text-align: center;
+}
+
+.empty-workspace-card p {
+  font-size: 0.9rem;
+  margin: 0 0 8px 0;
+  color: rgba(253, 251, 247, 0.5);
+}
+
+.tip-txt {
+  font-size: 0.75rem;
+  color: rgba(212, 175, 55, 0.5);
+}
