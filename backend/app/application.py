@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.config import Settings, get_settings
+from app.database import Base, create_database_engine, create_session_factory
+from app.auth import models as auth_models  # noqa: F401
 
 
 def create_application(settings: Settings | None = None) -> FastAPI:
@@ -15,6 +17,11 @@ def create_application(settings: Settings | None = None) -> FastAPI:
         openapi_url="/api/openapi.json" if settings.environment != "production" else None,
     )
     application.state.settings = settings
+    engine = create_database_engine(settings)
+    application.state.database_engine = engine
+    application.state.session_factory = create_session_factory(engine)
+    if settings.environment == "test":
+        Base.metadata.create_all(engine)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

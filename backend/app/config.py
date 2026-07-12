@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     ai_chat_provider: str = "demo"
     ai_embedding_provider: str = "demo"
     ai_transcription_provider: str = "demo"
+    access_token_minutes: int = 15
+    refresh_token_days: int = 30
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
