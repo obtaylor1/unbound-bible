@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import './SermonAnalyzer.css'
-import { MOCK_SERMON_ANALYSIS } from '../data/mockData'
+import { credentials } from '../api/client'
 
 function SermonAnalyzer({ onPageChange }) {
   const [file, setFile] = useState(null)
@@ -57,7 +57,6 @@ function SermonAnalyzer({ onPageChange }) {
       return
     }
 
-    const token = localStorage.getItem('forum_token') || 'guest_token'
     setUploading(true)
     setError(null)
     setAnalysis(null)
@@ -66,29 +65,13 @@ function SermonAnalyzer({ onPageChange }) {
       const formData = new FormData()
       formData.append('file', file)
 
-      let result = null
-      try {
-        const response = await fetch('/api/v1/analyze/sermon', {
+      const response = await fetch('/api/v1/analyze/sermon', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
+          headers: credentials.accessToken ? { 'Authorization': `Bearer ${credentials.accessToken}` } : {},
           body: formData
         })
-
-        if (response.ok) {
-          result = await response.json()
-        } else {
-          console.warn("Backend sermon audit failed. Falling back to mock exegesis data.")
-        }
-      } catch (apiErr) {
-        console.warn("Backend api offline. Falling back to mock exegesis data.", apiErr)
-      }
-
-      if (!result) {
-        await new Promise(resolve => setTimeout(resolve, 2500)) // Simulation latency
-        result = MOCK_SERMON_ANALYSIS
-      }
+      if (!response.ok) throw new Error(`Sermon analysis is unavailable (${response.status}). Your file was not saved.`)
+      const result = await response.json()
 
       setAnalysis(result)
       setActiveTab('overview')
@@ -133,9 +116,8 @@ function SermonAnalyzer({ onPageChange }) {
 
   const handleRecentClick = (filename) => {
     setFile({ name: filename, size: 45000000 })
-    setError(null)
-    setAnalysis(MOCK_SERMON_ANALYSIS)
-    setActiveTab('overview')
+    setError('This prior analysis is not stored on the server yet. Upload the original file to analyze it again.')
+    setAnalysis(null)
   }
 
   return (

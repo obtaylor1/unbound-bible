@@ -1,4 +1,4 @@
-import { MOCK_ASK_ANSWERS } from '../data/mockData'
+import { DEMO_ENABLED } from '../config/runtime'
 
 const normalizeSources = (context = []) => context.map((source) => {
   if (typeof source === 'string') {
@@ -12,7 +12,8 @@ const normalizeSources = (context = []) => context.map((source) => {
   }
 })
 
-const findDemoAnswer = (question) => {
+const findDemoAnswer = async (question) => {
+  const { MOCK_ASK_ANSWERS } = await import('../data/mockData')
   const normalized = question.toLowerCase()
   const entries = Object.entries(MOCK_ASK_ANSWERS)
   const direct = entries.find(([key]) => key === normalized.trim())
@@ -31,7 +32,7 @@ const findDemoAnswer = (question) => {
   return matchedKey ? MOCK_ASK_ANSWERS[matchedKey] : null
 }
 
-export async function askStudyQuestion(question, { allowDemo = true } = {}) {
+export async function askStudyQuestion(question, { allowDemo = DEMO_ENABLED } = {}) {
   try {
     const response = await fetch('/api/v1/chat/ask', {
       method: 'POST',
@@ -57,7 +58,7 @@ export async function askStudyQuestion(question, { allowDemo = true } = {}) {
     }
   } catch (error) {
     if (!allowDemo) throw error
-    const demo = findDemoAnswer(question)
+    const demo = await findDemoAnswer(question)
     if (!demo) throw error
 
     return {

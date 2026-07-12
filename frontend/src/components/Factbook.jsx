@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { MOCK_FACTBOOK_TOPICS } from '../data/factbookData'
+import { DEMO_ENABLED } from '../config/runtime'
 import './Factbook.css'
 
 // Reusable FactbookTopicCard Component
@@ -239,6 +240,8 @@ function Factbook() {
   const [activeFilter, setActiveFilter] = useState('')
   const [selectedTopic, setSelectedTopic] = useState(null)
   const [activeTab, setActiveTab] = useState('overview') // 'overview' | 'hermeneutics' | 'manuscripts'
+
+  if (!DEMO_ENABLED) return <div className="empty-workspace-card"><h2>Factbook entries are not loaded</h2><p>Run the factbook ingestion workflow to publish verified production entries.</p></div>
   
   // Toggle filters
   const filters = [

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './ResearchHub.css'
 import { MOCK_RESEARCH_TOPICS } from '../data/mockData'
+import { DEMO_ENABLED } from '../config/runtime'
 
 const FEATURED_TOPICS = [
   { slug: "moses", name: "Moses", type: "👤 Person" },
@@ -31,6 +32,8 @@ function ResearchHub({ initialTopicKey = 'moses' }) {
     setSelectedScripture(null)
     setScriptureDetails(null)
   }, [activeTopicKey])
+
+  if (!DEMO_ENABLED && initialTopicKey !== 'translation_bias') return <div className="empty-workspace-card"><h2>Research topics are not loaded</h2><p>Run the research-content ingestion workflow or enable the explicitly labeled demo dataset for this environment.</p></div>
 
   const parseScriptureRef = (refStr) => {
     const regex = /^([\d\s]*[A-Za-z]+(?:\s+[A-Za-z]+)*)\s+(\d+):(\d+)(?:-(\d+))?$/;

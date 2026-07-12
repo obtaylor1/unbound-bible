@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import './StudyAssistantSidebar.css'
-import { MOCK_ASK_ANSWERS } from '../data/mockData'
 import ShareStudyModal from './ShareStudyModal'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
+import { askStudyQuestion } from '../services/studyApi'
 
 function StudyAssistantSidebar({ 
   book = 'Genesis', 
@@ -152,56 +152,8 @@ function StudyAssistantSidebar({
     setActiveTab('chat')
 
     try {
-      // Look for predefined mock answers first
-      const normalizedQ = q.toLowerCase()
-      let answerData = null
-      
-      // Basic matching keys
-      if (normalizedQ.includes('forgiven') || normalizedQ.includes('forgive')) {
-        answerData = MOCK_ASK_ANSWERS["what does the bible say about forgiveness?"]
-      } else if (normalizedQ.includes('ethiopian') || normalizedQ.includes('compare') || normalizedQ.includes('canon')) {
-        answerData = MOCK_ASK_ANSWERS["how does the ethiopian bible compare with the king james version on this passage?"]
-      } else if (normalizedQ.includes('history') || normalizedQ.includes('background') || normalizedQ.includes('context')) {
-        answerData = MOCK_ASK_ANSWERS["what is the historical background of this chapter?"]
-      } else if (normalizedQ.includes('cross') || normalizedQ.includes('theme') || normalizedQ.includes('reference')) {
-        answerData = MOCK_ASK_ANSWERS["what are the major cross-references for this theme?"]
-      } else if (normalizedQ.includes('hebrew') || normalizedQ.includes('greek') || normalizedQ.includes('original')) {
-        answerData = MOCK_ASK_ANSWERS["what does the original hebrew, greek, aramaic, or geʽez suggest?"]
-      } else if (normalizedQ.includes('teen') || normalizedQ.includes('teenager')) {
-        answerData = MOCK_ASK_ANSWERS["how would i explain this passage to a teenager?"]
-      }
-
-      if (answerData) {
-        // Mock a slight loading delay for premium feel
-        await new Promise(resolve => setTimeout(resolve, 800))
-        setChatMessages(prev => [...prev, {
-          id: 'ai_' + Date.now(),
-          type: 'ai',
-          content: answerData.answer,
-          sources: answerData.sources,
-          followUps: answerData.followUps,
-          timestamp: new Date()
-        }])
-      } else {
-        // Fetch from actual API
-        const response = await fetch('/api/v1/chat/ask', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: `${q} (Context: ${book} ${chapter}:${verse})` })
-        })
-        if (response.ok) {
-          const data = await response.json()
-          setChatMessages(prev => [...prev, {
-            id: 'ai_' + Date.now(),
-            type: 'ai',
-            content: data.answer,
-            sources: data.context_used || [],
-            timestamp: new Date()
-          }])
-        } else {
-          throw new Error('API failed')
-        }
-      }
+      const result = await askStudyQuestion(`${q} (Context: ${book} ${chapter}:${verse})`)
+      setChatMessages(prev => [...prev, { id: 'ai_' + Date.now(), type: 'ai', content: result.answer, sources: result.sources, followUps: result.followUps, provenance: result.provenance, timestamp: new Date() }])
     } catch (err) {
       console.error(err)
       setChatMessages(prev => [...prev, {

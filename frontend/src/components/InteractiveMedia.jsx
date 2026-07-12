@@ -7,6 +7,7 @@ import {
   MOCK_ARCHAEOLOGICAL_SLIDES,
   MOCK_CANON_MATRIX 
 } from '../data/mockData'
+import { DEMO_ENABLED } from '../config/runtime'
 
 function InteractiveMedia() {
   const [activePanel, setActivePanel] = useState('books') // 'books', 'psalms', 'archaeology', 'timeline', 'canon'
@@ -23,10 +24,12 @@ function InteractiveMedia() {
 
   const activeSlide = MOCK_ARCHAEOLOGICAL_SLIDES.find(s => s.id === activeSlideId)
 
+  if (!DEMO_ENABLED) return <div className="empty-workspace-card"><h2>Interactive media is not loaded</h2><p>Configure the media dataset for production, or explicitly enable the labeled demo collection.</p></div>
+
   return (
     <div className="interactive-media glass-panel">
       <div className="media-header">
-        <span className="media-badge">🎨 SCHOLARLY GRAPHICS</span>
+        <span className="media-badge">DEMO · SCHOLARLY GRAPHICS</span>
         <h2>Interactive Media Explorer</h2>
         <p className="subtitle">
           Visual and interactive research aids connecting literary structures, geography, and archaeological sites.

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     ai_chat_model: str = "gpt-4o-mini"
     ai_embedding_model: str = "text-embedding-3-small"
     ai_transcription_model: str = "whisper-1"
+    allow_production_demo: bool = False
     openai_compatible_base_url: str = "https://api.openai.com/v1"
     ollama_base_url: str = "http://localhost:11434"
     access_token_minutes: int = 15
@@ -46,6 +47,11 @@ class Settings(BaseSettings):
             errors.append("Production database must use PostgreSQL")
         if not self.public_base_url.startswith("https://"):
             errors.append("Production public URL must use HTTPS")
+        providers = (self.ai_chat_provider, self.ai_embedding_provider, self.ai_transcription_provider)
+        if "demo" in providers and not self.allow_production_demo:
+            errors.append("Demo AI providers require ALLOW_PRODUCTION_DEMO=true in production")
+        if "openai_compatible" in providers and not self.ai_api_key:
+            errors.append("Configured production AI provider requires an API key")
         if errors:
             raise ValueError("; ".join(errors))
         return self
