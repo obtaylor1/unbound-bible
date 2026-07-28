@@ -1,0 +1,52 @@
+.scripture-reader {
+  --reader-canvas: #070A12;
+  --reader-surface: #0E1422;
+  --reader-elevated: #161D2E;
+  --reader-text-primary: #F5F7FB;
+  --reader-scripture-text: #EDF0F7;
+  --reader-text-secondary: #AEB8CA;
+  --reader-border: #35405A;
+  --reader-violet: #6D3FE0;
+  --reader-violet-accent: #B49CFF;
+  --reader-teal: #2DD4BF;
+  --reader-gold: #F6C453;
+  --reader-danger: #FB7185;
+  color: var(--reader-text-primary);
+  background: var(--reader-canvas);
+}
+
+[data-reader-theme='light'] .scripture-reader {
+  --reader-canvas: #F7F5FC;
+  --reader-surface: #FFFFFF;
+  --reader-elevated: #F1EEF8;
+  --reader-text-primary: #171325;
+  --reader-scripture-text: #272233;
+  --reader-text-secondary: #565064;
+  --reader-border: #CBC4DA;
+  --reader-violet-accent: #5426BB;
+  --reader-teal: #086F65;
+  --reader-gold: #7A5200;
+}
+
+.scripture-reader button,
+.scripture-reader input,
+.scripture-reader select,
+.scripture-reader textarea {
+  font: inherit;
+}
+
+.scripture-reader :focus-visible {
+  outline: 3px solid var(--reader-teal);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scripture-reader *,
+  .scripture-reader *::before,
+  .scripture-reader *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
