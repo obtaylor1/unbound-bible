@@ -134,6 +134,19 @@ describe('ReaderHeader', () => {
     expect(username.overflow).toBe('visible')
     expect(username.clip).toBe('auto')
   })
+
+  it('anchors the mobile account menu within the viewport when actions wrap', () => {
+    const accountWrapper = cssDeclarations(
+      '.reader-header__actions .account-menu',
+    )
+    const accountPopover = cssDeclarations(
+      '.reader-header__actions .account-popover',
+    )
+
+    expect(accountWrapper['margin-inline-start']).toBe('auto')
+    expect(accountPopover.right).toBe('0')
+    expect(accountPopover.width).toBe('min(15rem, calc(100vw - 2rem))')
+  })
 })
 
 describe('PassageToolbar', () => {

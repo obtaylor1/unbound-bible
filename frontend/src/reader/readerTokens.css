@@ -387,6 +387,10 @@
     justify-content: flex-start;
   }
 
+  .reader-header__actions .account-menu {
+    margin-inline-start: auto;
+  }
+
   .reader-header__actions .nav-signin span:last-child {
     position: static;
     width: auto;
