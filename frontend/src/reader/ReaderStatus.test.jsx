@@ -1,7 +1,52 @@
+import { readFileSync } from 'node:fs'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import ReaderErrorBoundary from './ReaderErrorBoundary'
 import ReaderStatus from './ReaderStatus'
+
+const readerTokensCss = readFileSync(
+  'src/reader/readerTokens.css',
+  'utf8',
+)
+
+function cssBlock(selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return readerTokensCss.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+}
+
+function colorTokens(selector) {
+  return Object.fromEntries(
+    [...cssBlock(selector).matchAll(/(--[\w-]+):\s*(#[\dA-F]{6})/gi)]
+      .map(([, name, value]) => [name, value]),
+  )
+}
+
+function relativeLuminance(hexColor) {
+  const channels = hexColor
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16) / 255)
+    .map((channel) => (
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4
+    ))
+
+  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
+}
+
+function contrastRatio(firstColor, secondColor) {
+  const lighter = Math.max(
+    relativeLuminance(firstColor),
+    relativeLuminance(secondColor),
+  )
+  const darker = Math.min(
+    relativeLuminance(firstColor),
+    relativeLuminance(secondColor),
+  )
+
+  return (lighter + 0.05) / (darker + 0.05)
+}
 
 describe('ReaderStatus', () => {
   it('announces the passage while it is loading', () => {
@@ -64,6 +109,37 @@ describe('ReaderStatus', () => {
     const { container } = render(<ReaderStatus state={state} reference="John 3" />)
 
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('reader action colors', () => {
+  it('keeps the semantic primary foreground at WCAG AA contrast in both themes', () => {
+    const darkTokens = colorTokens('.scripture-reader')
+    const lightOverrides = colorTokens("[data-reader-theme='light'] .scripture-reader")
+
+    for (const themeTokens of [
+      darkTokens,
+      { ...darkTokens, ...lightOverrides },
+    ]) {
+      expect(themeTokens['--reader-on-primary']).toMatch(/^#[\dA-F]{6}$/i)
+      expect(
+        contrastRatio(
+          themeTokens['--reader-on-primary'],
+          themeTokens['--reader-primary'],
+        ),
+      ).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('uses the semantic primary foreground on reader action controls', () => {
+    const actionRule = cssBlock([
+      '.reader-status button',
+      '.reader-fatal-error button',
+      '.reader-fatal-error a',
+    ].join(',\n'))
+
+    expect(actionRule).toMatch(/color:\s*var\(--reader-on-primary\)/)
+    expect(actionRule).toMatch(/background:\s*var\(--reader-primary\)/)
   })
 })
 

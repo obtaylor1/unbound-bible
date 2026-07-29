@@ -7,6 +7,7 @@
   --reader-secondary: #AEB8CA;
   --reader-border: #35405A;
   --reader-primary: #6D3FE0;
+  --reader-on-primary: #FFFFFF;
   --reader-violet: #B49CFF;
   --reader-teal: #2DD4BF;
   --reader-gold: #F6C453;
@@ -99,7 +100,7 @@
   justify-content: center;
   box-sizing: border-box;
   padding: 0.65rem 1rem;
-  color: var(--reader-text);
+  color: var(--reader-on-primary);
   background: var(--reader-primary);
   border: 1px solid var(--reader-violet);
   border-radius: 0.65rem;
