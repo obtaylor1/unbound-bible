@@ -38,7 +38,10 @@ const PAGE_TO_HASH = {
   forum: '#community'
 }
 
-export const pageFromHash = (hash = '') => HASH_TO_PAGE[hash.replace(/^#/, '').toLowerCase()] ?? 'home'
+export const pageFromHash = (hash = '') => {
+  const route = hash.replace(/^#/, '').split('?')[0].toLowerCase()
+  return HASH_TO_PAGE[route] ?? 'home'
+}
 export const hashForPage = (page) => PAGE_TO_HASH[page] ?? '#home'
 export const shareIdFromPath = (path = '') => /^\/share\/([A-Za-z0-9_-]+)\/?$/.exec(path)?.[1] ?? null
 

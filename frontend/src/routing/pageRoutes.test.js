@@ -10,6 +10,11 @@ describe('page routes', () => {
     expect(pageFromHash('#not-a-page')).toBe('home')
   })
 
+  it('ignores query parameters when resolving a page', () => {
+    expect(pageFromHash('#scriptures?book=Genesis&chapter=2')).toBe('apocrypha')
+    expect(pageFromHash('#apocrypha?translation=KJV')).toBe('apocrypha')
+  })
+
   it('creates stable canonical hashes', () => {
     expect(hashForPage('chat')).toBe('#aistudy')
     expect(hashForPage('textual')).toBe('#compare')
