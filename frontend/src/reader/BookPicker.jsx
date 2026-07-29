@@ -63,7 +63,6 @@ export default function BookPicker({
   const [chapterState, setChapterState] = useState('idle')
 
   const closePicker = () => {
-    openRef.current = false
     requestSequence.current += 1
     setQuery('')
     setSelectedBook(null)

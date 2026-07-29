@@ -34,7 +34,7 @@ function isHiddenByClosedDetails(element) {
     const visibleSummary = [...details.children].find(
       (child) => child.tagName === 'SUMMARY',
     )
-    if (element !== visibleSummary) return true
+    if (element !== visibleSummary && !visibleSummary?.contains(element)) return true
     details = details.parentElement?.closest('details:not([open])')
   }
 

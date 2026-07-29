@@ -101,6 +101,16 @@ function DialogFocusHarness({
         <button>Hidden details control</button>
       </details>
     )
+  } else if (initialKind === 'closed-summary-descendant') {
+    initialControl = (
+      <details>
+        <summary>
+          Visible details summary
+          <button ref={initialRef}>Summary action</button>
+        </summary>
+        <button>Hidden details control</button>
+      </details>
+    )
   }
 
   return (
@@ -434,6 +444,17 @@ describe('BookPicker', () => {
     expect(screen.getByText('Visible details summary')).toHaveFocus()
   })
 
+  it('allows a focusable descendant inside the visible summary of closed details', () => {
+    render(
+      <DialogFocusHarness
+        initialKind="closed-summary-descendant"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Summary action' })).toHaveFocus()
+  })
+
   it.each(['negative-tabindex', 'closed-details'])(
     'excludes %s controls from the forward wrap list',
     (initialKind) => {
@@ -541,6 +562,32 @@ describe('BookPicker', () => {
     await act(async () => request.reject(new Error('late failure')))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Genesis' })).toBeInTheDocument()
+  })
+
+  it('can start a successful load after a no-op close keeps the picker committed open', async () => {
+    const user = userEvent.setup()
+    const firstRequest = deferred()
+    const secondRequest = deferred()
+    const loadChapters = vi.fn()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise)
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={loadChapters}
+        onClose={() => {}}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Close book picker' }))
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await act(async () => secondRequest.resolve([4]))
+
+    expect(screen.getByRole('button', { name: 'Chapter 4' })).toBeInTheDocument()
+    expect(loadChapters).toHaveBeenCalledTimes(2)
   })
 
   it('keeps an old session response out of a reopened picker', async () => {
