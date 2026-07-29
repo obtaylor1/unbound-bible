@@ -494,7 +494,6 @@ function InlinePanel({
     >
       <h3 id={headingId}>{tool.label}</h3>
       <p
-        key={`${tool.id}-${detailState}-${announcementRevision}`}
         className={hasContent && detailState === 'ready'
           ? 'study-tools__visually-hidden'
           : 'study-tools__empty'}
@@ -502,7 +501,9 @@ function InlinePanel({
         aria-live="polite"
         aria-atomic="true"
       >
-        {status}
+        <span key={`${tool.id}-${detailState}-${announcementRevision}`}>
+          {status}
+        </span>
       </p>
       {detailState === 'ready' && hasContent ? content : null}
     </section>

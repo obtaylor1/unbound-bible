@@ -411,6 +411,7 @@ describe('StudyTools', () => {
       />,
     )
     const firstStatus = screen.getByRole('status')
+    const firstAnnouncement = firstStatus.firstElementChild
     expect(firstStatus).toHaveTextContent('Context updated — 1 result')
 
     rerender(
@@ -423,7 +424,8 @@ describe('StudyTools', () => {
       />,
     )
     const secondStatus = screen.getByRole('status')
-    expect(secondStatus).not.toBe(firstStatus)
+    expect(secondStatus).toBe(firstStatus)
+    expect(secondStatus.firstElementChild).not.toBe(firstAnnouncement)
     expect(secondStatus).toHaveTextContent('Context updated — 1 result')
     expect(screen.getByText('Second verified setting.')).toBeInTheDocument()
     expect(screen.queryByText('First verified setting.')).not.toBeInTheDocument()
@@ -444,6 +446,7 @@ describe('StudyTools', () => {
       />,
     )
     const firstStatus = screen.getByRole('status')
+    const firstAnnouncement = firstStatus.firstElementChild
 
     mutableDetails.historical_context = 'Refreshed request result.'
     rerender(
@@ -459,7 +462,8 @@ describe('StudyTools', () => {
     )
 
     const refreshedStatus = screen.getByRole('status')
-    expect(refreshedStatus).not.toBe(firstStatus)
+    expect(refreshedStatus).toBe(firstStatus)
+    expect(refreshedStatus.firstElementChild).not.toBe(firstAnnouncement)
     expect(refreshedStatus).toHaveTextContent('Context updated — 1 result')
     expect(screen.getByText('Refreshed request result.')).toBeInTheDocument()
     expect(screen.queryByText('Initial request result.')).not.toBeInTheDocument()
