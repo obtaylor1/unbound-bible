@@ -9,9 +9,27 @@ const readerTokensCss = readFileSync(
   'utf8',
 )
 
+function cssBlocks(selector) {
+  return [...readerTokensCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selectorList]) => (
+    selectorList
+      .split(',')
+      .map((item) => item.trim())
+      .includes(selector)
+    ))
+    .map(([, , declarations]) => declarations)
+}
+
 function cssBlock(selector) {
-  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return readerTokensCss.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+  return cssBlocks(selector)[0] ?? ''
+}
+
+function cssDeclarations(selector) {
+  return Object.fromEntries(
+    cssBlocks(selector)
+      .flatMap((block) => [...block.matchAll(/^\s*([\w-]+):\s*([^;]+);/gm)])
+      .map(([, property, value]) => [property, value.trim()]),
+  )
 }
 
 function colorTokens(selector) {
@@ -78,6 +96,10 @@ describe('ReaderStatus', () => {
     const section = screen.getByRole('region', { name: /no text available/i })
     expect(section).toHaveTextContent('No text is available for Obadiah 2')
     expect(section).toHaveTextContent(/choose another book or translation/i)
+    expect(screen.getByRole('heading', {
+      level: 1,
+      name: 'No text available',
+    })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Choose another book' }))
     expect(onOpenBooks).toHaveBeenCalledOnce()
@@ -98,6 +120,10 @@ describe('ReaderStatus', () => {
     const alert = screen.getByRole('alert', { name: /could not open Psalm 23/i })
     expect(alert).toHaveTextContent('Psalm 23')
     expect(alert).toHaveTextContent(/reader’s place is saved/i)
+    expect(screen.getByRole('heading', {
+      level: 1,
+      name: 'Could not open Psalm 23',
+    })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose another book' }))
@@ -109,6 +135,31 @@ describe('ReaderStatus', () => {
     const { container } = render(<ReaderStatus state={state} reference="John 3" />)
 
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it('gives simultaneous recovery states unique accessible heading references', () => {
+    render(
+      <>
+        <ReaderStatus state="empty" reference="Obadiah 2" />
+        <ReaderStatus state="empty" reference="Obadiah 3" />
+        <ReaderStatus state="error" reference="Psalm 23" />
+        <ReaderStatus state="error" reference="Psalm 24" />
+        <ReaderStatus state="offline" reference="John 3" />
+        <ReaderStatus state="offline" reference="John 4" />
+      </>,
+    )
+
+    const surfaces = [
+      ...screen.getAllByRole('region', { name: 'No text available' }),
+      ...screen.getAllByRole('alert'),
+      ...screen.getAllByRole('status', { name: 'You’re offline' }),
+    ]
+    const headingIds = surfaces.map((surface) => surface.getAttribute('aria-labelledby'))
+
+    expect(new Set(headingIds)).toHaveProperty('size', surfaces.length)
+    headingIds.forEach((headingId) => {
+      expect(document.getElementById(headingId)).toBeInstanceOf(HTMLHeadingElement)
+    })
   })
 })
 
@@ -132,19 +183,69 @@ describe('reader action colors', () => {
   })
 
   it('uses the semantic primary foreground on reader action controls', () => {
-    const actionRule = cssBlock([
+    for (const selector of [
       '.reader-status button',
       '.reader-fatal-error button',
-      '.reader-fatal-error a',
-    ].join(',\n'))
+    ]) {
+      const declarations = cssDeclarations(selector)
+      expect(declarations.color).toBe('var(--reader-on-primary)')
+      expect(declarations.background).toBe('var(--reader-primary)')
+    }
+  })
 
-    expect(actionRule).toMatch(/color:\s*var\(--reader-on-primary\)/)
-    expect(actionRule).toMatch(/background:\s*var\(--reader-primary\)/)
+  it('keeps secondary actions visibly bounded and readable in both themes', () => {
+    const darkTokens = colorTokens('.scripture-reader')
+    const lightOverrides = colorTokens("[data-reader-theme='light'] .scripture-reader")
+
+    for (const themeTokens of [
+      darkTokens,
+      { ...darkTokens, ...lightOverrides },
+    ]) {
+      for (const token of [
+        '--reader-secondary-control-border',
+        '--reader-secondary-control-background',
+        '--reader-on-secondary-control',
+      ]) {
+        expect(themeTokens[token]).toBeDefined()
+      }
+      expect(
+        contrastRatio(
+          themeTokens['--reader-secondary-control-border'],
+          themeTokens['--reader-surface'],
+        ),
+      ).toBeGreaterThanOrEqual(3)
+      expect(
+        contrastRatio(
+          themeTokens['--reader-secondary-control-border'],
+          themeTokens['--reader-secondary-control-background'],
+        ),
+      ).toBeGreaterThanOrEqual(3)
+      expect(
+        contrastRatio(
+          themeTokens['--reader-on-secondary-control'],
+          themeTokens['--reader-secondary-control-background'],
+        ),
+      ).toBeGreaterThanOrEqual(4.5)
+    }
+
+    for (const selector of [
+      '.reader-status__actions button + button',
+      '.reader-fatal-error a',
+    ]) {
+      const declarations = cssDeclarations(selector)
+      expect(declarations.color).toBe('var(--reader-on-secondary-control)')
+      expect(declarations.background).toBe('var(--reader-secondary-control-background)')
+      expect(declarations['border-color']).toBe('var(--reader-secondary-control-border)')
+    }
   })
 })
 
 function BrokenReader() {
   throw new Error('Reader render failed')
+}
+
+function NullThrowingReader() {
+  throw null
 }
 
 describe('ReaderErrorBoundary', () => {
@@ -177,6 +278,43 @@ describe('ReaderErrorBoundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reload the reader' }))
     expect(onReload).toHaveBeenCalledOnce()
     expect(screen.getByRole('link', { name: 'Return home' })).toHaveAttribute('href', '#home')
+  })
+
+  it('shows its fallback when a descendant throws a falsy value', () => {
+    render(
+      <ReaderErrorBoundary resetKey="John 3">
+        <NullThrowingReader />
+      </ReaderErrorBoundary>,
+      { onCaughtError: () => {} },
+    )
+
+    expect(screen.getByRole('alert', {
+      name: 'The Scripture Reader could not open',
+    })).toBeInTheDocument()
+  })
+
+  it('gives simultaneous boundary fallbacks unique accessible heading references', () => {
+    render(
+      <>
+        <ReaderErrorBoundary resetKey="John 3">
+          <BrokenReader />
+        </ReaderErrorBoundary>
+        <ReaderErrorBoundary resetKey="Psalm 23">
+          <BrokenReader />
+        </ReaderErrorBoundary>
+      </>,
+      { onCaughtError: () => {} },
+    )
+
+    const alerts = screen.getAllByRole('alert', {
+      name: 'The Scripture Reader could not open',
+    })
+    const headingIds = alerts.map((alert) => alert.getAttribute('aria-labelledby'))
+
+    expect(new Set(headingIds)).toHaveProperty('size', alerts.length)
+    headingIds.forEach((headingId) => {
+      expect(document.getElementById(headingId)).toBeInstanceOf(HTMLHeadingElement)
+    })
   })
 
   it('recovers when the passage reset key changes', () => {

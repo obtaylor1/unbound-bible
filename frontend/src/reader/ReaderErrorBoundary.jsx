@@ -1,27 +1,27 @@
-import { Component } from 'react'
+import { Component, useId } from 'react'
 
 function reloadReader() {
   window.location.reload()
 }
 
-export default class ReaderErrorBoundary extends Component {
-  state = { error: null }
+class ReaderErrorBoundaryClass extends Component {
+  state = { hasError: false }
 
-  static getDerivedStateFromError(error) {
-    return { error }
+  static getDerivedStateFromError() {
+    return { hasError: true }
   }
 
   componentDidUpdate(previousProps) {
     if (
-      this.state.error
+      this.state.hasError
       && previousProps.resetKey !== this.props.resetKey
     ) {
-      this.setState({ error: null })
+      this.setState({ hasError: false })
     }
   }
 
   render() {
-    if (!this.state.error) {
+    if (!this.state.hasError) {
       return this.props.children
     }
 
@@ -31,10 +31,10 @@ export default class ReaderErrorBoundary extends Component {
       <section
         className="scripture-reader reader-fatal-error"
         role="alert"
-        aria-labelledby="reader-fatal-error-heading"
+        aria-labelledby={this.props.headingId}
       >
         <p className="reader-fatal-error__eyebrow">Reader unavailable</p>
-        <h1 id="reader-fatal-error-heading">
+        <h1 id={this.props.headingId}>
           The Scripture Reader could not open
         </h1>
         <p>
@@ -50,4 +50,10 @@ export default class ReaderErrorBoundary extends Component {
       </section>
     )
   }
+}
+
+export default function ReaderErrorBoundary(props) {
+  const headingId = useId()
+
+  return <ReaderErrorBoundaryClass {...props} headingId={headingId} />
 }

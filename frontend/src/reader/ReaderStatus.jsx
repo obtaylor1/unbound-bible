@@ -1,9 +1,13 @@
+import { useId } from 'react'
+
 export default function ReaderStatus({
   state,
   reference,
   onRetry,
   onOpenBooks,
 }) {
+  const headingId = useId()
+
   if (state === 'loading') {
     return (
       <p className="reader-status reader-status--loading" role="status">
@@ -16,9 +20,9 @@ export default function ReaderStatus({
     return (
       <section
         className="reader-status reader-status--empty"
-        aria-labelledby="reader-empty-heading"
+        aria-labelledby={headingId}
       >
-        <h2 id="reader-empty-heading">No text available</h2>
+        <h1 id={headingId}>No text available</h1>
         <p>No text is available for {reference}.</p>
         <p>Choose another book or translation to continue reading.</p>
         <button type="button" onClick={onOpenBooks}>
@@ -33,9 +37,9 @@ export default function ReaderStatus({
       <section
         className="reader-status reader-status--offline"
         role="status"
-        aria-labelledby="reader-offline-heading"
+        aria-labelledby={headingId}
       >
-        <h2 id="reader-offline-heading">You’re offline</h2>
+        <h2 id={headingId}>You’re offline</h2>
         <p>
           Already-loaded Scripture remains available, but online study tools may
           not work until your connection returns.
@@ -49,9 +53,9 @@ export default function ReaderStatus({
       <section
         className="reader-status reader-status--error"
         role="alert"
-        aria-labelledby="reader-error-heading"
+        aria-labelledby={headingId}
       >
-        <h2 id="reader-error-heading">Could not open {reference}</h2>
+        <h1 id={headingId}>Could not open {reference}</h1>
         <p>
           We couldn’t load this passage. The reader’s place is saved, so it is
           safe to try again.

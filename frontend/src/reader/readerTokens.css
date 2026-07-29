@@ -8,6 +8,9 @@
   --reader-border: #35405A;
   --reader-primary: #6D3FE0;
   --reader-on-primary: #FFFFFF;
+  --reader-secondary-control-background: #161D2E;
+  --reader-secondary-control-border: #AEB8CA;
+  --reader-on-secondary-control: #F5F7FB;
   --reader-violet: #B49CFF;
   --reader-teal: #2DD4BF;
   --reader-gold: #F6C453;
@@ -25,6 +28,9 @@
   --reader-scripture: #272233;
   --reader-secondary: #565064;
   --reader-border: #CBC4DA;
+  --reader-secondary-control-background: #F1EEF8;
+  --reader-secondary-control-border: #565064;
+  --reader-on-secondary-control: #171325;
   --reader-violet: #5426BB;
   --reader-teal: #086F65;
   --reader-gold: #7A5200;
@@ -55,6 +61,7 @@
   border-radius: 1rem;
 }
 
+.reader-status h1,
 .reader-status h2,
 .reader-fatal-error h1 {
   margin: 0;
@@ -114,9 +121,9 @@
 
 .reader-status__actions button + button,
 .reader-fatal-error a {
-  color: var(--reader-text);
-  background: var(--reader-elevated);
-  border-color: var(--reader-border);
+  color: var(--reader-on-secondary-control);
+  background: var(--reader-secondary-control-background);
+  border-color: var(--reader-secondary-control-border);
 }
 
 .reader-status button:hover,
