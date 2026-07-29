@@ -426,7 +426,42 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
     await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
     expect(await screen.findByRole('button', { name: 'Genesis' })).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Chapter navigation unavailable' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Try chapter navigation again' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
+  })
+
+  it('preserves the passage while retrying its failed canon catalog', async () => {
+    const user = userEvent.setup()
+    const retryBooks = deferred()
+    getBooks
+      .mockRejectedValueOnce(new Error('books down'))
+      .mockReturnValueOnce(retryBooks.promise)
+    renderReader()
+
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    expect(getChapter).toHaveBeenCalledTimes(1)
+    expect(getBookChapters).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
+    const picker = screen.getByRole('dialog', { name: 'Choose a book and chapter' })
+    expect(within(picker).getByRole('status')).toHaveTextContent(/loading bible books/i)
+    await user.click(screen.getByRole('button', { name: 'Close book picker' }))
+
+    expect(screen.getByText('In the beginning.')).toBeInTheDocument()
+    expect(getChapter).toHaveBeenCalledTimes(1)
+    expect(getBookChapters).toHaveBeenCalledTimes(1)
+
+    retryBooks.resolve(['Tobit'])
+    await waitFor(() => expect(window.location.hash).toContain('book=Tobit'))
+    await waitFor(() => expect(getChapter).toHaveBeenCalledTimes(2))
+    expect(getChapter).toHaveBeenLastCalledWith(
+      expect.objectContaining({ book: 'Tobit', chapter: 1 }),
+      expect.any(AbortSignal),
+    )
+    expect(getBookChapters).toHaveBeenCalledTimes(2)
+    expect(getBookChapters).toHaveBeenLastCalledWith('Tobit', expect.any(AbortSignal))
   })
 
   it('owns verse detail requests by reference and increments revisions', async () => {

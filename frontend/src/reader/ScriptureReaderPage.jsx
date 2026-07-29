@@ -105,7 +105,7 @@ export default function ScriptureReaderPage({
     const controller = new AbortController()
     const generation = ++booksGeneration.current
     setBooks([])
-    setBooksCanonKey(null)
+    setBooksCanonKey((current) => current === route.canon ? current : null)
     setBooksStatus('loading')
     getBooks(route.canon, controller.signal)
       .then((nextBooks) => {
@@ -127,16 +127,19 @@ export default function ScriptureReaderPage({
     }
   }, [route.canon, booksRetryRevision])
 
+  const catalogOwnedByRoute = booksCanonKey === route.canon
   const currentBooks = useMemo(
-    () => booksCanonKey === route.canon ? books : [],
-    [books, booksCanonKey, route.canon],
+    () => catalogOwnedByRoute ? books : [],
+    [books, catalogOwnedByRoute],
   )
-  const currentBooksStatus = booksCanonKey === route.canon ? booksStatus : 'loading'
+  const currentBooksStatus = catalogOwnedByRoute ? booksStatus : 'loading'
   const routeBookValid = currentBooks.some(
     (book) => book.toLocaleLowerCase() === route.book.toLocaleLowerCase(),
   )
   const catalogReady = currentBooksStatus === 'ready'
-  const routeLoadAllowed = currentBooksStatus === 'error' || (
+  const routeLoadAllowed = (
+    catalogOwnedByRoute && currentBooksStatus === 'loading'
+  ) || currentBooksStatus === 'error' || (
     catalogReady && routeBookValid
   )
 
