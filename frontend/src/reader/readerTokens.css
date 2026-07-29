@@ -20,6 +20,26 @@
   background: var(--reader-canvas);
 }
 
+.scripture-reader-shell {
+  min-width: 0;
+  min-height: 100dvh;
+  background: var(--reader-canvas);
+}
+
+.scripture-reader-shell__main {
+  min-height: calc(100dvh - 10rem);
+  box-sizing: border-box;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.scripture-reader-shell__main .scripture-pane {
+  padding-top: clamp(1rem, 5vw, 3rem);
+}
+
+.reader-bottom-navigation {
+  display: none;
+}
+
 [data-reader-theme='light'] .scripture-reader {
   --reader-canvas: #F7F5FC;
   --reader-surface: #FFFFFF;
@@ -1027,6 +1047,73 @@ button.scripture-pane__verse:focus-visible {
 }
 
 @media (max-width: 767px) {
+  .scripture-reader-shell__main {
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding-bottom: calc(5.25rem + env(safe-area-inset-bottom));
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .reader-bottom-navigation {
+    position: fixed;
+    z-index: 40;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    box-sizing: border-box;
+    padding:
+      0
+      max(0.25rem, env(safe-area-inset-right))
+      env(safe-area-inset-bottom)
+      max(0.25rem, env(safe-area-inset-left));
+    background: var(--reader-surface);
+    border-top: 1px solid var(--reader-border);
+    box-shadow: 0 -0.35rem 1rem color-mix(in srgb, var(--reader-canvas) 45%, transparent);
+  }
+
+  .reader-bottom-navigation button {
+    display: grid;
+    min-width: 0;
+    min-height: 52px;
+    place-content: center;
+    gap: 0.1rem;
+    padding: 0.3rem 0.1rem;
+    overflow: hidden;
+    color: var(--reader-secondary);
+    background: transparent;
+    border: 0;
+    border-top: 3px solid transparent;
+    border-radius: 0;
+    font-size: clamp(0.64rem, 3vw, 0.78rem);
+    font-weight: 700;
+    line-height: 1.1;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .reader-bottom-navigation button[aria-current='page'] {
+    color: var(--reader-text);
+    background: var(--reader-elevated);
+    border-top-color: var(--reader-violet);
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.18em;
+  }
+
+  .reader-bottom-navigation button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .reader-bottom-navigation__mark {
+    color: var(--reader-violet);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+
   .reader-header {
     min-height: 56px;
     align-items: flex-start;

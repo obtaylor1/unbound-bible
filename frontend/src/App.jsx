@@ -3,9 +3,11 @@ import './App.css'
 import Navigation from './components/Navigation'
 import HomePage from './components/HomePage'
 import { hashForPage, pageFromHash, titleForPage } from './routing/pageRoutes'
+import ReaderErrorBoundary from './reader/ReaderErrorBoundary'
+import { ReaderPreferencesProvider } from './reader/ReaderPreferences'
 
 const TextualComparisonWorkspace = lazy(() => import('./components/TextualComparisonWorkspace'))
-const AncientTexts = lazy(() => import('./components/AncientTexts'))
+const ScriptureReaderPage = lazy(() => import('./reader/ScriptureReaderPage'))
 const SermonAnalyzer = lazy(() => import('./components/SermonAnalyzer'))
 const InteractiveMap = lazy(() => import('./components/InteractiveMap'))
 const ForumPage = lazy(() => import('./components/ForumPage'))
@@ -19,30 +21,14 @@ const Factbook = lazy(() => import('./components/Factbook'))
 
 function App() {
   const [currentPage, setCurrentPage] = useState(() => pageFromHash(window.location.hash))
-  const [availableBooks, setAvailableBooks] = useState(['Genesis']) // Default fallback
-  const [canonicalFilter, setCanonicalFilter] = useState('ETHIO81')
+  const [currentHash, setCurrentHash] = useState(() => window.location.hash)
   const mainRef = useRef(null)
-  
-  // Fetch available books from the API
-  useEffect(() => {
-    const fetchBooks = async () => {
-      try {
-        const response = await fetch(`/api/v1/books?canon=${canonicalFilter}`)
-        if (response.ok) {
-          const data = await response.json()
-          setAvailableBooks(data.books || ['Genesis'])
-        }
-      } catch (error) {
-        console.error('Failed to fetch books:', error)
-        // Keep the default fallback
-      }
-    }
-    
-    fetchBooks()
-  }, [canonicalFilter])
 
   useEffect(() => {
-    const handleHashChange = () => setCurrentPage(pageFromHash(window.location.hash))
+    const handleHashChange = () => {
+      setCurrentHash(window.location.hash)
+      setCurrentPage(pageFromHash(window.location.hash))
+    }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
@@ -57,10 +43,8 @@ function App() {
   const handlePageChange = (pageId) => {
     setCurrentPage(pageId)
     const nextHash = hashForPage(pageId)
+    setCurrentHash(nextHash)
     if (window.location.hash !== nextHash) window.location.hash = nextHash
-    if (pageId === 'apocrypha') {
-      setCanonicalFilter('BROADER')
-    }
   }
 
   const renderCurrentPage = () => {
@@ -71,12 +55,13 @@ function App() {
       case 'textual':
         return <TextualComparisonWorkspace />
       case 'apocrypha':
-        return <AncientTexts
-          canonicalFilter={canonicalFilter} 
-          setCanonicalFilter={setCanonicalFilter}
-          availableBooks={availableBooks}
-          onPageChange={handlePageChange}
-        />
+        return (
+          <ReaderErrorBoundary resetKey={currentHash}>
+            <ReaderPreferencesProvider>
+              <ScriptureReaderPage onPageChange={handlePageChange} />
+            </ReaderPreferencesProvider>
+          </ReaderErrorBoundary>
+        )
       
       case 'canon-compare':
         return (
@@ -167,11 +152,21 @@ function App() {
     }
   }
 
+  if (currentPage === 'apocrypha') {
+    return (
+      <div className="app">
+        <Suspense fallback={<div className="page-loading" role="status">Opening Scripture reader…</div>}>
+          {renderCurrentPage()}
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      {currentPage !== 'apocrypha' && <Navigation currentPage={currentPage} onPageChange={handlePageChange} />}
-      <main ref={mainRef} id="main-content" tabIndex="-1" aria-label={titleForPage(currentPage)} className={currentPage === 'apocrypha' ? "app-main full-screen" : "app-main"}>
+      <Navigation currentPage={currentPage} onPageChange={handlePageChange} />
+      <main ref={mainRef} id="main-content" tabIndex="-1" aria-label={titleForPage(currentPage)} className="app-main">
         <Suspense fallback={<div className="page-loading" role="status">Opening study tools…</div>}>
           {renderCurrentPage()}
         </Suspense>
