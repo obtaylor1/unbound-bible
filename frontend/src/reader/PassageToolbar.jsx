@@ -13,12 +13,24 @@ const FONT_SIZE_NAMES = {
 
 function translationDetails(item) {
   if (typeof item === 'string') {
-    return { code: item, name: item }
+    const code = item.trim()
+    return code ? { code, name: code } : null
   }
 
+  if (!item || typeof item !== 'object') return null
+
+  const code = typeof item.code === 'string' ? item.code.trim() : ''
+  if (!code) return null
+
+  const suppliedName = typeof item.name === 'string'
+    ? item.name
+    : typeof item.label === 'string'
+      ? item.label
+      : ''
+
   return {
-    code: item.code,
-    name: item.name || item.label || item.code,
+    code,
+    name: suppliedName.trim() || code,
   }
 }
 
@@ -36,6 +48,23 @@ export default function PassageToolbar({
   const { theme, fontSize, setTheme, setFontSize } = useReaderPreferences()
   const textSizeName = FONT_SIZE_NAMES[fontSize]
   const themeAction = theme === 'dark' ? 'Use light mode' : 'Use dark mode'
+  const seenTranslationCodes = new Set()
+  const usableTranslations = translations
+    .map(translationDetails)
+    .filter((details) => {
+      if (!details || seenTranslationCodes.has(details.code)) return false
+      seenTranslationCodes.add(details.code)
+      return true
+    })
+  const selectedTranslation = usableTranslations.some(
+    ({ code }) => code === translation,
+  )
+    ? translation
+    : ''
+  const canChangeTranslation = (
+    usableTranslations.length > 0
+    && typeof onTranslationChange === 'function'
+  )
 
   function cycleTextSize() {
     const currentIndex = FONT_SIZES.indexOf(fontSize)
@@ -44,9 +73,8 @@ export default function PassageToolbar({
   }
 
   return (
-    <div
+    <section
       className="passage-toolbar"
-      role="toolbar"
       aria-label="Passage controls"
       data-text-size={fontSize}
     >
@@ -77,17 +105,22 @@ export default function PassageToolbar({
           <span>Change translation</span>
           <select
             id={translationId}
-            value={translation}
-            onChange={(event) => onTranslationChange(event.target.value)}
+            value={selectedTranslation}
+            disabled={!canChangeTranslation}
+            onChange={(event) => {
+              if (typeof onTranslationChange === 'function') {
+                onTranslationChange(event.target.value)
+              }
+            }}
           >
-            {translations.map((item) => {
-              const details = translationDetails(item)
-              return (
-                <option key={details.code} value={details.code}>
-                  {details.name}
-                </option>
-              )
-            })}
+            {usableTranslations.length === 0 && (
+              <option value="">No translations available</option>
+            )}
+            {usableTranslations.map((details) => (
+              <option key={details.code} value={details.code}>
+                {details.name}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -110,6 +143,6 @@ export default function PassageToolbar({
           {themeAction}
         </button>
       </div>
-    </div>
+    </section>
   )
 }

@@ -362,6 +362,61 @@
   border-color: var(--reader-border);
 }
 
+.scripture-reader .auth-dialog label {
+  color: var(--reader-text);
+}
+
+.scripture-reader .auth-dialog input {
+  min-height: 48px;
+  color: var(--reader-text);
+  caret-color: var(--reader-text);
+  background: var(--reader-surface);
+  border-color: var(--reader-secondary-control-border);
+}
+
+.scripture-reader .auth-dialog input::placeholder {
+  color: var(--reader-secondary);
+  opacity: 1;
+}
+
+.scripture-reader .auth-dialog input:focus {
+  border-color: var(--reader-teal);
+  outline: 3px solid var(--reader-teal);
+  outline-offset: 3px;
+}
+
+.scripture-reader .auth-close {
+  display: grid;
+  width: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  place-items: center;
+  color: var(--reader-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+}
+
+.scripture-reader .auth-switch {
+  min-height: 48px;
+  padding: 0.65rem 0.75rem;
+  color: var(--reader-violet);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+}
+
+.scripture-reader .auth-error {
+  color: var(--reader-danger);
+}
+
+.scripture-reader .auth-dialog .primary-button {
+  min-height: 48px;
+  color: var(--reader-on-primary);
+  background: var(--reader-primary);
+  border: 1px solid var(--reader-primary);
+}
+
 @media (max-width: 767px) {
   .reader-header {
     min-height: 56px;

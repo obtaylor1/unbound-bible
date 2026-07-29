@@ -1,28 +1,95 @@
 import { readFileSync } from 'node:fs'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext } from '../auth/authContext'
 import { ReaderPreferencesProvider } from './ReaderPreferences'
 import PassageToolbar from './PassageToolbar'
 import ReaderHeader from './ReaderHeader'
 
 const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
+const MOBILE_READER_MEDIA = '(max-width: 767px)'
 
-function cssDeclarations(selector) {
-  return Object.fromEntries(
-    [...readerTokensCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-      .filter(([, selectorList]) => (
-        selectorList
+const readerStyle = document.createElement('style')
+readerStyle.textContent = readerTokensCss
+document.head.append(readerStyle)
+
+function cssDeclarations(selector, mediaCondition) {
+  const matchingRules = []
+
+  function visitRules(rules, mediaStack = []) {
+    for (const rule of rules) {
+      if ('selectorText' in rule) {
+        const selectors = rule.selectorText
           .split(',')
           .map((item) => item.trim())
-          .includes(selector)
-      ))
-      .flatMap(([, , declarations]) => (
-        [...declarations.matchAll(/^\s*([\w-]+):\s*([^;]+);/gm)]
-      ))
-      .map(([, property, value]) => [property, value.trim()]),
+
+        if (
+          selectors.includes(selector)
+          && (!mediaCondition || mediaStack.includes(mediaCondition))
+        ) {
+          matchingRules.push(rule)
+        }
+      }
+
+      if ('cssRules' in rule) {
+        const nextMediaStack = 'conditionText' in rule
+          ? [...mediaStack, rule.conditionText]
+          : mediaStack
+        visitRules(rule.cssRules, nextMediaStack)
+      }
+    }
+  }
+
+  visitRules(readerStyle.sheet.cssRules)
+
+  return Object.fromEntries(
+    matchingRules.flatMap((rule) => (
+      Array.from({ length: rule.style.length }, (_, index) => {
+        const property = rule.style[index]
+        return [property, rule.style.getPropertyValue(property).trim()]
+      })
+    )),
   )
 }
+
+function relativeLuminance(hexColor) {
+  const channels = hexColor
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16) / 255)
+    .map((channel) => (
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4
+    ))
+
+  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
+}
+
+function contrastRatio(firstColor, secondColor) {
+  const first = relativeLuminance(firstColor)
+  const second = relativeLuminance(secondColor)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
+
+function themeTokens(theme) {
+  const tokens = cssDeclarations('.scripture-reader')
+  if (theme === 'light') {
+    Object.assign(
+      tokens,
+      cssDeclarations("[data-reader-theme='light'] .scripture-reader"),
+    )
+  }
+  return tokens
+}
+
+function resolveToken(value, tokens) {
+  const tokenName = value.match(/^var\((--[\w-]+)\)$/)?.[1]
+  return tokenName ? tokens[tokenName] : value
+}
+
+afterAll(() => readerStyle.remove())
 
 function renderHeader(authValue = { user: null, status: 'anonymous' }, props = {}) {
   const callbacks = {
@@ -96,6 +163,49 @@ describe('ReaderHeader', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('focuses the sign-in form, closes with Escape, and restores the trigger', async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    const trigger = screen.getByRole('button', { name: 'Sign in' })
+
+    await user.click(trigger)
+    expect(screen.getByRole('textbox', { name: 'Email' })).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('wraps forward and backward Tab focus within the authentication dialog', async () => {
+    const user = userEvent.setup()
+    renderHeader()
+
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    const close = screen.getByRole('button', { name: 'Close' })
+    const switchMode = screen.getByRole('button', {
+      name: 'New here? Create an account',
+    })
+
+    switchMode.focus()
+    await user.tab()
+    expect(close).toHaveFocus()
+
+    close.focus()
+    await user.tab({ shift: true })
+    expect(switchMode).toHaveFocus()
+  })
+
+  it('restores focus when the dialog close control is used', async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    const trigger = screen.getByRole('button', { name: 'Sign in' })
+
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    expect(trigger).toHaveFocus()
+  })
+
   it('uses the existing account menu for signed-in readers', () => {
     renderHeader({
       user: { username: 'Miriam', email: 'miriam@example.com' },
@@ -113,16 +223,23 @@ describe('ReaderHeader', () => {
   })
 
   it('keeps mobile actions wrapping so the account popover is not clipped', () => {
-    const mobileActions = cssDeclarations('.reader-header__actions')
+    const mobileActions = cssDeclarations(
+      '.reader-header__actions',
+      MOBILE_READER_MEDIA,
+    )
 
     expect(mobileActions['flex-wrap']).toBe('wrap')
     expect(mobileActions['overflow-x']).toBeUndefined()
   })
 
   it('overrides narrow navigation styles for the reader account trigger and username', () => {
-    const accountTrigger = cssDeclarations('.reader-header__actions .nav-signin')
+    const accountTrigger = cssDeclarations(
+      '.reader-header__actions .nav-signin',
+      MOBILE_READER_MEDIA,
+    )
     const username = cssDeclarations(
       '.reader-header__actions .nav-signin span:last-child',
+      MOBILE_READER_MEDIA,
     )
 
     expect(accountTrigger['min-width']).toBe('48px')
@@ -138,6 +255,7 @@ describe('ReaderHeader', () => {
   it('anchors the mobile account menu within the viewport when actions wrap', () => {
     const accountWrapper = cssDeclarations(
       '.reader-header__actions .account-menu',
+      MOBILE_READER_MEDIA,
     )
     const accountPopover = cssDeclarations(
       '.reader-header__actions .account-popover',
@@ -147,14 +265,59 @@ describe('ReaderHeader', () => {
     expect(accountPopover.right).toBe('0')
     expect(accountPopover.width).toBe('min(15rem, calc(100vw - 2rem))')
   })
+
+  it.each(['dark', 'light'])(
+    'uses readable authentication colors and 48px actions in %s mode',
+    (theme) => {
+      const tokens = themeTokens(theme)
+      const dialog = cssDeclarations('.scripture-reader .auth-dialog')
+      const label = cssDeclarations('.scripture-reader .auth-dialog label')
+      const input = cssDeclarations('.scripture-reader .auth-dialog input')
+      const placeholder = cssDeclarations(
+        '.scripture-reader .auth-dialog input::placeholder',
+      )
+      const close = cssDeclarations('.scripture-reader .auth-close')
+      const switchMode = cssDeclarations('.scripture-reader .auth-switch')
+      const error = cssDeclarations('.scripture-reader .auth-error')
+      const primary = cssDeclarations(
+        '.scripture-reader .auth-dialog .primary-button',
+      )
+
+      const dialogBackground = resolveToken(dialog.background, tokens)
+      const inputBackground = resolveToken(input.background, tokens)
+      const readablePairs = [
+        [resolveToken(dialog.color, tokens), dialogBackground],
+        [resolveToken(label.color, tokens), dialogBackground],
+        [resolveToken(input.color, tokens), inputBackground],
+        [resolveToken(placeholder.color, tokens), inputBackground],
+        [resolveToken(close.color, tokens), dialogBackground],
+        [resolveToken(switchMode.color, tokens), dialogBackground],
+        [resolveToken(error.color, tokens), dialogBackground],
+        [
+          resolveToken(primary.color, tokens),
+          resolveToken(primary.background, tokens),
+        ],
+      ]
+
+      for (const [foreground, background] of readablePairs) {
+        expect(foreground).toMatch(/^#[\dA-F]{6}$/i)
+        expect(background).toMatch(/^#[\dA-F]{6}$/i)
+        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5)
+      }
+
+      expect(close['min-width']).toBe('48px')
+      expect(close['min-height']).toBe('48px')
+      expect(switchMode['min-height']).toBe('48px')
+    },
+  )
 })
 
 describe('PassageToolbar', () => {
   it('announces the reference and changes translation by code', () => {
     const callbacks = renderToolbar()
-    const toolbar = screen.getByRole('toolbar', { name: 'Passage controls' })
-    const reference = within(toolbar).getByText('John 3')
-    const translation = within(toolbar).getByRole('combobox', { name: 'Change translation' })
+    const controls = screen.getByRole('region', { name: 'Passage controls' })
+    const reference = within(controls).getByText('John 3')
+    const translation = within(controls).getByRole('combobox', { name: 'Change translation' })
 
     expect(reference).toHaveAttribute('aria-live', 'polite')
     expect(translation).toHaveValue('NRSV')
@@ -215,5 +378,64 @@ describe('PassageToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use light mode' }))
     expect(screen.getByRole('button', { name: 'Use dark mode' })).toBeInTheDocument()
     expect(document.documentElement.dataset.readerTheme).toBe('light')
+  })
+
+  it('disables translation selection when no usable options or callback exist', () => {
+    renderToolbar({
+      translation: '',
+      translations: [null, {}, { code: '' }, { code: '   ' }],
+      onTranslationChange: undefined,
+    })
+
+    const selector = screen.getByRole('combobox', { name: 'Change translation' })
+    expect(selector).toBeDisabled()
+    expect(selector).toHaveValue('')
+    expect(within(selector).getByRole('option')).toHaveTextContent(
+      'No translations available',
+    )
+    expect(() => fireEvent.change(selector, { target: { value: 'KJV' } })).not.toThrow()
+  })
+
+  it('normalizes usable translation codes and enables selection after rerender', () => {
+    const onTranslationChange = vi.fn()
+    const initialProps = {
+      reference: 'John 3',
+      translation: '',
+      translations: [],
+      onPrevious: vi.fn(),
+      onNext: vi.fn(),
+    }
+    const view = render(
+      <ReaderPreferencesProvider>
+        <PassageToolbar {...initialProps} />
+      </ReaderPreferencesProvider>,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Change translation' })).toBeDisabled()
+
+    view.rerender(
+      <ReaderPreferencesProvider>
+        <PassageToolbar
+          {...initialProps}
+          translation="KJV"
+          translations={[
+            null,
+            { code: ' KJV ', name: ' King James Version ' },
+            { code: 'KJV', name: 'Duplicate' },
+            { label: 'Missing code' },
+          ]}
+          onTranslationChange={onTranslationChange}
+        />
+      </ReaderPreferencesProvider>,
+    )
+
+    const selector = screen.getByRole('combobox', { name: 'Change translation' })
+    expect(selector).toBeEnabled()
+    expect(selector).toHaveValue('KJV')
+    expect(within(selector).getAllByRole('option')).toHaveLength(1)
+    expect(within(selector).getByRole('option')).toHaveTextContent('King James Version')
+
+    fireEvent.change(selector, { target: { value: 'KJV' } })
+    expect(onTranslationChange).toHaveBeenCalledWith('KJV')
   })
 })
