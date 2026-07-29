@@ -350,15 +350,11 @@ function TextualComparisonWorkspace() {
   const renderCanonWarning = (transKey) => {
     const meta = TRANSLATIONS_META[transKey]
     const affiliation = getCanonAffiliation(selectedBook)
-    let explanation = ""
-
-    if (affiliation === 'catholic') {
-      explanation = `"${selectedBook}" is a deuterocanonical book recognized in the Catholic and Orthodox traditions, but omitted from Protestant versions like ${meta.code}.`
-    } else if (affiliation === 'ethiopian') {
-      explanation = `"${selectedBook}" is an ancient scripture conserved in the Ethiopian Orthodox canon or early Christian collections, but absent from Protestant and Catholic translations.`
-    } else {
-      explanation = `This verse may not be seeded or is unavailable in the database for ${meta.name}.`
-    }
+    const explanation = affiliation === 'catholic'
+      ? `"${selectedBook}" is a deuterocanonical book recognized in the Catholic and Orthodox traditions, but omitted from Protestant versions like ${meta.code}.`
+      : affiliation === 'ethiopian'
+        ? `"${selectedBook}" is an ancient scripture conserved in the Ethiopian Orthodox canon or early Christian collections, but absent from Protestant and Catholic translations.`
+        : `This verse may not be seeded or is unavailable in the database for ${meta.name}.`
 
     return (
       <div className="compare-canon-warning">

@@ -692,6 +692,42 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
   })
 
+  it('returns Home when browser history reaches the hashless root', async () => {
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+    await screen.findByTestId('scripture-reader')
+
+    window.location.hash = ''
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByRole('heading', {
+      level: 1,
+      name: /Unlocking Scripture Through Historical Context/i,
+    })).toBeInTheDocument()
+    expect(screen.queryByTestId('scripture-reader')).not.toBeInTheDocument()
+  })
+
+  it('returns Home when the hash changes to an unknown route', async () => {
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+    await screen.findByTestId('scripture-reader')
+
+    window.location.hash = '#not-a-page'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByRole('heading', {
+      level: 1,
+      name: /Unlocking Scripture Through Historical Context/i,
+    })).toBeInTheDocument()
+    expect(screen.queryByTestId('scripture-reader')).not.toBeInTheDocument()
+  })
+
   it('gives the lazy reader fallback a meaningful skip target and main landmark', () => {
     render(<ReaderLoadingFallback />)
 

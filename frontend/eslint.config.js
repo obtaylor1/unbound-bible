@@ -26,7 +26,10 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
-      'no-useless-assignment': 'off',
+      'no-useless-assignment': 'error',
+      // react-hooks 5.2's recommended-latest contract enabled these two
+      // correctness rules. The v7 preset also adds compiler-readiness rules;
+      // adopting those across the legacy app is a separate migration.
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
     },

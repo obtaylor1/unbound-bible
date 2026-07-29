@@ -444,9 +444,9 @@ function InlinePanel({
   referenceLabel,
   announcementRevision,
 }) {
-  let content = null
-  let hasContent = false
-  let resultCount = 0
+  let content
+  let hasContent
+  let resultCount
   if (tool.id === 'compare') {
     const { rows } = translationRows(value)
     hasContent = rows.length > 0

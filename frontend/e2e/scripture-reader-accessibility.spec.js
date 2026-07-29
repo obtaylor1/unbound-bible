@@ -135,6 +135,28 @@ async function expectIntersectsViewport(locator, label) {
   expect(geometry.top, `${label} top edge`).toBeLessThan(geometry.viewportHeight)
 }
 
+async function expectFitsViewport(locator, label) {
+  const geometry = await locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(geometry.left, `${label} left edge`).toBeGreaterThanOrEqual(0)
+  expect(geometry.top, `${label} top edge`).toBeGreaterThanOrEqual(0)
+  expect(geometry.right, `${label} right edge`).toBeLessThanOrEqual(
+    geometry.viewportWidth,
+  )
+  expect(geometry.bottom, `${label} bottom edge`).toBeLessThanOrEqual(
+    geometry.viewportHeight,
+  )
+}
+
 test('renders Scripture first with labelled reader structure and no overflow', async ({ page }) => {
   await openReader(page)
 
@@ -173,7 +195,7 @@ test('renders Scripture first with labelled reader structure and no overflow', a
   }
 })
 
-test('keeps primary controls visible at narrow and 200% zoom-equivalent layouts', async ({ page }, testInfo) => {
+test('keeps primary controls visible at narrow layouts', async ({ page }, testInfo) => {
   test.skip(!['mobile-320', 'mobile-390'].includes(testInfo.project.name), 'narrow-layout coverage')
   await openReader(page)
 
@@ -182,43 +204,69 @@ test('keeps primary controls visible at narrow and 200% zoom-equivalent layouts'
   }
   await expect(page.getByLabel('Change translation')).toBeVisible()
   await expectNoHorizontalOverflow(page)
+})
 
-  if (testInfo.project.name === 'mobile-320') {
-    await page.locator('.scripture-reader').evaluate((element) => { element.style.zoom = '2' })
-    await expectNoHorizontalOverflow(page)
-    for (const [locator, label] of [
-      [page.getByRole('button', { name: 'Choose a book' }), 'book chooser'],
-      [page.getByRole('button', { name: 'Open study tools' }), 'study tools'],
-    ]) {
-      await expect(locator).toBeVisible()
-      await expectIntersectsViewport(locator, label)
-    }
+test('reflows at a 200%-equivalent desktop layout viewport', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop 1440-to-720 reflow coverage')
+  await openReader(page)
+  await page.setViewportSize({ width: 720, height: 900 })
+  await expectNoHorizontalOverflow(page)
 
-    const firstVerse = page.getByRole('button', { name: /Genesis 1 verse 1/ })
-    await firstVerse.scrollIntoViewIfNeeded()
-    await expect(firstVerse).toBeVisible()
-    await expectIntersectsViewport(firstVerse, 'vertically reachable first verse')
-    const verseAndNavigation = await firstVerse.evaluate((verse) => {
-      const verseRect = verse.getBoundingClientRect()
-      const navigationRect = document.querySelector('.reader-bottom-navigation')
-        .getBoundingClientRect()
-      return {
-        verseTop: verseRect.top,
-        verseBottom: verseRect.bottom,
-        navigationTop: navigationRect.top,
-      }
-    })
-    expect(verseAndNavigation.verseTop).toBeLessThan(verseAndNavigation.navigationTop)
-    expect(verseAndNavigation.verseBottom).toBeGreaterThan(0)
+  for (const [locator, label] of [
+    [page.getByRole('button', { name: 'Choose a book' }), 'book chooser'],
+    [page.getByRole('button', { name: 'Open study tools' }), 'study tools'],
+  ]) {
+    await expect(locator).toBeVisible()
+    await expectFitsViewport(locator, label)
+  }
 
-    const textSize = page.getByRole('button', { name: /Change text size/ })
-    await textSize.evaluate((element) => element.scrollIntoView({
+  for (const [locator, label] of [
+    [page.getByRole('button', { name: 'Previous chapter' }), 'previous chapter'],
+    [page.getByRole('button', { name: 'Next chapter' }), 'next chapter'],
+    [page.getByLabel('Change translation'), 'translation selector'],
+    [page.getByRole('button', { name: /Change text size/ }), 'text-size control'],
+    [page.getByRole('button', { name: /Use (light|dark) mode/ }), 'theme control'],
+  ]) {
+    await locator.evaluate((element) => element.scrollIntoView({
       block: 'nearest',
       inline: 'center',
     }))
-    await expect(textSize).toBeVisible()
-    await expectIntersectsViewport(textSize, 'horizontally reachable text-size control')
+    await expect(locator).toBeVisible()
+    await expectIntersectsViewport(locator, `reachable ${label}`)
   }
+
+  const finalVerse = page.getByRole('button', { name: /Genesis 1 verse 3/ })
+  await finalVerse.scrollIntoViewIfNeeded()
+  const finalGeometry = await finalVerse.evaluate((verse) => {
+    const verseRect = verse.getBoundingClientRect()
+    const navigationRect = document.querySelector('.reader-bottom-navigation')
+      .getBoundingClientRect()
+    return {
+      verseBottom: verseRect.bottom,
+      navigationTop: navigationRect.top,
+    }
+  })
+  expect(finalGeometry.verseBottom).toBeLessThanOrEqual(finalGeometry.navigationTop)
+  await expectNoHorizontalOverflow(page)
+})
+
+test('browser Back from the reader returns to the hashless Home route', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'browser history semantics are viewport-independent')
+  await page.goto('/')
+  await expect(page.getByRole('heading', {
+    level: 1,
+    name: /Unlocking Scripture Through Historical Context/i,
+  })).toBeVisible()
+  await page.goto(READER_URL)
+  await expect(page.getByRole('heading', { level: 1, name: 'Genesis 1' })).toBeVisible()
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByRole('heading', {
+    level: 1,
+    name: /Unlocking Scripture Through Historical Context/i,
+  })).toBeVisible()
+  await expect(page.getByTestId('scripture-reader')).toBeHidden()
 })
 
 test('meets computed primary control target sizes in reader and modal states', async ({ page }) => {
@@ -291,9 +339,7 @@ test('book picker traps focus, supports Escape, restores its exact opener, and f
   await expect(dialog).toBeVisible()
   await expect(dialog.locator(':focus')).toHaveCount(1)
   expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
-  const box = await dialog.boundingBox()
-  expect(box?.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0)
-  expect(box?.height).toBeLessThanOrEqual(page.viewportSize()?.height ?? 0)
+  await expectFitsViewport(dialog, 'book picker')
 
   await page.getByLabel('Search Bible books').press('Shift+Tab')
   expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
@@ -311,6 +357,7 @@ test('selected verse Study Tools expose all seven truthful destinations and rest
   await opener.click()
   const dialog = page.getByRole('dialog', { name: 'Genesis 1:1' })
   await expect(dialog).toBeVisible()
+  await expectFitsViewport(dialog, 'study tools')
   await expect(page.getByRole('heading', { level: 2, name: 'Genesis 1:1' })).toBeVisible()
   const close = dialog.getByRole('button', { name: 'Close study tools' })
   const last = dialog.getByRole('button', { name: 'Decolonial audit' })
@@ -351,12 +398,12 @@ test('route Study Tools activate their real destinations from selected Genesis 1
   // Unit coverage verifies the selected reference object handed to onNavigate.
   // The browser boundary verifies each destination URL from the selected reader state.
   const destinations = [
-    ['Notes', '#library'],
-    ['Ask the Bible', '#aistudy'],
-    ['Decolonial audit', '#race-misuse'],
+    ['Notes', '#library', { level: 2, name: 'Notes & saved studies' }],
+    ['Ask the Bible', '#aistudy', { level: 1, name: /Ask the Bible/ }],
+    ['Decolonial audit', '#race-misuse', { level: 2, name: 'Race & Scripture Misuse' }],
   ]
 
-  for (const [tool, hash] of destinations) {
+  for (const [tool, hash, destinationHeading] of destinations) {
     await openReader(page)
     await page.getByRole('button', { name: /Genesis 1 verse 2/ }).click()
     await expect(page).toHaveURL(/verse=2/)
@@ -364,6 +411,7 @@ test('route Study Tools activate their real destinations from selected Genesis 1
     await expect(page.getByRole('dialog', { name: 'Genesis 1:2' })).toBeVisible()
     await page.getByRole('button', { name: tool }).click()
     await expect(page).toHaveURL(new RegExp(`${hash}$`))
+    await expect(page.getByRole('heading', destinationHeading)).toBeVisible()
   }
 })
 
@@ -373,6 +421,7 @@ test('search follows the real keyboard combobox flow and restores its opener', a
   const opener = page.getByRole('button', { name: 'Search' })
   await opener.click()
   const dialog = page.getByRole('dialog', { name: 'Search' })
+  await expectFitsViewport(dialog, 'search dialog')
   const input = page.getByRole('combobox', { name: 'Search the library' })
   await expect(input).toBeFocused()
   await input.fill('Genesis')
@@ -437,13 +486,24 @@ test('axe finds no WCAG A/AA violations in ready light and dark reader states', 
 
 test('axe finds no WCAG A/AA violations in book picker and Study Tools', async ({ page }) => {
   await openReader(page)
-  await page.getByRole('button', { name: 'Choose a book' }).click()
-  await expectAxeClean(page, 'book picker')
-  await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: /Genesis 1 verse 1/ }).click()
-  await page.getByRole('button', { name: 'Open study tools' }).click()
-  await expect(page.getByRole('dialog', { name: 'Genesis 1:1' })).toBeVisible()
-  await expectAxeClean(page, 'study tools')
+  for (const theme of ['dark', 'light']) {
+    if (theme === 'light') {
+      await page.getByRole('button', { name: 'Use light mode' }).click()
+    }
+
+    await page.getByRole('button', { name: 'Choose a book' }).click()
+    await expect(page.getByRole('dialog', { name: 'Choose a book and chapter' })).toBeVisible()
+    await expectAxeClean(page, `${theme} book picker`)
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: /Genesis 1 verse 1/ }).click()
+    await page.getByRole('button', { name: 'Open study tools' }).click()
+    const studyDialog = page.getByRole('dialog', { name: 'Genesis 1:1' })
+    await expect(studyDialog).toBeVisible()
+    await expect(studyDialog.getByText(verseDetails.historical_context)).toBeVisible()
+    await expectAxeClean(page, `${theme} loaded study tools`)
+    await page.keyboard.press('Escape')
+  }
 })
 
 test('axe finds no WCAG A/AA violations in the keyboard search dialog', async ({ page }, testInfo) => {

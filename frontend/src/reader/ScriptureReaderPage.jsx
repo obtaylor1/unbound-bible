@@ -97,7 +97,7 @@ export default function ScriptureReaderPage({
 
   useEffect(() => {
     const onHashChange = () => {
-      if (!pageFromKnownHash(window.location.hash)) return
+      if (window.location.hash === '#main-content') return
       setRoute(parseReaderHash())
     }
     window.addEventListener('hashchange', onHashChange)

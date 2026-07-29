@@ -5,7 +5,6 @@ import HomePage from './components/HomePage'
 import {
   hashForPage,
   pageFromHash,
-  pageFromKnownHash,
   titleForPage,
 } from './routing/pageRoutes'
 import ReaderErrorBoundary from './reader/ReaderErrorBoundary'
@@ -47,10 +46,9 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
-      const nextPage = pageFromKnownHash(window.location.hash)
-      if (!nextPage) return
+      if (window.location.hash === '#main-content') return
       setCurrentHash(window.location.hash)
-      setCurrentPage(nextPage)
+      setCurrentPage(pageFromHash(window.location.hash))
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
