@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import useDialogFocus from './useDialogFocus'
 
 const CANONS = [
@@ -54,19 +54,13 @@ export default function BookPicker({
   const searchRef = useRef(null)
   const mountedRef = useRef(true)
   const openRef = useRef(open)
+  const committedOpenRef = useRef(open)
   const requestSequence = useRef(0)
-  const renderedOpenRef = useRef(open)
   const wasOpenRef = useRef(false)
   const [query, setQuery] = useState('')
   const [selectedBook, setSelectedBook] = useState(null)
   const [chapters, setChapters] = useState([])
   const [chapterState, setChapterState] = useState('idle')
-
-  if (renderedOpenRef.current !== open) {
-    renderedOpenRef.current = open
-    requestSequence.current += 1
-  }
-  openRef.current = open
 
   const closePicker = () => {
     openRef.current = false
@@ -84,6 +78,14 @@ export default function BookPicker({
     initialRef: searchRef,
     onClose: closePicker,
   })
+
+  useLayoutEffect(() => {
+    if (committedOpenRef.current === open) return
+
+    committedOpenRef.current = open
+    openRef.current = open
+    requestSequence.current += 1
+  }, [open])
 
   useEffect(() => {
     mountedRef.current = true

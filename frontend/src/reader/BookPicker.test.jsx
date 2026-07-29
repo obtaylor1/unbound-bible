@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { useRef, useState } from 'react'
+import { Suspense, useRef, useState, useTransition } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,6 +43,7 @@ function DialogFocusHarness({
   initialKind = 'valid',
   controls = 'many',
   fireEscapeDuringRender = false,
+  outsideControl = false,
   withContainer = true,
 }) {
   const containerRef = useRef(null)
@@ -82,10 +83,29 @@ function DialogFocusHarness({
         <button ref={initialRef}>Fieldset initial control</button>
       </fieldset>
     )
+  } else if (initialKind === 'negative-tabindex') {
+    initialControl = (
+      <button ref={initialRef} tabIndex={-1}>Negative tabindex initial control</button>
+    )
+  } else if (initialKind === 'closed-details') {
+    initialControl = (
+      <details>
+        <summary tabIndex={-1}>Collapsed details</summary>
+        <button ref={initialRef}>Hidden details control</button>
+      </details>
+    )
+  } else if (initialKind === 'closed-summary') {
+    initialControl = (
+      <details>
+        <summary ref={initialRef}>Visible details summary</summary>
+        <button>Hidden details control</button>
+      </details>
+    )
   }
 
   return (
     <>
+      {outsideControl && <button>Outside control</button>}
       {initialKind === 'outside' && (
         <button ref={initialRef}>Outside initial control</button>
       )}
@@ -93,6 +113,39 @@ function DialogFocusHarness({
         {controls !== 'zero' && initialKind !== 'outside' && initialControl}
         {controls === 'many' && <button>Fallback control</button>}
       </div>
+    </>
+  )
+}
+
+const neverSettles = new Promise(() => {})
+
+function SuspendForever() {
+  throw neverSettles
+}
+
+function AbandonedCloseHarness({ request }) {
+  const [attemptedClose, setAttemptedClose] = useState(false)
+  const [, startTransition] = useTransition()
+
+  return (
+    <>
+      <button
+        onClick={() => {
+          startTransition(() => setAttemptedClose(true))
+        }}
+      >
+        Attempt suspended close
+      </button>
+      <Suspense fallback={<p>Suspended fallback</p>}>
+        <BookPicker
+          open={!attemptedClose}
+          books={['Genesis']}
+          selectedCanon="PROT66"
+          loadChapters={() => request.promise}
+          onClose={vi.fn()}
+        />
+        {attemptedClose && <SuspendForever />}
+      </Suspense>
     </>
   )
 }
@@ -347,7 +400,16 @@ describe('BookPicker', () => {
     expect(firstClose).not.toHaveBeenCalled()
   })
 
-  it.each(['hidden', 'aria-hidden', 'disabled', 'inert', 'disabled-fieldset', 'outside'])(
+  it.each([
+    'hidden',
+    'aria-hidden',
+    'disabled',
+    'inert',
+    'disabled-fieldset',
+    'negative-tabindex',
+    'closed-details',
+    'outside',
+  ])(
     'skips a %s initial target and focuses the eligible fallback',
     (initialKind) => {
       render(
@@ -357,6 +419,34 @@ describe('BookPicker', () => {
         />,
       )
 
+      expect(screen.getByRole('button', { name: 'Fallback control' })).toHaveFocus()
+    },
+  )
+
+  it('allows the visible summary control of a closed details element', () => {
+    render(
+      <DialogFocusHarness
+        initialKind="closed-summary"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Visible details summary')).toHaveFocus()
+  })
+
+  it.each(['negative-tabindex', 'closed-details'])(
+    'excludes %s controls from the forward wrap list',
+    (initialKind) => {
+      render(
+        <DialogFocusHarness
+          initialKind={initialKind}
+          onClose={vi.fn()}
+          outsideControl
+        />,
+      )
+
+      screen.getByRole('button', { name: 'Outside control' }).focus()
+      fireEvent.keyDown(document, { key: 'Tab' })
       expect(screen.getByRole('button', { name: 'Fallback control' })).toHaveFocus()
     },
   )
@@ -474,6 +564,20 @@ describe('BookPicker', () => {
     await act(async () => firstRequest.resolve([99]))
     expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Chapter 99' })).not.toBeInTheDocument()
+  })
+
+  it('does not let an abandoned close render invalidate the committed open session', async () => {
+    const user = userEvent.setup()
+    const request = deferred()
+    render(<AbandonedCloseHarness request={request} />)
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Attempt suspended close' }))
+    expect(screen.getByRole('dialog', { name: 'Choose a book and chapter' })).toBeInTheDocument()
+    expect(screen.queryByText('Suspended fallback')).not.toBeInTheDocument()
+
+    await act(async () => request.resolve([7]))
+    expect(screen.getByRole('button', { name: 'Chapter 7' })).toBeInTheDocument()
   })
 
   it('does not update after closing and supports back navigation during loading', async () => {

@@ -27,17 +27,33 @@ function isDisabledByFieldset(element) {
   return false
 }
 
+function isHiddenByClosedDetails(element) {
+  let details = element.closest('details:not([open])')
+
+  while (details) {
+    const visibleSummary = [...details.children].find(
+      (child) => child.tagName === 'SUMMARY',
+    )
+    if (element !== visibleSummary) return true
+    details = details.parentElement?.closest('details:not([open])')
+  }
+
+  return false
+}
+
 function isEligibleFocusable(element, container) {
   if (
     !(element instanceof HTMLElement)
     || !(container instanceof HTMLElement)
     || !container.contains(element)
     || !element.matches(FOCUSABLE_SELECTOR)
+    || element.tabIndex < 0
     || element.matches(':disabled')
     || element.getAttribute('aria-disabled') === 'true'
     || element.closest('[aria-disabled="true"]')
     || element.closest('[inert]')
     || isDisabledByFieldset(element)
+    || isHiddenByClosedDetails(element)
   ) return false
 
   let current = element
