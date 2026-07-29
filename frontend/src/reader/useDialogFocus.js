@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -12,6 +12,12 @@ const FOCUSABLE_SELECTOR = [
 
 let scrollLockCount = 0
 let originalBodyOverflow = ''
+const dialogStack = []
+const handledKeyEvents = new WeakSet()
+
+function topDialog() {
+  return dialogStack[dialogStack.length - 1]
+}
 
 function isDisabledByFieldset(element) {
   let fieldset = element.closest('fieldset[disabled]')
@@ -89,21 +95,35 @@ function unlockBackgroundScroll() {
   }
 }
 
+function stablePageTarget() {
+  const target = document.querySelector('main, .scripture-reader')
+  if (!(target instanceof HTMLElement) || !target.isConnected) return null
+  if (!target.hasAttribute('tabindex')) target.tabIndex = -1
+  return target
+}
+
 export default function useDialogFocus({
   open,
   containerRef,
   initialRef,
   onClose,
+  restoreRef,
 }) {
   const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
+
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     if (!open) return undefined
 
+    const token = { containerRef }
     const opener = document.activeElement
+    const restoreTarget = restoreRef?.current
     let active = true
     const initialWasUnavailable = !initialRef?.current
+    dialogStack.push(token)
     lockBackgroundScroll()
 
     const focusInitialControl = () => {
@@ -125,13 +145,17 @@ export default function useDialogFocus({
     }
 
     const handleKeyDown = (event) => {
+      if (topDialog() !== token || handledKeyEvents.has(event)) return
+
       if (event.key === 'Escape') {
+        handledKeyEvents.add(event)
         event.preventDefault()
         if (typeof onCloseRef.current === 'function') onCloseRef.current()
         return
       }
 
       if (event.key !== 'Tab') return
+      handledKeyEvents.add(event)
 
       const container = containerRef.current
       if (!container) return
@@ -169,9 +193,28 @@ export default function useDialogFocus({
       document.removeEventListener('keydown', handleKeyDown)
       unlockBackgroundScroll()
 
+      const tokenIndex = dialogStack.indexOf(token)
+      const wasTopDialog = tokenIndex === dialogStack.length - 1
+      if (tokenIndex >= 0) dialogStack.splice(tokenIndex, 1)
+      if (!wasTopDialog) return
+
+      const lowerDialog = topDialog()?.containerRef.current
+      if (lowerDialog instanceof HTMLElement && lowerDialog.isConnected) {
+        lowerDialog.focus()
+        return
+      }
+
       if (opener instanceof HTMLElement && opener.isConnected) {
         opener.focus()
+        return
       }
+
+      if (restoreTarget instanceof HTMLElement && restoreTarget.isConnected) {
+        restoreTarget.focus()
+        return
+      }
+
+      stablePageTarget()?.focus()
     }
-  }, [containerRef, initialRef, open])
+  }, [containerRef, initialRef, open, restoreRef])
 }

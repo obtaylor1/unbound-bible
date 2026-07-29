@@ -42,7 +42,6 @@ function DialogFocusHarness({
   onClose,
   initialKind = 'valid',
   controls = 'many',
-  fireEscapeDuringRender = false,
   outsideControl = false,
   withContainer = true,
 }) {
@@ -55,10 +54,6 @@ function DialogFocusHarness({
     initialRef,
     onClose,
   })
-
-  if (fireEscapeDuringRender) {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-  }
 
   if (!withContainer) {
     return <button data-testid="outside-focus-target">Outside the missing dialog</button>
@@ -156,6 +151,105 @@ function AbandonedCloseHarness({ request }) {
         />
         {attemptedClose && <SuspendForever />}
       </Suspense>
+    </>
+  )
+}
+
+function AbandonedCallbackHarness({ committedClose, abandonedClose }) {
+  const [attemptedUpdate, setAttemptedUpdate] = useState(false)
+  const [, startTransition] = useTransition()
+
+  return (
+    <>
+      <button
+        onClick={() => {
+          startTransition(() => setAttemptedUpdate(true))
+        }}
+      >
+        Attempt callback update
+      </button>
+      <Suspense fallback={<p>Callback fallback</p>}>
+        <DialogFocusHarness
+          onClose={attemptedUpdate ? abandonedClose : committedClose}
+        />
+        {attemptedUpdate && <SuspendForever />}
+      </Suspense>
+    </>
+  )
+}
+
+function StackedDialog({ name, open, onClose }) {
+  const containerRef = useRef(null)
+  const initialRef = useRef(null)
+
+  useDialogFocus({
+    open,
+    containerRef,
+    initialRef,
+    onClose,
+  })
+
+  if (!open) return null
+
+  return (
+    <div ref={containerRef} role="dialog" aria-label={name} tabIndex={-1}>
+      <button ref={initialRef}>{name} first</button>
+      <button>{name} last</button>
+    </div>
+  )
+}
+
+function StackedDialogsHarness({ lowerClose, upperClose }) {
+  const [upperOpen, setUpperOpen] = useState(true)
+
+  return (
+    <>
+      <StackedDialog name="Lower dialog" open onClose={lowerClose} />
+      <StackedDialog
+        name="Upper dialog"
+        open={upperOpen}
+        onClose={() => {
+          upperClose()
+          setUpperOpen(false)
+        }}
+      />
+    </>
+  )
+}
+
+function RemovedOpenerHarness() {
+  const [open, setOpen] = useState(false)
+  const [showOpener, setShowOpener] = useState(true)
+  const containerRef = useRef(null)
+  const initialRef = useRef(null)
+  const fallbackRef = useRef(null)
+
+  useDialogFocus({
+    open,
+    containerRef,
+    initialRef,
+    onClose: () => {
+      setShowOpener(false)
+      setOpen(false)
+    },
+    restoreRef: fallbackRef,
+  })
+
+  return (
+    <>
+      <button>Unrelated page action</button>
+      <main ref={fallbackRef} tabIndex={-1}>Reader content</main>
+      {showOpener && <button onClick={() => setOpen(true)}>Open temporary dialog</button>}
+      {open && (
+        <div ref={containerRef} role="dialog" aria-label="Temporary dialog" tabIndex={-1}>
+          <button ref={initialRef} onClick={() => {
+            setShowOpener(false)
+            setOpen(false)
+          }}>
+            Close temporary dialog
+          </button>
+        </div>
+      )}
     </>
   )
 }
@@ -394,20 +488,35 @@ describe('BookPicker', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('uses the latest close callback before passive effects run', () => {
+  it('uses the latest committed close callback', () => {
     const firstClose = vi.fn()
     const latestClose = vi.fn()
     const { rerender } = render(<DialogFocusHarness onClose={firstClose} />)
 
-    rerender(
-      <DialogFocusHarness
-        onClose={latestClose}
-        fireEscapeDuringRender
-      />,
-    )
+    rerender(<DialogFocusHarness onClose={latestClose} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
 
     expect(latestClose).toHaveBeenCalledOnce()
     expect(firstClose).not.toHaveBeenCalled()
+  })
+
+  it('does not expose a close callback from an abandoned render', async () => {
+    const user = userEvent.setup()
+    const committedClose = vi.fn()
+    const abandonedClose = vi.fn()
+    render(
+      <AbandonedCallbackHarness
+        committedClose={committedClose}
+        abandonedClose={abandonedClose}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Attempt callback update' }))
+    expect(screen.queryByText('Callback fallback')).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    expect(committedClose).toHaveBeenCalledOnce()
+    expect(abandonedClose).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -518,6 +627,129 @@ describe('BookPicker', () => {
     expect(document.body).toHaveFocus()
   })
 
+  it('lets only the top dialog handle Escape and restores focus inside the lower dialog', async () => {
+    const user = userEvent.setup()
+    const lowerClose = vi.fn()
+    const upperClose = vi.fn()
+    render(
+      <StackedDialogsHarness
+        lowerClose={lowerClose}
+        upperClose={upperClose}
+      />,
+    )
+
+    await user.keyboard('{Escape}')
+
+    expect(upperClose).toHaveBeenCalledOnce()
+    expect(lowerClose).not.toHaveBeenCalled()
+    const lowerDialog = screen.getByRole('dialog', { name: 'Lower dialog' })
+    expect(screen.queryByRole('dialog', { name: 'Upper dialog' })).not.toBeInTheDocument()
+    expect(lowerDialog).toContainElement(document.activeElement)
+  })
+
+  it('lets only the top dialog trap Tab', async () => {
+    const user = userEvent.setup()
+    render(
+      <StackedDialogsHarness
+        lowerClose={vi.fn()}
+        upperClose={vi.fn()}
+      />,
+    )
+
+    const lowerFirst = screen.getByRole('button', { name: 'Lower dialog first' })
+    const upperFirst = screen.getByRole('button', { name: 'Upper dialog first' })
+    const lowerFocus = vi.spyOn(lowerFirst, 'focus')
+    const upperFocus = vi.spyOn(upperFirst, 'focus')
+    const upperLast = screen.getByRole('button', { name: 'Upper dialog last' })
+    upperLast.focus()
+    lowerFocus.mockClear()
+    upperFocus.mockClear()
+    await user.tab()
+
+    expect(upperFirst).toHaveFocus()
+    expect(upperFocus).toHaveBeenCalled()
+    expect(lowerFocus).not.toHaveBeenCalled()
+  })
+
+  it('restores a removed opener to the provided stable reader target', async () => {
+    const user = userEvent.setup()
+    render(<RemovedOpenerHarness />)
+
+    await user.click(screen.getByRole('button', { name: 'Open temporary dialog' }))
+    await user.click(screen.getByRole('button', { name: 'Close temporary dialog' }))
+
+    expect(screen.queryByRole('button', { name: 'Open temporary dialog' })).not.toBeInTheDocument()
+    expect(screen.getByRole('main')).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Unrelated page action' })).not.toHaveFocus()
+  })
+
+  it('moves focus through book, loading, chapter, and back transitions', async () => {
+    const user = userEvent.setup()
+    const request = deferred()
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={() => request.promise}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    expect(screen.getByRole('button', { name: 'Back to books' })).toHaveFocus()
+
+    await act(async () => request.resolve([1, 2]))
+    expect(screen.getByRole('button', { name: 'Chapter 1' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: 'Back to books' }))
+    expect(screen.getByRole('searchbox', { name: 'Search Bible books' })).toHaveFocus()
+  })
+
+  it('moves focus to a stable loading control when retry unmounts', async () => {
+    const user = userEvent.setup()
+    const retryRequest = deferred()
+    const loadChapters = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(retryRequest.promise)
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={loadChapters}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(await screen.findByRole('button', { name: 'Try again' }))
+
+    expect(screen.getByRole('button', { name: 'Back to books' })).toHaveFocus()
+  })
+
+  it('does not steal focus when chapter loading finishes after the user moves elsewhere', async () => {
+    const user = userEvent.setup()
+    const request = deferred()
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={() => request.promise}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    const close = screen.getByRole('button', { name: 'Close book picker' })
+    close.focus()
+    await act(async () => request.resolve([1]))
+
+    expect(close).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Chapter 1' })).not.toHaveFocus()
+  })
+
   it('invalidates a pending request before calling close from the close button', async () => {
     const user = userEvent.setup()
     const request = deferred()
@@ -611,6 +843,52 @@ describe('BookPicker', () => {
     await act(async () => firstRequest.resolve([99]))
     expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Chapter 99' })).not.toBeInTheDocument()
+  })
+
+  it('resets and invalidates in-flight work when selectedCanon changes externally', async () => {
+    const user = userEvent.setup()
+    const firstRequest = deferred()
+    const secondRequest = deferred()
+    const loadChapters = vi.fn()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise)
+    const { rerender } = render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={loadChapters}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    rerender(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="CATH73"
+        loadChapters={loadChapters}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('searchbox')).toHaveFocus()
+    await act(async () => firstRequest.resolve([99]))
+    expect(screen.queryByRole('button', { name: 'Chapter 99' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    rerender(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="ETHIO81"
+        loadChapters={loadChapters}
+        onClose={vi.fn()}
+      />,
+    )
+    await act(async () => secondRequest.reject(new Error('late canon failure')))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Genesis' })).toBeInTheDocument()
   })
 
   it('does not let an abandoned close render invalidate the committed open session', async () => {

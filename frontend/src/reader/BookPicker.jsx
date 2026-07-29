@@ -50,13 +50,20 @@ export default function BookPicker({
   onClose,
 }) {
   const titleId = useId()
+  const canonValue = CANONS.some(([value]) => value === selectedCanon)
+    ? selectedCanon
+    : 'PROT66'
   const dialogRef = useRef(null)
   const searchRef = useRef(null)
+  const backRef = useRef(null)
+  const firstChapterRef = useRef(null)
   const mountedRef = useRef(true)
   const openRef = useRef(open)
   const committedOpenRef = useRef(open)
+  const previousCanonRef = useRef(canonValue)
   const requestSequence = useRef(0)
   const wasOpenRef = useRef(false)
+  const focusIntentRef = useRef(null)
   const [query, setQuery] = useState('')
   const [selectedBook, setSelectedBook] = useState(null)
   const [chapters, setChapters] = useState([])
@@ -64,6 +71,7 @@ export default function BookPicker({
 
   const closePicker = () => {
     requestSequence.current += 1
+    focusIntentRef.current = 'books'
     setQuery('')
     setSelectedBook(null)
     setChapters([])
@@ -85,6 +93,48 @@ export default function BookPicker({
     openRef.current = open
     requestSequence.current += 1
   }, [open])
+
+  useLayoutEffect(() => {
+    if (previousCanonRef.current === canonValue) return
+
+    previousCanonRef.current = canonValue
+    if (!open) return
+
+    requestSequence.current += 1
+    focusIntentRef.current = 'books'
+    setQuery('')
+    setSelectedBook(null)
+    setChapters([])
+    setChapterState('idle')
+  }, [canonValue, open])
+
+  useLayoutEffect(() => {
+    const focusIntent = focusIntentRef.current
+
+    if (!selectedBook && focusIntent === 'books') {
+      searchRef.current?.focus()
+      focusIntentRef.current = null
+      return
+    }
+
+    if (selectedBook && chapterState === 'loading' && focusIntent === 'loading') {
+      backRef.current?.focus()
+      focusIntentRef.current = 'result'
+      return
+    }
+
+    if (chapterState === 'ready' && (focusIntent === 'loading' || focusIntent === 'result')) {
+      if (focusIntent === 'loading' || document.activeElement === backRef.current) {
+        firstChapterRef.current?.focus()
+      }
+      focusIntentRef.current = null
+      return
+    }
+
+    if ((chapterState === 'error' || chapterState === 'empty') && focusIntent === 'result') {
+      focusIntentRef.current = null
+    }
+  }, [chapterState, selectedBook])
 
   useEffect(() => {
     mountedRef.current = true
@@ -110,13 +160,10 @@ export default function BookPicker({
   const filteredBooks = normalizedBooks.filter((book) => (
     book.toLocaleLowerCase().includes(normalizedQuery)
   ))
-  const canonValue = CANONS.some(([value]) => value === selectedCanon)
-    ? selectedCanon
-    : 'PROT66'
-
   const chooseBook = async (book) => {
     const requestId = requestSequence.current + 1
     requestSequence.current = requestId
+    focusIntentRef.current = 'loading'
     setSelectedBook(book)
     setChapters([])
     setChapterState('loading')
@@ -150,6 +197,7 @@ export default function BookPicker({
 
   const backToBooks = () => {
     requestSequence.current += 1
+    focusIntentRef.current = 'books'
     setSelectedBook(null)
     setChapters([])
     setChapterState('idle')
@@ -157,6 +205,7 @@ export default function BookPicker({
 
   const changeCanon = (event) => {
     requestSequence.current += 1
+    focusIntentRef.current = 'books'
     setQuery('')
     setSelectedBook(null)
     setChapters([])
@@ -254,6 +303,7 @@ export default function BookPicker({
           <section className="book-picker__content book-picker__chapters-view">
             <div className="book-picker__section-header">
               <button
+                ref={backRef}
                 className="book-picker__back book-picker__control"
                 type="button"
                 onClick={backToBooks}
@@ -301,8 +351,9 @@ export default function BookPicker({
                 role="group"
                 aria-label={`${selectedBook} chapters`}
               >
-                {chapters.map((chapter) => (
+                {chapters.map((chapter, index) => (
                   <button
+                    ref={index === 0 ? firstChapterRef : null}
                     className="book-picker__chapter book-picker__control"
                     type="button"
                     key={chapter}
