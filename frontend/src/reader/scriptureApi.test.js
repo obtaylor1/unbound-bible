@@ -22,6 +22,22 @@ describe('scripture API', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/books?canon=ETHIO81', { signal })
   })
 
+  it.each([
+    ['omitted', undefined],
+    ['null', null],
+    ['blank', '   ']
+  ])('defaults a %s canon value to the Ethiopian catalog', async (_, canon) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ books: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getBooks(canon)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/books?canon=ETHIO81', { signal: undefined })
+  })
+
   it('returns all chapter content without translation filtering', async () => {
     const content = [
       { verse: 1, translation: 'KJV', text: 'First' },

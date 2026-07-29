@@ -8,7 +8,8 @@ export async function requestJson(url, signal) {
 }
 
 export async function getBooks(canon, signal) {
-  const params = new URLSearchParams({ canon: String(canon ?? '').toUpperCase() })
+  const normalizedCanon = String(canon ?? '').trim().toUpperCase() || 'ETHIO81'
+  const params = new URLSearchParams({ canon: normalizedCanon })
   const data = await requestJson(`/api/v1/books?${params}`, signal)
 
   return (data.books ?? [])
