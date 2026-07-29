@@ -677,6 +677,21 @@ describe('ScriptureReaderPage', () => {
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
   })
 
+  it('keeps the reader mounted when its skip link targets the main landmark', async () => {
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+    await screen.findByTestId('scripture-reader')
+
+    window.location.hash = '#main-content'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByTestId('scripture-reader')).toBeInTheDocument()
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+  })
+
   it('gives the lazy reader fallback a meaningful skip target and main landmark', () => {
     render(<ReaderLoadingFallback />)
 

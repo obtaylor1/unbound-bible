@@ -1,2 +1,4 @@
 .superpowers/
 .worktrees/
+frontend/playwright-report/
+frontend/test-results/

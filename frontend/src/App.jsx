@@ -2,7 +2,12 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import './App.css'
 import Navigation from './components/Navigation'
 import HomePage from './components/HomePage'
-import { hashForPage, pageFromHash, titleForPage } from './routing/pageRoutes'
+import {
+  hashForPage,
+  pageFromHash,
+  pageFromKnownHash,
+  titleForPage,
+} from './routing/pageRoutes'
 import ReaderErrorBoundary from './reader/ReaderErrorBoundary'
 import { ReaderPreferencesProvider } from './reader/ReaderPreferences'
 
@@ -42,8 +47,10 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
+      const nextPage = pageFromKnownHash(window.location.hash)
+      if (!nextPage) return
       setCurrentHash(window.location.hash)
-      setCurrentPage(pageFromHash(window.location.hash))
+      setCurrentPage(nextPage)
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)

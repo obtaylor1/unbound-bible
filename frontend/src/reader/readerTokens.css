@@ -1094,6 +1094,10 @@ button.scripture-pane__verse:focus-visible {
     padding-left: max(0.75rem, env(safe-area-inset-left));
   }
 
+  .scripture-pane__verse {
+    scroll-margin-block-end: calc(5.25rem + env(safe-area-inset-bottom));
+  }
+
   .reader-bottom-navigation {
     position: fixed;
     z-index: 40;

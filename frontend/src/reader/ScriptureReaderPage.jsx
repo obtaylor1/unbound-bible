@@ -96,7 +96,10 @@ export default function ScriptureReaderPage({
   }, [route])
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseReaderHash())
+    const onHashChange = () => {
+      if (!pageFromKnownHash(window.location.hash)) return
+      setRoute(parseReaderHash())
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
@@ -414,7 +417,7 @@ export default function ScriptureReaderPage({
           </button>
         </section>
       )}
-      <main id="main-content" className="scripture-reader-shell__main">
+      <main id="main-content" className="scripture-reader-shell__main" tabIndex="-1">
         {status === 'ready' || (status === 'offline' && currentRowsLoaded) ? (
           <>
             {status === 'offline' && (
