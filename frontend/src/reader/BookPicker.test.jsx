@@ -254,6 +254,93 @@ function RemovedOpenerHarness() {
   )
 }
 
+function ChainLowerDialog({ open, onOpenUpper }) {
+  const containerRef = useRef(null)
+  const initialRef = useRef(null)
+
+  useDialogFocus({
+    open,
+    containerRef,
+    initialRef,
+    onClose: vi.fn(),
+  })
+
+  if (!open) return null
+
+  return (
+    <div ref={containerRef} role="dialog" aria-label="Chain lower" tabIndex={-1}>
+      <button ref={initialRef}>Chain lower first</button>
+      <button onClick={onOpenUpper}>Open chain upper</button>
+    </div>
+  )
+}
+
+function RestoreChainHarness({ upperClose }) {
+  const [lowerOpen, setLowerOpen] = useState(false)
+  const [upperOpen, setUpperOpen] = useState(false)
+
+  return (
+    <>
+      <button onClick={() => setLowerOpen(true)}>Page dialog opener</button>
+      <button onClick={() => setLowerOpen(false)}>Remove lower out of order</button>
+      <ChainLowerDialog
+        open={lowerOpen}
+        onOpenUpper={() => setUpperOpen(true)}
+      />
+      <StackedDialog
+        name="Chain upper"
+        open={upperOpen}
+        onClose={() => {
+          upperClose()
+          setUpperOpen(false)
+        }}
+      />
+    </>
+  )
+}
+
+function ReplacementFallbackHarness() {
+  const [open, setOpen] = useState(false)
+  const [showOpener, setShowOpener] = useState(true)
+  const [replacement, setReplacement] = useState(false)
+  const containerRef = useRef(null)
+  const initialRef = useRef(null)
+  const fallbackRef = useRef(null)
+
+  useDialogFocus({
+    open,
+    containerRef,
+    initialRef,
+    onClose: () => setOpen(false),
+    restoreRef: fallbackRef,
+  })
+
+  return (
+    <>
+      <section
+        key={replacement ? 'replacement' : 'original'}
+        ref={fallbackRef}
+        data-testid={replacement ? 'replacement-fallback' : 'original-fallback'}
+        tabIndex={-1}
+      >
+        Reader fallback
+      </section>
+      {showOpener && <button onClick={() => setOpen(true)}>Open fallback dialog</button>}
+      {open && (
+        <div ref={containerRef} role="dialog" aria-label="Fallback dialog" tabIndex={-1}>
+          <button ref={initialRef} onClick={() => {
+            setReplacement(true)
+            setShowOpener(false)
+          }}>
+            Replace fallback and opener
+          </button>
+          <button onClick={() => setOpen(false)}>Close fallback dialog</button>
+        </div>
+      )}
+    </>
+  )
+}
+
 function ReopenRaceHarness({ firstRequest, secondRequest }) {
   const [open, setOpen] = useState(true)
   const calls = useRef(0)
@@ -645,6 +732,7 @@ describe('BookPicker', () => {
     const lowerDialog = screen.getByRole('dialog', { name: 'Lower dialog' })
     expect(screen.queryByRole('dialog', { name: 'Upper dialog' })).not.toBeInTheDocument()
     expect(lowerDialog).toContainElement(document.activeElement)
+    expect(screen.getByRole('button', { name: 'Lower dialog first' })).toHaveFocus()
   })
 
   it('lets only the top dialog trap Tab', async () => {
@@ -681,6 +769,37 @@ describe('BookPicker', () => {
     expect(screen.queryByRole('button', { name: 'Open temporary dialog' })).not.toBeInTheDocument()
     expect(screen.getByRole('main')).toHaveFocus()
     expect(screen.getByRole('button', { name: 'Unrelated page action' })).not.toHaveFocus()
+  })
+
+  it('preserves the original page opener when a lower dialog unmounts out of order', async () => {
+    const user = userEvent.setup()
+    const upperClose = vi.fn()
+    render(<RestoreChainHarness upperClose={upperClose} />)
+
+    const pageOpener = screen.getByRole('button', { name: 'Page dialog opener' })
+    await user.click(pageOpener)
+    await user.click(screen.getByRole('button', { name: 'Open chain upper' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove lower out of order' }))
+    expect(screen.queryByRole('dialog', { name: 'Chain lower' })).not.toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    expect(upperClose).toHaveBeenCalledOnce()
+    expect(pageOpener).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(upperClose).toHaveBeenCalledOnce()
+  })
+
+  it('uses the live replacement restore node when the opening fallback was removed', async () => {
+    const user = userEvent.setup()
+    render(<ReplacementFallbackHarness />)
+
+    await user.click(screen.getByRole('button', { name: 'Open fallback dialog' }))
+    await user.click(screen.getByRole('button', { name: 'Replace fallback and opener' }))
+    expect(screen.queryByTestId('original-fallback')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close fallback dialog' }))
+
+    expect(screen.getByTestId('replacement-fallback')).toHaveFocus()
   })
 
   it('moves focus through book, loading, chapter, and back transitions', async () => {

@@ -118,9 +118,19 @@ export default function useDialogFocus({
   useEffect(() => {
     if (!open) return undefined
 
-    const token = { containerRef }
+    const parentToken = topDialog()
     const opener = document.activeElement
-    const restoreTarget = restoreRef?.current
+    const token = {
+      containerRef,
+      opener,
+      parent: parentToken,
+      restoreChain: [
+        opener,
+        ...(parentToken?.restoreChain ?? []),
+      ],
+      restoreRef,
+      restoreSnapshot: restoreRef?.current,
+    }
     let active = true
     const initialWasUnavailable = !initialRef?.current
     dialogStack.push(token)
@@ -196,25 +206,59 @@ export default function useDialogFocus({
       const tokenIndex = dialogStack.indexOf(token)
       const wasTopDialog = tokenIndex === dialogStack.length - 1
       if (tokenIndex >= 0) dialogStack.splice(tokenIndex, 1)
-      if (!wasTopDialog) return
+
+      dialogStack.forEach((activeToken) => {
+        if (activeToken.parent === token) activeToken.parent = token.parent
+      })
+
+      if (!wasTopDialog) {
+        token.containerRef = null
+        token.opener = null
+        token.parent = null
+        token.restoreChain = []
+        token.restoreRef = null
+        token.restoreSnapshot = null
+        return
+      }
 
       const lowerDialog = topDialog()?.containerRef.current
       if (lowerDialog instanceof HTMLElement && lowerDialog.isConnected) {
-        lowerDialog.focus()
-        return
+        if (
+          token.opener instanceof HTMLElement
+          && token.opener.isConnected
+          && lowerDialog.contains(token.opener)
+        ) {
+          token.opener.focus()
+        } else {
+          const lowerTarget = focusableElements(lowerDialog)[0] ?? lowerDialog
+          lowerTarget.focus()
+        }
+      } else {
+        const ancestryTarget = token.restoreChain.find(
+          (candidate) => candidate instanceof HTMLElement && candidate.isConnected,
+        )
+        const liveRestoreTarget = token.restoreRef?.current
+        const fallback = ancestryTarget
+          ?? (
+            liveRestoreTarget instanceof HTMLElement && liveRestoreTarget.isConnected
+              ? liveRestoreTarget
+              : null
+          )
+          ?? (
+            token.restoreSnapshot instanceof HTMLElement && token.restoreSnapshot.isConnected
+              ? token.restoreSnapshot
+              : null
+          )
+          ?? stablePageTarget()
+        fallback?.focus()
       }
 
-      if (opener instanceof HTMLElement && opener.isConnected) {
-        opener.focus()
-        return
-      }
-
-      if (restoreTarget instanceof HTMLElement && restoreTarget.isConnected) {
-        restoreTarget.focus()
-        return
-      }
-
-      stablePageTarget()?.focus()
+      token.containerRef = null
+      token.opener = null
+      token.parent = null
+      token.restoreChain = []
+      token.restoreRef = null
+      token.restoreSnapshot = null
     }
   }, [containerRef, initialRef, open, restoreRef])
 }
