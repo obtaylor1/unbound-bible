@@ -42,6 +42,96 @@
   outline-offset: 3px;
 }
 
+.reader-status,
+.reader-fatal-error {
+  box-sizing: border-box;
+  width: min(100%, 44rem);
+  margin-inline: auto;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  color: var(--reader-text);
+  background: var(--reader-surface);
+  border: 1px solid var(--reader-border);
+  border-radius: 1rem;
+}
+
+.reader-status h2,
+.reader-fatal-error h1 {
+  margin: 0;
+  color: var(--reader-text);
+  line-height: 1.2;
+}
+
+.reader-status p,
+.reader-fatal-error p {
+  max-width: 60ch;
+  margin: 0.75rem 0 0;
+  color: var(--reader-secondary);
+  line-height: 1.6;
+}
+
+.reader-status--loading {
+  text-align: center;
+}
+
+.reader-status--offline {
+  border-inline-start: 0.35rem solid var(--reader-gold);
+}
+
+.reader-status--error,
+.reader-fatal-error {
+  border-inline-start: 0.35rem solid var(--reader-danger);
+}
+
+.reader-status__actions,
+.reader-fatal-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.reader-status button,
+.reader-fatal-error button,
+.reader-fatal-error a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0.65rem 1rem;
+  color: var(--reader-text);
+  background: var(--reader-primary);
+  border: 1px solid var(--reader-violet);
+  border-radius: 0.65rem;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.reader-status__actions button + button,
+.reader-fatal-error a {
+  color: var(--reader-text);
+  background: var(--reader-elevated);
+  border-color: var(--reader-border);
+}
+
+.reader-status button:hover,
+.reader-fatal-error button:hover,
+.reader-fatal-error a:hover {
+  border-color: var(--reader-teal);
+}
+
+.reader-fatal-error__eyebrow {
+  color: var(--reader-danger);
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .scripture-reader *,
   .scripture-reader *::before,
