@@ -2,10 +2,10 @@ import { useEffect, useRef } from 'react'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled]):not([type="hidden"])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
+  'button',
+  'input:not([type="hidden"])',
+  'select',
+  'textarea',
   'details > summary:first-of-type',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
@@ -13,7 +13,33 @@ const FOCUSABLE_SELECTOR = [
 let scrollLockCount = 0
 let originalBodyOverflow = ''
 
-function isVisible(element) {
+function isDisabledByFieldset(element) {
+  let fieldset = element.closest('fieldset[disabled]')
+
+  while (fieldset) {
+    const firstLegend = [...fieldset.children].find(
+      (child) => child.tagName === 'LEGEND',
+    )
+    if (!firstLegend?.contains(element)) return true
+    fieldset = fieldset.parentElement?.closest('fieldset[disabled]')
+  }
+
+  return false
+}
+
+function isEligibleFocusable(element, container) {
+  if (
+    !(element instanceof HTMLElement)
+    || !(container instanceof HTMLElement)
+    || !container.contains(element)
+    || !element.matches(FOCUSABLE_SELECTOR)
+    || element.matches(':disabled')
+    || element.getAttribute('aria-disabled') === 'true'
+    || element.closest('[aria-disabled="true"]')
+    || element.closest('[inert]')
+    || isDisabledByFieldset(element)
+  ) return false
+
   let current = element
 
   while (current instanceof HTMLElement) {
@@ -27,7 +53,9 @@ function isVisible(element) {
 }
 
 function focusableElements(container) {
-  return [...container.querySelectorAll(FOCUSABLE_SELECTOR)].filter(isVisible)
+  if (!(container instanceof HTMLElement)) return []
+  return [...container.querySelectorAll(FOCUSABLE_SELECTOR)]
+    .filter((element) => isEligibleFocusable(element, container))
 }
 
 function lockBackgroundScroll() {
@@ -52,10 +80,7 @@ export default function useDialogFocus({
   onClose,
 }) {
   const onCloseRef = useRef(onClose)
-
-  useEffect(() => {
-    onCloseRef.current = onClose
-  }, [onClose])
+  onCloseRef.current = onClose
 
   useEffect(() => {
     if (!open) return undefined
@@ -67,11 +92,13 @@ export default function useDialogFocus({
 
     const focusInitialControl = () => {
       const container = containerRef.current
+      if (!(container instanceof HTMLElement)) return
+
       const initialControl = initialRef?.current
-      const target = initialControl && container?.contains(initialControl)
+      const target = isEligibleFocusable(initialControl, container)
         ? initialControl
-        : focusableElements(container ?? document.body)[0]
-      target?.focus()
+        : (focusableElements(container)[0] ?? container)
+      target.focus()
     }
 
     focusInitialControl()

@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
-import { useState } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useRef, useState } from 'react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import BookPicker from './BookPicker'
+import useDialogFocus from './useDialogFocus'
 
 const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
 
@@ -32,6 +33,86 @@ function PickerHarness({ initiallyOpen = true, ...props }) {
         loadChapters={() => [1, 2, 3]}
         onClose={() => setOpen(false)}
         {...props}
+      />
+    </>
+  )
+}
+
+function DialogFocusHarness({
+  onClose,
+  initialKind = 'valid',
+  controls = 'many',
+  fireEscapeDuringRender = false,
+  withContainer = true,
+}) {
+  const containerRef = useRef(null)
+  const initialRef = useRef(null)
+
+  useDialogFocus({
+    open: true,
+    containerRef,
+    initialRef,
+    onClose,
+  })
+
+  if (fireEscapeDuringRender) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  }
+
+  if (!withContainer) {
+    return <button data-testid="outside-focus-target">Outside the missing dialog</button>
+  }
+
+  let initialControl = <button ref={initialRef}>Initial control</button>
+  if (initialKind === 'hidden') {
+    initialControl = <span hidden><button ref={initialRef}>Hidden initial control</button></span>
+  } else if (initialKind === 'aria-hidden') {
+    initialControl = (
+      <span aria-hidden="true">
+        <button ref={initialRef}>Aria-hidden initial control</button>
+      </span>
+    )
+  } else if (initialKind === 'disabled') {
+    initialControl = <button ref={initialRef} disabled>Disabled initial control</button>
+  } else if (initialKind === 'inert') {
+    initialControl = <span inert><button ref={initialRef}>Inert initial control</button></span>
+  } else if (initialKind === 'disabled-fieldset') {
+    initialControl = (
+      <fieldset disabled>
+        <button ref={initialRef}>Fieldset initial control</button>
+      </fieldset>
+    )
+  }
+
+  return (
+    <>
+      {initialKind === 'outside' && (
+        <button ref={initialRef}>Outside initial control</button>
+      )}
+      <div ref={containerRef} data-testid="focus-dialog" tabIndex={-1}>
+        {controls !== 'zero' && initialKind !== 'outside' && initialControl}
+        {controls === 'many' && <button>Fallback control</button>}
+      </div>
+    </>
+  )
+}
+
+function ReopenRaceHarness({ firstRequest, secondRequest }) {
+  const [open, setOpen] = useState(true)
+  const calls = useRef(0)
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)}>Reopen picker</button>
+      <BookPicker
+        open={open}
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={() => {
+          calls.current += 1
+          return calls.current === 1 ? firstRequest.promise : secondRequest.promise
+        }}
+        onClose={() => setOpen(false)}
       />
     </>
   )
@@ -248,6 +329,151 @@ describe('BookPicker', () => {
     )
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('uses the latest close callback before passive effects run', () => {
+    const firstClose = vi.fn()
+    const latestClose = vi.fn()
+    const { rerender } = render(<DialogFocusHarness onClose={firstClose} />)
+
+    rerender(
+      <DialogFocusHarness
+        onClose={latestClose}
+        fireEscapeDuringRender
+      />,
+    )
+
+    expect(latestClose).toHaveBeenCalledOnce()
+    expect(firstClose).not.toHaveBeenCalled()
+  })
+
+  it.each(['hidden', 'aria-hidden', 'disabled', 'inert', 'disabled-fieldset', 'outside'])(
+    'skips a %s initial target and focuses the eligible fallback',
+    (initialKind) => {
+      render(
+        <DialogFocusHarness
+          initialKind={initialKind}
+          onClose={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByRole('button', { name: 'Fallback control' })).toHaveFocus()
+    },
+  )
+
+  it('focuses the dialog itself and safely contains Tab when it has no eligible controls', async () => {
+    const user = userEvent.setup()
+    render(
+      <DialogFocusHarness
+        controls="zero"
+        onClose={vi.fn()}
+      />,
+    )
+
+    const dialog = screen.getByTestId('focus-dialog')
+    expect(dialog).toHaveFocus()
+    await user.tab()
+    expect(dialog).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(dialog).toHaveFocus()
+  })
+
+  it('keeps forward and backward Tab on the sole eligible control', async () => {
+    const user = userEvent.setup()
+    render(
+      <DialogFocusHarness
+        controls="one"
+        onClose={vi.fn()}
+      />,
+    )
+
+    const control = screen.getByRole('button', { name: 'Initial control' })
+    expect(control).toHaveFocus()
+    await user.tab()
+    expect(control).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(control).toHaveFocus()
+  })
+
+  it('does not focus outside the dialog when its container is missing', () => {
+    render(
+      <DialogFocusHarness
+        withContainer={false}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('outside-focus-target')).not.toHaveFocus()
+    expect(document.body).toHaveFocus()
+  })
+
+  it('invalidates a pending request before calling close from the close button', async () => {
+    const user = userEvent.setup()
+    const request = deferred()
+    const onClose = vi.fn()
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={() => request.promise}
+        onClose={onClose}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Close book picker' }))
+    expect(onClose).toHaveBeenCalledOnce()
+
+    await act(async () => request.resolve([99]))
+    expect(screen.queryByRole('button', { name: 'Chapter 99' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Genesis' })).toBeInTheDocument()
+  })
+
+  it('invalidates a pending rejection before calling close from Escape', async () => {
+    const user = userEvent.setup()
+    const request = deferred()
+    const onClose = vi.fn()
+    render(
+      <BookPicker
+        open
+        books={['Genesis']}
+        selectedCanon="PROT66"
+        loadChapters={() => request.promise}
+        onClose={onClose}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledOnce()
+
+    await act(async () => request.reject(new Error('late failure')))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Genesis' })).toBeInTheDocument()
+  })
+
+  it('keeps an old session response out of a reopened picker', async () => {
+    const user = userEvent.setup()
+    const firstRequest = deferred()
+    const secondRequest = deferred()
+    render(
+      <ReopenRaceHarness
+        firstRequest={firstRequest}
+        secondRequest={secondRequest}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Close book picker' }))
+    await user.click(screen.getByRole('button', { name: 'Reopen picker' }))
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await act(async () => secondRequest.resolve([2]))
+    expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeInTheDocument()
+
+    await act(async () => firstRequest.resolve([99]))
+    expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Chapter 99' })).not.toBeInTheDocument()
   })
 
   it('does not update after closing and supports back navigation during loading', async () => {

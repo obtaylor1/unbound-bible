@@ -55,17 +55,34 @@ export default function BookPicker({
   const mountedRef = useRef(true)
   const openRef = useRef(open)
   const requestSequence = useRef(0)
+  const renderedOpenRef = useRef(open)
   const wasOpenRef = useRef(false)
   const [query, setQuery] = useState('')
   const [selectedBook, setSelectedBook] = useState(null)
   const [chapters, setChapters] = useState([])
   const [chapterState, setChapterState] = useState('idle')
 
+  if (renderedOpenRef.current !== open) {
+    renderedOpenRef.current = open
+    requestSequence.current += 1
+  }
+  openRef.current = open
+
+  const closePicker = () => {
+    openRef.current = false
+    requestSequence.current += 1
+    setQuery('')
+    setSelectedBook(null)
+    setChapters([])
+    setChapterState('idle')
+    if (typeof onClose === 'function') onClose()
+  }
+
   useDialogFocus({
     open,
     containerRef: dialogRef,
     initialRef: searchRef,
-    onClose,
+    onClose: closePicker,
   })
 
   useEffect(() => {
@@ -77,9 +94,6 @@ export default function BookPicker({
   }, [])
 
   useEffect(() => {
-    openRef.current = open
-    requestSequence.current += 1
-
     if (open && !wasOpenRef.current) {
       setQuery('')
       setSelectedBook(null)
@@ -157,9 +171,7 @@ export default function BookPicker({
     <div
       className="book-picker"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && typeof onClose === 'function') {
-          onClose()
-        }
+        if (event.target === event.currentTarget) closePicker()
       }}
     >
       <aside
@@ -179,9 +191,7 @@ export default function BookPicker({
             className="book-picker__close book-picker__control"
             type="button"
             aria-label="Close book picker"
-            onClick={() => {
-              if (typeof onClose === 'function') onClose()
-            }}
+            onClick={closePicker}
           >
             <span aria-hidden="true">×</span>
           </button>
