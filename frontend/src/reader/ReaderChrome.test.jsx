@@ -1,9 +1,28 @@
+import { readFileSync } from 'node:fs'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext } from '../auth/authContext'
 import { ReaderPreferencesProvider } from './ReaderPreferences'
 import PassageToolbar from './PassageToolbar'
 import ReaderHeader from './ReaderHeader'
+
+const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
+
+function cssDeclarations(selector) {
+  return Object.fromEntries(
+    [...readerTokensCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selectorList]) => (
+        selectorList
+          .split(',')
+          .map((item) => item.trim())
+          .includes(selector)
+      ))
+      .flatMap(([, , declarations]) => (
+        [...declarations.matchAll(/^\s*([\w-]+):\s*([^;]+);/gm)]
+      ))
+      .map(([, property, value]) => [property, value.trim()]),
+  )
+}
 
 function renderHeader(authValue = { user: null, status: 'anonymous' }, props = {}) {
   const callbacks = {
@@ -86,10 +105,34 @@ describe('ReaderHeader', () => {
 
     const accountButton = screen.getByRole('button', { name: 'Miriam' })
     expect(accountButton).toHaveAttribute('aria-expanded', 'false')
+    expect(within(accountButton).getByText('Miriam')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
 
     fireEvent.click(accountButton)
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+  })
+
+  it('keeps mobile actions wrapping so the account popover is not clipped', () => {
+    const mobileActions = cssDeclarations('.reader-header__actions')
+
+    expect(mobileActions['flex-wrap']).toBe('wrap')
+    expect(mobileActions['overflow-x']).toBeUndefined()
+  })
+
+  it('overrides narrow navigation styles for the reader account trigger and username', () => {
+    const accountTrigger = cssDeclarations('.reader-header__actions .nav-signin')
+    const username = cssDeclarations(
+      '.reader-header__actions .nav-signin span:last-child',
+    )
+
+    expect(accountTrigger['min-width']).toBe('48px')
+    expect(accountTrigger['min-height']).toBe('48px')
+    expect(accountTrigger.width).toBe('auto')
+    expect(username.position).toBe('static')
+    expect(username.width).toBe('auto')
+    expect(username.height).toBe('auto')
+    expect(username.overflow).toBe('visible')
+    expect(username.clip).toBe('auto')
   })
 })
 

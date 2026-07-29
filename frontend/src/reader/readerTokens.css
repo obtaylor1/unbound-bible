@@ -375,10 +375,24 @@
   }
 
   .reader-header__actions {
+    flex-wrap: wrap;
     justify-content: flex-start;
-    overflow-x: auto;
     padding-bottom: 0.25rem;
-    overscroll-behavior-inline: contain;
+  }
+
+  .reader-header__actions .nav-signin {
+    width: auto;
+    min-width: 48px;
+    min-height: 48px;
+    justify-content: flex-start;
+  }
+
+  .reader-header__actions .nav-signin span:last-child {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
   }
 
   .passage-toolbar {
