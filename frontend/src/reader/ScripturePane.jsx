@@ -7,7 +7,7 @@ function normalizedVerses(verses) {
 
   const keyOccurrences = new Map()
 
-  return verses.flatMap((row) => {
+  return verses.flatMap((row, sourceIndex) => {
     const verse = row?.verse
     const text = typeof row?.text === 'string' ? row.text.trim() : ''
 
@@ -15,22 +15,41 @@ function normalizedVerses(verses) {
       return []
     }
 
-    const sourceId = ['string', 'number'].includes(typeof row.id)
-      ? row.id
-      : null
-    const translation = ['string', 'number'].includes(typeof row.translation)
+    const hasSourceId = ['string', 'number'].includes(typeof row.id)
+    const translationType = typeof row.translation
+    const translation = ['string', 'number'].includes(translationType)
       ? row.translation
       : null
-    const keyBase = JSON.stringify([sourceId, translation, verse, text])
+    const keyBase = hasSourceId
+      ? `id:${typeof row.id}:${JSON.stringify(row.id)}`
+      : `translation:${translationType}:${JSON.stringify(translation)}:verse:${verse}`
     const occurrence = keyOccurrences.get(keyBase) ?? 0
     keyOccurrences.set(keyBase, occurrence + 1)
 
     return [{
       key: `${keyBase}-${occurrence}`,
+      sourceIndex,
       verse,
       text,
     }]
   })
+}
+
+function VerseContent({ reference, row, referenceId, textId }) {
+  return (
+    <>
+      <span
+        id={referenceId}
+        className="scripture-pane__verse-reference"
+      >
+        {`${reference} verse ${row.verse}`}
+      </span>
+      <span className="scripture-pane__verse-number" aria-hidden="true">
+        {row.verse}
+      </span>
+      <span id={textId} className="scripture-pane__verse-text">{row.text}</span>
+    </>
+  )
 }
 
 export default function ScripturePane({
@@ -41,6 +60,7 @@ export default function ScripturePane({
   onSelectVerse,
 }) {
   const headingId = `scripture-pane-heading-${useId()}`
+  const verseLabelPrefix = `scripture-pane-verse-${useId()}`
   const displayBook = typeof book === 'string' && book.trim()
     ? book.trim()
     : 'Scripture'
@@ -58,27 +78,35 @@ export default function ScripturePane({
       </header>
 
       <ol className="scripture-pane__verses" role="list">
-        {normalizedVerses(verses).map((row) => (
-          <li key={row.key}>
-            <button
-              type="button"
-              className="scripture-pane__verse"
-              aria-label={`${reference} verse ${row.verse}`}
-              aria-pressed={selectedVerse === row.verse}
-              aria-disabled={!canSelect}
-              onClick={() => {
-                if (canSelect) {
-                  onSelectVerse(row.verse)
-                }
-              }}
-            >
-              <span className="scripture-pane__verse-number" aria-hidden="true">
-                {row.verse}
-              </span>
-              <span className="scripture-pane__verse-text">{row.text}</span>
-            </button>
-          </li>
-        ))}
+        {normalizedVerses(verses).map((row) => {
+          const referenceId = `${verseLabelPrefix}-reference-${row.sourceIndex}`
+          const textId = `${verseLabelPrefix}-text-${row.sourceIndex}`
+
+          return (
+            <li key={row.key}>
+              {canSelect ? (
+                <button
+                  type="button"
+                  className="scripture-pane__verse"
+                  aria-labelledby={`${referenceId} ${textId}`}
+                  aria-pressed={selectedVerse === row.verse}
+                  onClick={() => onSelectVerse(row.verse)}
+                >
+                  <VerseContent
+                    reference={reference}
+                    row={row}
+                    referenceId={referenceId}
+                    textId={textId}
+                  />
+                </button>
+              ) : (
+                <div className="scripture-pane__verse scripture-pane__verse--static">
+                  <VerseContent reference={reference} row={row} />
+                </div>
+              )}
+            </li>
+          )
+        })}
       </ol>
     </article>
   )

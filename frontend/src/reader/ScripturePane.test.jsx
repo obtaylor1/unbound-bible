@@ -9,28 +9,38 @@ const readerStyle = document.createElement('style')
 readerStyle.textContent = readerTokensCss
 document.head.append(readerStyle)
 
-function cssDeclarations(selector) {
+function cssDeclarations(selector, {
+  mediaCondition,
+  sheet = readerStyle.sheet,
+} = {}) {
   const matchingRules = []
 
-  function visitRules(rules) {
+  function visitRules(rules, mediaStack = []) {
     for (const rule of rules) {
       if ('selectorText' in rule) {
         const selectors = rule.selectorText
           .split(',')
           .map((item) => item.trim())
 
-        if (selectors.includes(selector)) {
+        const mediaMatches = mediaCondition
+          ? mediaStack.includes(mediaCondition)
+          : mediaStack.length === 0
+
+        if (selectors.includes(selector) && mediaMatches) {
           matchingRules.push(rule)
         }
       }
 
       if ('cssRules' in rule) {
-        visitRules(rule.cssRules)
+        const nextMediaStack = 'conditionText' in rule
+          ? [...mediaStack, rule.conditionText]
+          : mediaStack
+        visitRules(rule.cssRules, nextMediaStack)
       }
     }
   }
 
-  visitRules(readerStyle.sheet.cssRules)
+  visitRules(sheet.cssRules)
 
   return Object.fromEntries(
     matchingRules.flatMap((rule) => (
@@ -120,11 +130,21 @@ describe('ScripturePane', () => {
     )
 
     const firstVerse = screen.getByRole('button', {
-      name: 'John 1 verse 1',
+      name: /^John 1 verse 1\b/,
     })
 
     expect(firstVerse).toHaveTextContent('1')
     expect(firstVerse).toHaveTextContent('In the beginning was the Word.')
+    expect(firstVerse).toHaveAccessibleName(
+      'John 1 verse 1 In the beginning was the Word.',
+    )
+    expect(firstVerse).not.toHaveAttribute('aria-label')
+    const labelIds = firstVerse.getAttribute('aria-labelledby').split(' ')
+    expect(labelIds).toHaveLength(2)
+    expect(document.getElementById(labelIds[0])).toHaveTextContent('John 1 verse 1')
+    expect(document.getElementById(labelIds[1])).toHaveTextContent(
+      'In the beginning was the Word.',
+    )
     expect(within(firstVerse).getByText('1')).toHaveAttribute('aria-hidden', 'true')
 
     await user.click(firstVerse)
@@ -143,7 +163,7 @@ describe('ScripturePane', () => {
       />,
     )
 
-    const firstVerse = screen.getByRole('button', { name: 'John 1 verse 1' })
+    const firstVerse = screen.getByRole('button', { name: /^John 1 verse 1\b/ })
     firstVerse.focus()
     await user.keyboard('{Enter}')
     await user.keyboard(' ')
@@ -163,11 +183,11 @@ describe('ScripturePane', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: 'John 1 verse 1' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^John 1 verse 1\b/ })).toHaveAttribute(
       'aria-pressed',
       'false',
     )
-    expect(screen.getByRole('button', { name: 'John 1 verse 2' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^John 1 verse 2\b/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
@@ -195,9 +215,11 @@ describe('ScripturePane', () => {
 
     const controls = screen.getAllByRole('button')
     expect(controls).toHaveLength(2)
-    expect(controls.map((control) => control.textContent)).toEqual([
-      '1First rendering.',
-      '1Second rendering.',
+    expect(controls.map((control) => (
+      within(control).getByText(/rendering\.$/).textContent
+    ))).toEqual([
+      'First rendering.',
+      'Second rendering.',
     ])
     expect(container).not.toHaveTextContent('[object Object]')
   })
@@ -212,7 +234,9 @@ describe('ScripturePane', () => {
         onSelectVerse={onSelectVerse}
       />,
     )
-    const originalFirstVerse = screen.getByRole('button', { name: 'John 1 verse 1' })
+    const originalFirstVerse = screen.getByRole('button', {
+      name: /^John 1 verse 1\b/,
+    })
 
     rerender(
       <ScripturePane
@@ -226,9 +250,43 @@ describe('ScripturePane', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: 'John 1 verse 1' })).toBe(
+    expect(screen.getByRole('button', { name: /^John 1 verse 1\b/ })).toBe(
       originalFirstVerse,
     )
+  })
+
+  it('retains a focused verse control when text changes for the same source id', () => {
+    const onSelectVerse = vi.fn()
+    const { rerender } = render(
+      <ScripturePane
+        book="John"
+        chapter={1}
+        verses={verses}
+        onSelectVerse={onSelectVerse}
+      />,
+    )
+    const originalFirstVerse = screen.getByRole('button', {
+      name: /^John 1 verse 1\b/,
+    })
+    originalFirstVerse.focus()
+
+    rerender(
+      <ScripturePane
+        book="John"
+        chapter={1}
+        verses={[
+          { ...verses[0], text: 'The Word was present at creation.' },
+          verses[1],
+        ]}
+        onSelectVerse={onSelectVerse}
+      />,
+    )
+
+    const updatedFirstVerse = screen.getByRole('button', {
+      name: 'John 1 verse 1 The Word was present at creation.',
+    })
+    expect(updatedFirstVerse).toBe(originalFirstVerse)
+    expect(updatedFirstVerse).toHaveFocus()
   })
 
   it.each([
@@ -241,24 +299,35 @@ describe('ScripturePane', () => {
     expect(screen.getByRole('article')).not.toHaveTextContent(/no text|empty/i)
   })
 
-  it('keeps verse controls safely readable when selection is unavailable', async () => {
-    const user = userEvent.setup()
+  it('renders readable noninteractive verses when selection is unavailable', () => {
     render(<ScripturePane book="John" chapter={1} verses={verses} />)
 
-    const firstVerse = screen.getByRole('button', { name: 'John 1 verse 1' })
-    expect(firstVerse).toHaveAttribute('aria-disabled', 'true')
-
-    firstVerse.focus()
-    await user.keyboard('{Enter}')
-    await user.keyboard(' ')
-    expect(firstVerse).toHaveFocus()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    const firstVerse = screen.getByText('In the beginning was the Word.').closest('div')
+    expect(firstVerse).toHaveClass(
+      'scripture-pane__verse',
+      'scripture-pane__verse--static',
+    )
+    expect(firstVerse).not.toHaveAttribute('tabindex')
+    expect(firstVerse).not.toHaveAttribute('aria-pressed')
+    expect(firstVerse).toHaveTextContent('John 1 verse 1')
   })
 
   it('creates unique heading references for simultaneous panes', () => {
     render(
       <>
-        <ScripturePane book="John" chapter={1} verses={[]} />
-        <ScripturePane book="John" chapter={1} verses={[]} />
+        <ScripturePane
+          book="John"
+          chapter={1}
+          verses={[verses[0]]}
+          onSelectVerse={vi.fn()}
+        />
+        <ScripturePane
+          book="John"
+          chapter={1}
+          verses={[verses[0]]}
+          onSelectVerse={vi.fn()}
+        />
       </>,
     )
 
@@ -269,11 +338,37 @@ describe('ScripturePane', () => {
     headingIds.forEach((headingId) => {
       expect(document.getElementById(headingId)).toBeInstanceOf(HTMLHeadingElement)
     })
+
+    const verseLabelIds = screen.getAllByRole('button')
+      .flatMap((button) => button.getAttribute('aria-labelledby').split(' '))
+    expect(new Set(verseLabelIds)).toHaveProperty('size', verseLabelIds.length)
   })
 })
 
 describe('ScripturePane reading styles', () => {
-  it('defines comfortable and wide reading measures without horizontal overflow', () => {
+  it('ignores inactive media declarations unless their condition is requested', () => {
+    const mediaStyle = document.createElement('style')
+    mediaStyle.textContent = `
+      .media-fixture { width: 46rem; }
+      @media (max-width: 1px) {
+        .media-fixture { width: 12rem; }
+      }
+    `
+    document.head.append(mediaStyle)
+
+    expect(cssDeclarations('.media-fixture', {
+      sheet: mediaStyle.sheet,
+    }).width).toBe('46rem')
+    expect(cssDeclarations('.media-fixture', {
+      mediaCondition: '(max-width: 1px)',
+      sheet: mediaStyle.sheet,
+    }).width).toBe('12rem')
+
+    mediaStyle.remove()
+  })
+
+  it('declares comfortable and wide reading-measure contracts', () => {
+    // Computed viewport geometry is exercised with a real layout engine in Task 9.
     const pane = cssDeclarations('.scripture-pane')
     const widePane = cssDeclarations('.reader-width-wide .scripture-pane')
     const list = cssDeclarations('.scripture-pane__verses')
@@ -303,10 +398,12 @@ describe('ScripturePane reading styles', () => {
   it('uses reading typography and spacious, visibly selected verse targets', () => {
     const pane = cssDeclarations('.scripture-pane')
     const verse = cssDeclarations('.scripture-pane__verse')
-    const verseInteraction = cssDeclarations('.scripture-pane__verse:hover')
+    const verseInteraction = cssDeclarations('button.scripture-pane__verse:hover')
+    const staticVerse = cssDeclarations('.scripture-pane__verse--static')
     const selected = cssDeclarations(".scripture-pane__verse[aria-pressed='true']")
     const eyebrow = cssDeclarations('.scripture-pane__eyebrow')
     const verseNumber = cssDeclarations('.scripture-pane__verse-number')
+    const hiddenReference = cssDeclarations('.scripture-pane__verse-reference')
 
     expect(pane['font-family']).toContain('Source Serif 4')
     expect(pane['font-family']).toContain('Georgia')
@@ -317,12 +414,15 @@ describe('ScripturePane reading styles', () => {
     expect(verse['overflow-wrap']).toBe('anywhere')
     expect(verseInteraction.background).toBe('var(--reader-surface)')
     expect(verseInteraction['border-color']).toBe('var(--reader-teal)')
+    expect(staticVerse.cursor).toBe('default')
     expect(selected.background).toBe('var(--reader-elevated)')
     expect(selected['box-shadow']).toContain('var(--reader-violet)')
     expect(Number.parseInt(selected['font-weight'], 10)).toBeGreaterThanOrEqual(600)
     expect(eyebrow.color).toBe('var(--reader-secondary)')
     expect(verseNumber.color).toBe('var(--reader-violet)')
     expect(Number.parseInt(verseNumber['font-weight'], 10)).toBeGreaterThanOrEqual(700)
+    expect(hiddenReference.position).toBe('absolute')
+    expect(hiddenReference.width).toBe('1px')
   })
 
   it('keeps selected text and inset accent distinguishable in both themes', () => {

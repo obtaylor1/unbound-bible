@@ -438,13 +438,13 @@
   cursor: pointer;
 }
 
-.scripture-pane__verse:hover,
-.scripture-pane__verse:focus-visible {
+button.scripture-pane__verse:hover,
+button.scripture-pane__verse:focus-visible {
   background: var(--reader-surface);
   border-color: var(--reader-teal);
 }
 
-.scripture-pane__verse[aria-disabled='true'] {
+.scripture-pane__verse--static {
   cursor: default;
 }
 
@@ -467,6 +467,15 @@
 
 .scripture-pane__verse-text {
   min-width: 0;
+}
+
+.scripture-pane__verse-reference {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .scripture-reader .auth-backdrop {
