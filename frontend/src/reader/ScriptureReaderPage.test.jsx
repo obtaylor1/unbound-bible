@@ -254,6 +254,24 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
   })
 
+  it('preserves an established empty passage across offline and online events', async () => {
+    getChapter.mockResolvedValueOnce([])
+    renderReader()
+    expect(await screen.findByRole('heading', {
+      name: 'No text available',
+    })).toBeInTheDocument()
+
+    fireEvent(window, new Event('offline'))
+    expect(screen.getByRole('heading', { name: 'No text available' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', {
+      name: 'Scripture unavailable offline',
+    })).not.toBeInTheDocument()
+
+    fireEvent(window, new Event('online'))
+    expect(screen.getByRole('heading', { name: 'No text available' })).toBeInTheDocument()
+    expect(getChapter).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves only the current loaded passage under a compact offline recovery banner', async () => {
     const user = userEvent.setup()
     renderReader()

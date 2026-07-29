@@ -200,7 +200,9 @@ export default function ScriptureReaderPage({
   ])
 
   useEffect(() => {
-    const markOffline = () => setStatus('offline')
+    const markOffline = () => {
+      setStatus((current) => current === 'empty' ? current : 'offline')
+    }
     window.addEventListener('offline', markOffline)
     return () => window.removeEventListener('offline', markOffline)
   }, [])
