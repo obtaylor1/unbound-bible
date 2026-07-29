@@ -74,15 +74,43 @@ describe('ReaderStatus', () => {
   })
 
   it('explains offline limitations without implying loaded Scripture is lost', () => {
-    render(<ReaderStatus state="offline" reference="John 3" />)
+    render(
+      <ReaderStatus
+        state="offline"
+        reference="John 3"
+        hasLoadedContent
+        compact
+        onRetry={vi.fn()}
+      />,
+    )
 
     expect(screen.getByRole('status')).toHaveTextContent(/offline/i)
-    expect(screen.getByRole('status')).toHaveTextContent(/already-loaded Scripture remains available/i)
+    expect(screen.getByRole('status')).toHaveTextContent(/loaded Scripture remains available/i)
     expect(screen.getByRole('status')).toHaveTextContent(/online study tools may not work/i)
     expect(screen.getByRole('heading', {
-      level: 1,
+      level: 2,
       name: 'You’re offline',
     })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  it('truthfully reports an initial offline failure and offers recovery', () => {
+    const onRetry = vi.fn()
+    render(
+      <ReaderStatus
+        state="offline"
+        reference="John 3"
+        onRetry={onRetry}
+      />,
+    )
+
+    const status = screen.getByRole('status', {
+      name: 'Scripture unavailable offline',
+    })
+    expect(status).toHaveTextContent(/could not load John 3 while you’re offline/i)
+    expect(status).not.toHaveTextContent(/remains available/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(onRetry).toHaveBeenCalledOnce()
   })
 
   it('offers the Books action when no passage text is available', () => {
@@ -154,7 +182,7 @@ describe('ReaderStatus', () => {
     const surfaces = [
       ...screen.getAllByRole('region', { name: 'No text available' }),
       ...screen.getAllByRole('alert'),
-      ...screen.getAllByRole('status', { name: 'You’re offline' }),
+      ...screen.getAllByRole('status', { name: 'Scripture unavailable offline' }),
     ]
     const headingIds = surfaces.map((surface) => surface.getAttribute('aria-labelledby'))
 

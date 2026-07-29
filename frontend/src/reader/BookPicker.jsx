@@ -43,8 +43,10 @@ function normalizeChapters(chapters) {
 export default function BookPicker({
   open,
   books,
+  booksStatus = 'ready',
   selectedCanon,
   loadChapters,
+  onRetryBooks,
   onCanonChange,
   onChoose,
   onClose,
@@ -62,6 +64,7 @@ export default function BookPicker({
   const committedOpenRef = useRef(open)
   const previousCanonRef = useRef(canonValue)
   const requestSequence = useRef(0)
+  const requestControllerRef = useRef(null)
   const wasOpenRef = useRef(false)
   const focusIntentRef = useRef(null)
   const [query, setQuery] = useState('')
@@ -70,6 +73,8 @@ export default function BookPicker({
   const [chapterState, setChapterState] = useState('idle')
 
   const closePicker = () => {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
@@ -91,6 +96,8 @@ export default function BookPicker({
 
     committedOpenRef.current = open
     openRef.current = open
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     requestSequence.current += 1
   }, [open])
 
@@ -100,6 +107,8 @@ export default function BookPicker({
     previousCanonRef.current = canonValue
     if (!open) return
 
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
@@ -140,6 +149,8 @@ export default function BookPicker({
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      requestControllerRef.current?.abort()
+      requestControllerRef.current = null
       requestSequence.current += 1
     }
   }, [])
@@ -161,6 +172,9 @@ export default function BookPicker({
     book.toLocaleLowerCase().includes(normalizedQuery)
   ))
   const chooseBook = async (book) => {
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     const requestId = requestSequence.current + 1
     requestSequence.current = requestId
     focusIntentRef.current = 'loading'
@@ -173,7 +187,7 @@ export default function BookPicker({
         throw new Error('No chapter loader is available')
       }
 
-      const loadedChapters = await loadChapters(book)
+      const loadedChapters = await loadChapters(book, controller.signal)
       if (
         !mountedRef.current
         || !openRef.current
@@ -192,10 +206,16 @@ export default function BookPicker({
 
       setChapters([])
       setChapterState('error')
+    } finally {
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null
+      }
     }
   }
 
   const backToBooks = () => {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setSelectedBook(null)
@@ -204,6 +224,8 @@ export default function BookPicker({
   }
 
   const changeCanon = (event) => {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
@@ -278,7 +300,24 @@ export default function BookPicker({
 
         {!selectedBook ? (
           <section className="book-picker__content" aria-label="Bible books">
-            {filteredBooks.length > 0 ? (
+            {booksStatus === 'loading' ? (
+              <p className="book-picker__message" role="status">
+                Loading Bible books…
+              </p>
+            ) : booksStatus === 'error' ? (
+              <div className="book-picker__message">
+                <p role="alert">Bible books could not load.</p>
+                {typeof onRetryBooks === 'function' && (
+                  <button
+                    className="book-picker__retry book-picker__control"
+                    type="button"
+                    onClick={onRetryBooks}
+                  >
+                    Try loading books again
+                  </button>
+                )}
+              </div>
+            ) : filteredBooks.length > 0 ? (
               <div className="book-picker__books">
                 {filteredBooks.map((book) => (
                   <button

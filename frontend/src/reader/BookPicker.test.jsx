@@ -399,6 +399,48 @@ describe('BookPicker', () => {
     expect(screen.getByText('No Bible books are available for this canon.')).toBeInTheDocument()
   })
 
+  it('distinguishes loading, failed, and genuinely empty book catalogs', async () => {
+    const user = userEvent.setup()
+    const retry = vi.fn()
+    const { rerender } = render(
+      <BookPicker
+        open
+        books={[]}
+        booksStatus="loading"
+        selectedCanon="PROT66"
+        onRetryBooks={retry}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Bible books')
+    expect(screen.queryByText(/No Bible books are available/)).not.toBeInTheDocument()
+
+    rerender(
+      <BookPicker
+        open
+        books={[]}
+        booksStatus="error"
+        selectedCanon="PROT66"
+        onRetryBooks={retry}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
+    await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
+    expect(retry).toHaveBeenCalledOnce()
+
+    rerender(
+      <BookPicker
+        open
+        books={[]}
+        booksStatus="ready"
+        selectedCanon="PROT66"
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('No Bible books are available for this canon.')).toBeInTheDocument()
+  })
+
   it('changes canon from a visibly labelled complete list and clears stale selection state', async () => {
     const user = userEvent.setup()
     const onCanonChange = vi.fn()
@@ -428,7 +470,7 @@ describe('BookPicker', () => {
     render(<PickerHarness loadChapters={loadChapters} onChoose={onChoose} />)
 
     await user.click(screen.getByRole('button', { name: 'Genesis' }))
-    expect(loadChapters).toHaveBeenCalledWith('Genesis')
+    expect(loadChapters).toHaveBeenCalledWith('Genesis', expect.any(AbortSignal))
     const chapterGrid = await screen.findByRole('group', { name: 'Genesis chapters' })
     expect(within(chapterGrid).getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Chapter 1',
@@ -469,6 +511,32 @@ describe('BookPicker', () => {
 
     await user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(await screen.findByRole('button', { name: 'Chapter 1' })).toBeInTheDocument()
+  })
+
+  it('aborts chapter loads on replacement, Back, close, and unmount', async () => {
+    const user = userEvent.setup()
+    const signals = []
+    const loadChapters = vi.fn((_, signal) => {
+      signals.push(signal)
+      return new Promise(() => {})
+    })
+    const { unmount } = render(
+      <PickerHarness loadChapters={loadChapters} />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    expect(signals[0].aborted).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'Back to books' }))
+    expect(signals[0].aborted).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Close book picker' }))
+    expect(signals[1].aborted).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Open picker' }))
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    unmount()
+    expect(signals[2].aborted).toBe(true)
   })
 
   it('turns a missing loader into an actionable failure and tolerates absent callbacks', async () => {

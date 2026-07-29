@@ -105,6 +105,47 @@
   border-inline-start: 0.35rem solid var(--reader-gold);
 }
 
+.reader-status--compact {
+  width: min(100%, 64rem);
+  padding: 0.8rem 1rem;
+}
+
+.reader-status--compact h2 {
+  font-size: 1rem;
+}
+
+.reader-status--compact p {
+  display: inline;
+  margin-inline-end: 1rem;
+}
+
+.reader-status--compact button {
+  min-height: 44px;
+  margin-top: 0.5rem;
+}
+
+.reader-metadata-status {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  box-sizing: border-box;
+  padding: 0.5rem 1rem;
+  color: var(--reader-text);
+  background: var(--reader-elevated);
+  border-bottom: 1px solid var(--reader-gold);
+}
+
+.reader-metadata-status button {
+  min-height: 44px;
+  padding: 0.4rem 0.75rem;
+  color: var(--reader-on-secondary-control);
+  background: var(--reader-secondary-control-background);
+  border: 1px solid var(--reader-secondary-control-border);
+  border-radius: 0.65rem;
+}
+
 .reader-status--error,
 .reader-fatal-error {
   border-inline-start: 0.35rem solid var(--reader-danger);

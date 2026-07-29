@@ -5,14 +5,20 @@ export default function ReaderStatus({
   reference,
   onRetry,
   onOpenBooks,
+  hasLoadedContent = false,
+  compact = false,
 }) {
   const headingId = useId()
 
   if (state === 'loading') {
     return (
-      <p className="reader-status reader-status--loading" role="status">
-        Loading {reference}…
-      </p>
+      <section
+        className="reader-status reader-status--loading"
+        role="status"
+        aria-labelledby={headingId}
+      >
+        <h1 id={headingId}>Loading {reference}…</h1>
+      </section>
     )
   }
 
@@ -33,17 +39,28 @@ export default function ReaderStatus({
   }
 
   if (state === 'offline') {
+    const Heading = compact && hasLoadedContent ? 'h2' : 'h1'
+    const heading = hasLoadedContent
+      ? 'You’re offline'
+      : 'Scripture unavailable offline'
     return (
       <section
-        className="reader-status reader-status--offline"
+        className={`reader-status reader-status--offline${compact ? ' reader-status--compact' : ''}`}
         role="status"
         aria-labelledby={headingId}
       >
-        <h1 id={headingId}>You’re offline</h1>
-        <p>
-          Already-loaded Scripture remains available, but online study tools may
-          not work until your connection returns.
-        </p>
+        <Heading id={headingId}>{heading}</Heading>
+        {hasLoadedContent ? (
+          <p>
+            Loaded Scripture remains available, but online study tools may not
+            work until your connection returns.
+          </p>
+        ) : (
+          <p>We could not load {reference} while you’re offline.</p>
+        )}
+        {typeof onRetry === 'function' && (
+          <button type="button" onClick={onRetry}>Try again</button>
+        )}
       </section>
     )
   }

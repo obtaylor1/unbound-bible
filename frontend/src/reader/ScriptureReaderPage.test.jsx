@@ -30,6 +30,9 @@ vi.mock('../search/SearchDialog', () => ({
       <button type="button" onClick={() => onNavigate('/#library')}>
         Open library result
       </button>
+      <button type="button" onClick={() => onNavigate('/share/public-study')}>
+        Open shared study
+      </button>
       <button type="button" onClick={onClose}>Close search</button>
     </div>
   ) : null,
@@ -185,6 +188,41 @@ describe('ScriptureReaderPage', () => {
     expect(screen.queryByText('Genesis stale.')).not.toBeInTheDocument()
   })
 
+  it('ignores stale books and chapter-number metadata after hash back/forward navigation', async () => {
+    const firstBooks = deferred()
+    const currentBooks = deferred()
+    const firstChapters = deferred()
+    const currentChapters = deferred()
+    getBooks
+      .mockReturnValueOnce(firstBooks.promise)
+      .mockReturnValueOnce(currentBooks.promise)
+      .mockResolvedValue(['Exodus'])
+    getBookChapters
+      .mockReturnValueOnce(firstChapters.promise)
+      .mockReturnValueOnce(currentChapters.promise)
+    getChapter.mockImplementation(({ book }) => Promise.resolve([
+      { verse: 1, translation: 'KJV', text: `${book} current.` },
+    ]))
+    renderReader()
+
+    window.location.hash = '#scriptures?book=Exodus&chapter=2&translation=KJV&canon=CATH73'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    currentBooks.resolve(['Exodus'])
+    currentChapters.resolve([2, 4])
+    expect(await screen.findByText('Exodus current.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
+
+    firstBooks.resolve(['Genesis'])
+    firstChapters.resolve([1, 3])
+    await Promise.resolve()
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a book' }))
+    expect(screen.getByRole('button', { name: 'Exodus' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Genesis' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close book picker' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next chapter' }))
+    expect(window.location.hash).toContain('chapter=4')
+  })
+
   it('uses actual adjacent chapters and disables chapter boundaries', async () => {
     renderReader()
     await screen.findByText('In the beginning.')
@@ -211,7 +249,40 @@ describe('ScriptureReaderPage', () => {
     vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false)
     getChapter.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     renderReader()
-    expect(await screen.findByRole('heading', { name: 'You’re offline' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Scripture unavailable offline' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+
+  it('preserves only the current loaded passage under a compact offline recovery banner', async () => {
+    const user = userEvent.setup()
+    renderReader()
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+
+    window.dispatchEvent(new Event('offline'))
+    expect(await screen.findByRole('heading', { level: 2, name: 'You’re offline' })).toBeInTheDocument()
+    expect(screen.getByText('In the beginning.')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+
+    getChapter.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+
+  it('never preserves loaded text after the passage route changes', async () => {
+    renderReader()
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    getChapter.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    window.location.hash = '#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByRole('heading', {
+      name: 'Scripture unavailable offline',
+    })).toBeInTheDocument()
+    expect(screen.queryByText('In the beginning.')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
   })
 
   it('supports picker canon and chapter choice flows', async () => {
@@ -230,6 +301,25 @@ describe('ScriptureReaderPage', () => {
     await user.click(within(picker).getByRole('button', { name: 'Tobit' }))
     await user.click(await within(picker).findByRole('button', { name: 'Chapter 1' }))
     expect(screen.queryByRole('dialog', { name: 'Choose a book and chapter' })).not.toBeInTheDocument()
+  })
+
+  it('shows recoverable books and chapter-navigation metadata failures', async () => {
+    const user = userEvent.setup()
+    getBooks.mockRejectedValueOnce(new Error('books down')).mockResolvedValueOnce(['Genesis'])
+    getBookChapters.mockRejectedValueOnce(new Error('chapters down')).mockResolvedValueOnce([1, 3])
+    renderReader()
+    await screen.findByText('In the beginning.')
+
+    expect(screen.getByRole('status', { name: 'Chapter navigation unavailable' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous chapter' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next chapter' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Try chapter navigation again' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
+    await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
+    expect(await screen.findByRole('button', { name: 'Genesis' })).toBeInTheDocument()
   })
 
   it('owns verse detail requests by reference and increments revisions', async () => {
@@ -280,18 +370,86 @@ describe('ScriptureReaderPage', () => {
     expect(screen.queryByRole('dialog', { name: 'Search' })).not.toBeInTheDocument()
   })
 
+  it('performs a real document navigation for non-hash search results', async () => {
+    const user = userEvent.setup()
+    const navigateDocument = vi.fn()
+    renderReader({ navigateDocument })
+    await screen.findByText('In the beginning.')
+
+    await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
+    await user.click(screen.getByRole('button', { name: 'Open shared study' }))
+
+    expect(navigateDocument).toHaveBeenCalledWith(
+      new URL('/share/public-study', window.location.href).href,
+    )
+  })
+
+  it('does not refetch a chapter when tools open and keeps overlays mutually exclusive', async () => {
+    const user = userEvent.setup()
+    renderReader()
+    await screen.findByText('In the beginning.')
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    expect(screen.getByRole('dialog', { name: 'Choose a book and chapter' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
+    expect(screen.queryByRole('dialog', { name: 'Choose a book and chapter' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close search' }))
+    await user.click(screen.getByRole('button', { name: 'Open study tools' }))
+    expect(getChapter).toHaveBeenCalledTimes(1)
+  })
+
   it('aborts requests and removes its hash listener on unmount', async () => {
-    const signals = []
+    const chapterSignals = []
+    const booksSignals = []
+    const chapterNumberSignals = []
+    getBooks.mockImplementation((_, signal) => {
+      booksSignals.push(signal)
+      return new Promise(() => {})
+    })
+    getBookChapters.mockImplementation((_, signal) => {
+      chapterNumberSignals.push(signal)
+      return new Promise(() => {})
+    })
     getChapter.mockImplementation((_, signal) => {
-      signals.push(signal)
+      chapterSignals.push(signal)
       return new Promise(() => {})
     })
     const removeSpy = vi.spyOn(window, 'removeEventListener')
     const { unmount } = renderReader()
     unmount()
 
-    expect(signals[0].aborted).toBe(true)
+    expect(chapterSignals[0].aborted).toBe(true)
+    expect(booksSignals[0].aborted).toBe(true)
+    expect(chapterNumberSignals[0].aborted).toBe(true)
     expect(removeSpy).toHaveBeenCalledWith('hashchange', expect.any(Function))
+  })
+
+  it('aborts detail and picker chapter requests when overlays change or the page unmounts', async () => {
+    const user = userEvent.setup()
+    const detailSignals = []
+    const pickerSignals = []
+    getVerseDetails.mockImplementation((_, signal) => {
+      detailSignals.push(signal)
+      return new Promise(() => {})
+    })
+    getBookChapters.mockImplementation((_, signal) => {
+      if (getBookChapters.mock.calls.length > 1) pickerSignals.push(signal)
+      return getBookChapters.mock.calls.length === 1
+        ? Promise.resolve([1, 3])
+        : new Promise(() => {})
+    })
+    const { unmount } = renderReader()
+    await screen.findByText('In the beginning.')
+    await user.click(screen.getByRole('button', { name: /Genesis 1 verse 1/ }))
+    await user.click(screen.getByRole('button', { name: 'Open study tools' }))
+    await waitFor(() => expect(detailSignals).toHaveLength(1))
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    expect(detailSignals[0].aborted).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await waitFor(() => expect(pickerSignals).toHaveLength(1))
+    unmount()
+    expect(pickerSignals[0].aborted).toBe(true)
   })
 
   it('is lazy-integrated in App without the legacy workspace or nested main landmarks', async () => {
