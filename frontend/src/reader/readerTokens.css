@@ -543,6 +543,196 @@ button.scripture-pane__verse:focus-visible {
   border: 1px solid var(--reader-primary);
 }
 
+.book-picker {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--reader-canvas) 72%, transparent);
+}
+
+.book-picker__dialog {
+  position: fixed;
+  z-index: 51;
+  inset: 0 auto 0 0;
+  width: min(30rem, 100vw);
+  max-width: 100%;
+  box-sizing: border-box;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1.25rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom))
+    max(1.25rem, env(safe-area-inset-left));
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--reader-text);
+  background: var(--reader-surface);
+  border-inline-end: 1px solid var(--reader-border);
+  box-shadow: 1rem 0 3rem color-mix(in srgb, var(--reader-canvas) 72%, transparent);
+  overscroll-behavior: contain;
+}
+
+.book-picker__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--reader-border);
+}
+
+.book-picker__header h2,
+.book-picker__section-header h3 {
+  margin: 0;
+  color: var(--reader-text);
+  font-family: Georgia, 'Times New Roman', serif;
+  line-height: 1.15;
+}
+
+.book-picker__header h2 {
+  font-size: clamp(1.55rem, 5vw, 2rem);
+}
+
+.book-picker__eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--reader-violet);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.book-picker__control {
+  min-height: 48px;
+  box-sizing: border-box;
+  color: var(--reader-on-secondary-control);
+  background: var(--reader-secondary-control-background);
+  border: 1px solid var(--reader-secondary-control-border);
+  border-radius: 0.65rem;
+}
+
+.book-picker__control:hover {
+  border-color: var(--reader-teal);
+}
+
+.book-picker__close {
+  display: grid;
+  min-width: 48px;
+  flex: 0 0 48px;
+  place-items: center;
+  padding: 0;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.book-picker__filters {
+  display: grid;
+  gap: 1rem;
+  padding-block: 1.25rem;
+}
+
+.book-picker__field {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--reader-secondary);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.book-picker__field select,
+.book-picker__field input {
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  color: var(--reader-text);
+  caret-color: var(--reader-text);
+}
+
+.book-picker__field input::placeholder {
+  color: var(--reader-secondary);
+  opacity: 1;
+}
+
+.book-picker__content {
+  min-width: 0;
+}
+
+.book-picker__books {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.book-picker__book,
+.book-picker__chapter {
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.book-picker__book:hover,
+.book-picker__chapter:hover {
+  color: var(--reader-on-primary);
+  background: var(--reader-primary);
+}
+
+.book-picker__section-header {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.book-picker__section-header h3 {
+  font-size: 1.35rem;
+}
+
+.book-picker__back,
+.book-picker__retry {
+  width: fit-content;
+  padding: 0.65rem 0.9rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.book-picker__retry {
+  color: var(--reader-on-primary);
+  background: var(--reader-primary);
+  border-color: var(--reader-primary);
+}
+
+.book-picker__message {
+  margin: 1.25rem 0 0;
+  padding: 1rem;
+  overflow-wrap: anywhere;
+  color: var(--reader-secondary);
+  background: var(--reader-elevated);
+  border: 1px solid var(--reader-border);
+  border-radius: 0.75rem;
+  line-height: 1.55;
+}
+
+.book-picker__message p {
+  margin: 0 0 1rem;
+}
+
+.book-picker__message [role='alert'] {
+  color: var(--reader-danger);
+}
+
+.book-picker__chapters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+}
+
+.book-picker__chapter {
+  text-align: center;
+}
+
 @media (max-width: 767px) {
   .reader-header {
     min-height: 56px;
@@ -597,6 +787,22 @@ button.scripture-pane__verse:focus-visible {
 
   .passage-toolbar__reference {
     min-width: max-content;
+  }
+
+  .book-picker__dialog {
+    width: 100%;
+    border-inline-end: 0;
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .book-picker__books {
+    grid-template-columns: 1fr;
+  }
+
+  .book-picker__chapters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
