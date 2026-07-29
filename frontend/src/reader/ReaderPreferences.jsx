@@ -1,5 +1,4 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import './readerTokens.css'
 
 const STORAGE_KEY = 'unbound.reader.preferences'
 
