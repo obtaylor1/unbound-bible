@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
+import { StrictMode } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext } from '../auth/authContext'
-import App from '../App'
+import App, { ReaderLoadingFallback } from '../App'
 import { ReaderPreferencesProvider } from './ReaderPreferences'
 import ReaderBottomNavigation from './ReaderBottomNavigation'
 import ScriptureReaderPage from './ScriptureReaderPage'
@@ -21,8 +22,8 @@ vi.mock('./scriptureApi', () => ({
   getVerseDetails: vi.fn(),
 }))
 
-vi.mock('../search/SearchDialog', () => ({
-  default: ({ open, onClose, onNavigate }) => open ? (
+function MockSearchDialog({ open, onClose, onNavigate }) {
+  return open ? (
     <div role="dialog" aria-label="Search">
       <button type="button" onClick={() => onNavigate('/#scriptures?book=Exodus&chapter=3&verse=2')}>
         Open Scripture result
@@ -33,10 +34,25 @@ vi.mock('../search/SearchDialog', () => ({
       <button type="button" onClick={() => onNavigate('/share/public-study')}>
         Open shared study
       </button>
+      <button type="button" onClick={() => onNavigate('/share/public-study#section')}>
+        Open shared section
+      </button>
+      <button type="button" onClick={() => onNavigate('javascript:alert(1)')}>
+        Open unsafe result
+      </button>
+      <button type="button" onClick={() => onNavigate('https://example.org/#library')}>
+        Open external result
+      </button>
+      <button type="button" onClick={() => onNavigate('/#not-a-page')}>
+        Open unknown result
+      </button>
+      <button type="button" onClick={() => onNavigate('http://[invalid')}>
+        Open invalid result
+      </button>
       <button type="button" onClick={onClose}>Close search</button>
     </div>
-  ) : null,
-}))
+  ) : null
+}
 
 const rows = [
   { id: 1, verse: 1, translation: 'KJV', text: 'In the beginning.' },
@@ -62,6 +78,18 @@ function renderReader(props = {}) {
         <ScriptureReaderPage {...props} />
       </ReaderPreferencesProvider>
     </AuthContext.Provider>,
+  )
+}
+
+function renderStrictReader(props = {}) {
+  return render(
+    <StrictMode>
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <ReaderPreferencesProvider>
+          <ScriptureReaderPage {...props} />
+        </ReaderPreferencesProvider>
+      </AuthContext.Provider>
+    </StrictMode>,
   )
 }
 
@@ -170,6 +198,18 @@ describe('ScriptureReaderPage', () => {
     expect(getChapter).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps navigation state updates pure under StrictMode', async () => {
+    renderStrictReader()
+    await screen.findByText('In the beginning.')
+    getChapter.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: /Genesis 1 verse 2/ }))
+
+    expect(window.location.hash).toContain('verse=2')
+    await Promise.resolve()
+    expect(getChapter).not.toHaveBeenCalled()
+  })
+
   it('reacts to browser hash navigation and ignores stale chapter results', async () => {
     const genesis = deferred()
     const exodus = deferred()
@@ -177,6 +217,7 @@ describe('ScriptureReaderPage', () => {
       .mockReturnValueOnce(genesis.promise)
       .mockReturnValueOnce(exodus.promise)
     renderReader()
+    await waitFor(() => expect(getChapter).toHaveBeenCalledTimes(1))
 
     window.location.hash = '#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81'
     window.dispatchEvent(new HashChangeEvent('hashchange'))
@@ -191,14 +232,12 @@ describe('ScriptureReaderPage', () => {
   it('ignores stale books and chapter-number metadata after hash back/forward navigation', async () => {
     const firstBooks = deferred()
     const currentBooks = deferred()
-    const firstChapters = deferred()
     const currentChapters = deferred()
     getBooks
       .mockReturnValueOnce(firstBooks.promise)
       .mockReturnValueOnce(currentBooks.promise)
       .mockResolvedValue(['Exodus'])
     getBookChapters
-      .mockReturnValueOnce(firstChapters.promise)
       .mockReturnValueOnce(currentChapters.promise)
     getChapter.mockImplementation(({ book }) => Promise.resolve([
       { verse: 1, translation: 'KJV', text: `${book} current.` },
@@ -213,7 +252,6 @@ describe('ScriptureReaderPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
 
     firstBooks.resolve(['Genesis'])
-    firstChapters.resolve([1, 3])
     await Promise.resolve()
     fireEvent.click(screen.getByRole('button', { name: 'Choose a book' }))
     expect(screen.getByRole('button', { name: 'Exodus' })).toBeInTheDocument()
@@ -303,6 +341,24 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
   })
 
+  it('does not expose translations or verses owned by a previous route', async () => {
+    const exodus = deferred()
+    renderReader()
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    getChapter.mockReturnValueOnce(exodus.promise)
+
+    window.location.hash = '#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    await waitFor(() => expect(screen.queryByText('In the beginning.')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Change translation')).toHaveTextContent('No translations available')
+    expect(screen.getByLabelText('Change translation')).not.toHaveTextContent('WEB')
+
+    exodus.reject(new Error('broken'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not open Exodus 3')
+    expect(screen.getByLabelText('Change translation')).toHaveTextContent('No translations available')
+  })
+
   it('supports picker canon and chapter choice flows', async () => {
     const user = userEvent.setup()
     getBooks.mockImplementation((canon) => Promise.resolve(
@@ -321,11 +377,46 @@ describe('ScriptureReaderPage', () => {
     expect(screen.queryByRole('dialog', { name: 'Choose a book and chapter' })).not.toBeInTheDocument()
   })
 
+  it('atomically swaps canon catalogs before validating or fetching a passage', async () => {
+    const catholicBooks = deferred()
+    getBooks.mockImplementation((canon) => (
+      canon === 'CATH73' ? catholicBooks.promise : Promise.resolve(['Genesis', 'Exodus'])
+    ))
+    renderReader()
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    getBookChapters.mockClear()
+    getChapter.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a book' }))
+    const picker = screen.getByRole('dialog', { name: 'Choose a book and chapter' })
+    fireEvent.change(within(picker).getByLabelText('Canon'), { target: { value: 'CATH73' } })
+
+    expect(within(picker).queryByRole('button', { name: 'Genesis' })).not.toBeInTheDocument()
+    expect(within(picker).getByRole('status')).toHaveTextContent(/loading bible books/i)
+    expect(getBookChapters).not.toHaveBeenCalled()
+    expect(getChapter).not.toHaveBeenCalled()
+
+    catholicBooks.resolve(['Tobit'])
+    await waitFor(() => expect(window.location.hash).toContain('book=Tobit'))
+    await waitFor(() => expect(getBookChapters).toHaveBeenCalledTimes(1))
+    expect(getBookChapters).toHaveBeenCalledWith('Tobit', expect.any(AbortSignal))
+    expect(getChapter).toHaveBeenCalledTimes(1)
+    expect(getChapter).toHaveBeenCalledWith(
+      expect.objectContaining({ book: 'Tobit', chapter: 1 }),
+      expect.any(AbortSignal),
+    )
+  })
+
   it('shows recoverable books and chapter-navigation metadata failures', async () => {
     const user = userEvent.setup()
     getBooks.mockRejectedValueOnce(new Error('books down')).mockResolvedValueOnce(['Genesis'])
     getBookChapters.mockRejectedValueOnce(new Error('chapters down')).mockResolvedValueOnce([1, 3])
     renderReader()
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
+    await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
+    expect(await screen.findByRole('button', { name: 'Genesis' })).toBeInTheDocument()
     await screen.findByText('In the beginning.')
 
     expect(screen.getByRole('status', { name: 'Chapter navigation unavailable' })).toBeInTheDocument()
@@ -333,11 +424,6 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getByRole('button', { name: 'Next chapter' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Try chapter navigation again' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
-
-    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
-    await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
-    expect(await screen.findByRole('button', { name: 'Genesis' })).toBeInTheDocument()
   })
 
   it('owns verse detail requests by reference and increments revisions', async () => {
@@ -367,7 +453,7 @@ describe('ScriptureReaderPage', () => {
   it('routes study tools and bottom search through existing app navigation', async () => {
     const user = userEvent.setup()
     const onPageChange = vi.fn()
-    renderReader({ onPageChange })
+    renderReader({ onPageChange, SearchComponent: MockSearchDialog })
     await screen.findByText('In the beginning.')
     await user.click(screen.getByRole('button', { name: 'Open study tools' }))
     await user.click(screen.getByRole('button', { name: 'Notes' }))
@@ -391,7 +477,7 @@ describe('ScriptureReaderPage', () => {
   it('performs a real document navigation for non-hash search results', async () => {
     const user = userEvent.setup()
     const navigateDocument = vi.fn()
-    renderReader({ navigateDocument })
+    renderReader({ navigateDocument, SearchComponent: MockSearchDialog })
     await screen.findByText('In the beginning.')
 
     await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
@@ -402,9 +488,49 @@ describe('ScriptureReaderPage', () => {
     )
   })
 
-  it('does not refetch a chapter when tools open and keeps overlays mutually exclusive', async () => {
+  it('only accepts safe same-origin search result navigation', async () => {
+    const user = userEvent.setup()
+    const navigateDocument = vi.fn()
+    const onPageChange = vi.fn()
+    renderReader({ navigateDocument, onPageChange, SearchComponent: MockSearchDialog })
+    await screen.findByText('In the beginning.')
+
+    for (const label of [
+      'Open unsafe result',
+      'Open external result',
+      'Open unknown result',
+      'Open invalid result',
+    ]) {
+      await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
+      await user.click(screen.getByRole('button', { name: label }))
+    }
+    expect(navigateDocument).not.toHaveBeenCalled()
+    expect(onPageChange).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
+    await user.click(screen.getByRole('button', { name: 'Open shared section' }))
+    expect(navigateDocument).toHaveBeenCalledWith(
+      new URL('/share/public-study#section', window.location.href).href,
+    )
+  })
+
+  it('integrates the real accessible search dialog', async () => {
     const user = userEvent.setup()
     renderReader()
+    await screen.findByText('In the beginning.')
+    const opener = screen.getByRole('button', { name: 'Search', hidden: true })
+    await user.click(opener)
+
+    const input = screen.getByRole('combobox', { name: 'Search the library' })
+    expect(input).toHaveFocus()
+    expect(document.body).toHaveStyle({ overflow: 'hidden' })
+    await user.keyboard('{Escape}')
+    expect(opener).toHaveFocus()
+  })
+
+  it('does not refetch a chapter when tools open and keeps overlays mutually exclusive', async () => {
+    const user = userEvent.setup()
+    renderReader({ SearchComponent: MockSearchDialog })
     await screen.findByText('In the beginning.')
     await user.click(screen.getByRole('button', { name: 'Choose a book' }))
     expect(screen.getByRole('dialog', { name: 'Choose a book and chapter' })).toBeInTheDocument()
@@ -422,7 +548,7 @@ describe('ScriptureReaderPage', () => {
     const chapterNumberSignals = []
     getBooks.mockImplementation((_, signal) => {
       booksSignals.push(signal)
-      return new Promise(() => {})
+      return Promise.resolve(['Genesis'])
     })
     getBookChapters.mockImplementation((_, signal) => {
       chapterNumberSignals.push(signal)
@@ -434,6 +560,10 @@ describe('ScriptureReaderPage', () => {
     })
     const removeSpy = vi.spyOn(window, 'removeEventListener')
     const { unmount } = renderReader()
+    await waitFor(() => {
+      expect(chapterSignals).toHaveLength(1)
+      expect(chapterNumberSignals).toHaveLength(1)
+    })
     unmount()
 
     expect(chapterSignals[0].aborted).toBe(true)
@@ -480,5 +610,20 @@ describe('ScriptureReaderPage', () => {
     expect(await screen.findByTestId('scripture-reader')).toBeInTheDocument()
     expect(screen.getAllByRole('main')).toHaveLength(1)
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
+  })
+
+  it('gives the lazy reader fallback a meaningful skip target and main landmark', () => {
+    render(<ReaderLoadingFallback />)
+
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#main-content',
+    )
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getByRole('main', { name: 'Scripture Reader' })).toHaveAttribute(
+      'id',
+      'main-content',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Opening Scripture reader')
   })
 })

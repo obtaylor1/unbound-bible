@@ -28,26 +28,28 @@ class ReaderErrorBoundaryClass extends Component {
     const onReload = this.props.onReload ?? reloadReader
 
     return (
-      <section
-        className="scripture-reader reader-fatal-error"
-        role="alert"
-        aria-labelledby={this.props.headingId}
-      >
-        <p className="reader-fatal-error__eyebrow">Reader unavailable</p>
-        <h1 id={this.props.headingId}>
-          The Scripture Reader could not open
-        </h1>
-        <p>
-          Your saved notes and preferences were unchanged. Reload the reader or
-          return home to continue.
-        </p>
-        <div className="reader-fatal-error__actions">
-          <button type="button" onClick={onReload}>
-            Reload the reader
-          </button>
-          <a href="#home">Return home</a>
-        </div>
-      </section>
+      <main id="main-content">
+        <section
+          className="scripture-reader reader-fatal-error"
+          role="alert"
+          aria-labelledby={this.props.headingId}
+        >
+          <p className="reader-fatal-error__eyebrow">Reader unavailable</p>
+          <h1 id={this.props.headingId}>
+            The Scripture Reader could not open
+          </h1>
+          <p>
+            Your saved notes and preferences were unchanged. Reload the reader or
+            return home to continue.
+          </p>
+          <div className="reader-fatal-error__actions">
+            <button type="button" onClick={onReload}>
+              Reload the reader
+            </button>
+            <a href="#home">Return home</a>
+          </div>
+        </section>
+      </main>
     )
   }
 }

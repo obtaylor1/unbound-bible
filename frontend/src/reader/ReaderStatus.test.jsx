@@ -293,11 +293,12 @@ describe('ReaderErrorBoundary', () => {
   it('renders its children while the reader is healthy', () => {
     render(
       <ReaderErrorBoundary resetKey="John 3">
-        <p>John 3 passage text</p>
+        <main id="main-content">John 3 passage text</main>
       </ReaderErrorBoundary>,
     )
 
     expect(screen.getByText('John 3 passage text')).toBeInTheDocument()
+    expect(screen.getAllByRole('main')).toHaveLength(1)
   })
 
   it('shows a route-level fallback with reload and home actions', () => {
@@ -315,6 +316,8 @@ describe('ReaderErrorBoundary', () => {
     })
     expect(alert).toHaveClass('scripture-reader', 'reader-fatal-error')
     expect(alert).toHaveTextContent(/saved notes and preferences were unchanged/i)
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload the reader' }))
     expect(onReload).toHaveBeenCalledOnce()

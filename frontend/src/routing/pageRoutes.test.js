@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { hashForPage, pageFromHash, titleForPage } from './pageRoutes'
+import {
+  hashForPage,
+  pageFromHash,
+  pageFromKnownHash,
+  titleForPage,
+} from './pageRoutes'
 
 describe('page routes', () => {
   it('maps the supplied AI Study deep link to Ask the Bible', () => {
@@ -8,6 +13,8 @@ describe('page routes', () => {
 
   it('falls back to home for unknown hashes', () => {
     expect(pageFromHash('#not-a-page')).toBe('home')
+    expect(pageFromKnownHash('#not-a-page')).toBeNull()
+    expect(pageFromKnownHash('#library')).toBe('notes')
   })
 
   it('ignores query parameters when resolving a page', () => {

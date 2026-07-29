@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SearchDialog from '../search/SearchDialog'
-import { pageFromHash } from '../routing/pageRoutes'
+import { pageFromKnownHash } from '../routing/pageRoutes'
 import BookPicker from './BookPicker'
 import PassageToolbar from './PassageToolbar'
 import ReaderBottomNavigation from './ReaderBottomNavigation'
@@ -42,12 +42,15 @@ function normalizeRoute(route) {
 export default function ScriptureReaderPage({
   onPageChange,
   navigateDocument = (url) => window.location.assign(url),
+  SearchComponent = SearchDialog,
 }) {
   const [route, setRoute] = useState(() => parseReaderHash())
   const [books, setBooks] = useState([])
+  const [booksCanonKey, setBooksCanonKey] = useState(null)
   const [booksStatus, setBooksStatus] = useState('loading')
   const [booksRetryRevision, setBooksRetryRevision] = useState(0)
   const [chapters, setChapters] = useState([])
+  const [chaptersBookKey, setChaptersBookKey] = useState(null)
   const [chaptersStatus, setChaptersStatus] = useState('loading')
   const [chaptersRetryRevision, setChaptersRetryRevision] = useState(0)
   const [chapterRows, setChapterRows] = useState([])
@@ -67,17 +70,19 @@ export default function ScriptureReaderPage({
   const detailsGeneration = useRef(0)
   const { fontSize, readingWidth } = useReaderPreferences()
   const selectedTranslationRef = useRef(route.translation)
+  const routeRef = useRef(route)
   selectedTranslationRef.current = route.translation
+  routeRef.current = route
 
   const navigate = useCallback((next) => {
-    setRoute((current) => {
-      const normalized = normalizeRoute(
-        typeof next === 'function' ? next(current) : { ...current, ...next },
-      )
-      const hash = readerHash(normalized)
-      if (window.location.hash !== hash) window.location.hash = hash
-      return normalized
-    })
+    const current = routeRef.current
+    const normalized = normalizeRoute(
+      typeof next === 'function' ? next(current) : { ...current, ...next },
+    )
+    routeRef.current = normalized
+    setRoute(normalized)
+    const hash = readerHash(normalized)
+    if (window.location.hash !== hash) window.location.hash = hash
   }, [])
 
   useEffect(() => {
@@ -90,21 +95,19 @@ export default function ScriptureReaderPage({
     const controller = new AbortController()
     const generation = ++booksGeneration.current
     setBooks([])
+    setBooksCanonKey(null)
     setBooksStatus('loading')
     getBooks(route.canon, controller.signal)
       .then((nextBooks) => {
         if (generation !== booksGeneration.current || controller.signal.aborted) return
-        setBooks(nextBooks)
+        setBooks(Array.isArray(nextBooks) ? nextBooks : [])
+        setBooksCanonKey(route.canon)
         setBooksStatus('ready')
-        if (nextBooks.length && !nextBooks.some(
-          (book) => book.toLocaleLowerCase() === route.book.toLocaleLowerCase(),
-        )) {
-          navigate({ book: nextBooks[0], chapter: 1, verse: null })
-        }
       })
       .catch(() => {
         if (generation === booksGeneration.current && !controller.signal.aborted) {
           setBooks([])
+          setBooksCanonKey(route.canon)
           setBooksStatus('error')
         }
       })
@@ -112,22 +115,47 @@ export default function ScriptureReaderPage({
       controller.abort()
       booksGeneration.current += 1
     }
-  }, [route.canon, route.book, booksRetryRevision, navigate])
+  }, [route.canon, booksRetryRevision])
+
+  const currentBooks = useMemo(
+    () => booksCanonKey === route.canon ? books : [],
+    [books, booksCanonKey, route.canon],
+  )
+  const currentBooksStatus = booksCanonKey === route.canon ? booksStatus : 'loading'
+  const routeBookValid = currentBooks.some(
+    (book) => book.toLocaleLowerCase() === route.book.toLocaleLowerCase(),
+  )
+  const catalogReady = currentBooksStatus === 'ready'
 
   useEffect(() => {
+    if (!catalogReady || currentBooks.length === 0 || routeBookValid) return
+    navigate({ book: currentBooks[0], chapter: 1, verse: null })
+  }, [catalogReady, currentBooks, navigate, routeBookValid])
+
+  useEffect(() => {
+    if (!catalogReady || !routeBookValid) {
+      chaptersGeneration.current += 1
+      setChapters([])
+      setChaptersBookKey(null)
+      setChaptersStatus('loading')
+      return undefined
+    }
     const controller = new AbortController()
     const generation = ++chaptersGeneration.current
     setChapters([])
+    setChaptersBookKey(null)
     setChaptersStatus('loading')
     getBookChapters(route.book, controller.signal)
       .then((nextChapters) => {
         if (generation !== chaptersGeneration.current || controller.signal.aborted) return
         setChapters(nextChapters)
+        setChaptersBookKey(route.book)
         setChaptersStatus('ready')
       })
       .catch(() => {
         if (generation === chaptersGeneration.current && !controller.signal.aborted) {
           setChapters([])
+          setChaptersBookKey(route.book)
           setChaptersStatus('error')
         }
       })
@@ -135,9 +163,14 @@ export default function ScriptureReaderPage({
       controller.abort()
       chaptersGeneration.current += 1
     }
-  }, [route.book, chaptersRetryRevision])
+  }, [catalogReady, route.book, routeBookValid, chaptersRetryRevision])
 
   useEffect(() => {
+    if (!catalogReady || !routeBookValid) {
+      chapterGeneration.current += 1
+      setStatus(catalogReady && currentBooks.length === 0 ? 'empty' : 'loading')
+      return undefined
+    }
     const controller = new AbortController()
     const generation = ++chapterGeneration.current
     setStatus('loading')
@@ -173,7 +206,15 @@ export default function ScriptureReaderPage({
       controller.abort()
       chapterGeneration.current += 1
     }
-  }, [route.book, route.chapter, retryRevision, navigate])
+  }, [
+    catalogReady,
+    currentBooks.length,
+    route.book,
+    route.chapter,
+    routeBookValid,
+    retryRevision,
+    navigate,
+  ])
 
   useEffect(() => {
     if (
@@ -259,20 +300,23 @@ export default function ScriptureReaderPage({
     route.verse,
   ])
 
-  const translations = normalizedTranslations(chapterRows)
-  const verses = chapterRows.filter(
+  const currentChapterKey = `${route.book}\u0000${route.chapter}`
+  const currentChapterRows = chapterRowsKey === currentChapterKey ? chapterRows : []
+  const translations = normalizedTranslations(currentChapterRows)
+  const verses = currentChapterRows.filter(
     (row) => String(row?.translation ?? '').trim().toUpperCase() === route.translation,
   )
-  const chapterIndex = chapters.indexOf(route.chapter)
-  const canGoPrevious = chaptersStatus === 'ready' && chapterIndex > 0
+  const currentChapters = chaptersBookKey === route.book ? chapters : []
+  const currentChaptersStatus = chaptersBookKey === route.book ? chaptersStatus : 'loading'
+  const chapterIndex = currentChapters.indexOf(route.chapter)
+  const canGoPrevious = currentChaptersStatus === 'ready' && chapterIndex > 0
   const canGoNext = (
-    chaptersStatus === 'ready'
+    currentChaptersStatus === 'ready'
     && chapterIndex >= 0
-    && chapterIndex < chapters.length - 1
+    && chapterIndex < currentChapters.length - 1
   )
   const currentRowsLoaded = (
-    chapterRowsKey === `${route.book}\u0000${route.chapter}`
-    && verses.length > 0
+    verses.length > 0
   )
 
   const closeOverlays = () => {
@@ -298,14 +342,24 @@ export default function ScriptureReaderPage({
   }
   const navigateSearchResult = (url) => {
     closeOverlays()
-    const target = new URL(url, window.location.href)
-    if (!target.hash) {
-      navigateDocument(target.href)
-    } else if (pageFromHash(target.hash) === 'apocrypha') {
-      window.location.hash = target.hash || '#scriptures'
-    } else {
-      onPageChange?.(pageFromHash(target.hash))
+    let target
+    try {
+      target = new URL(String(url), window.location.href)
+    } catch {
+      return
     }
+    if (
+      !['http:', 'https:'].includes(target.protocol)
+      || target.origin !== window.location.origin
+    ) return
+    if (target.pathname !== '/') {
+      navigateDocument(target.href)
+      return
+    }
+    const page = pageFromKnownHash(target.hash)
+    if (!page) return
+    if (page === 'apocrypha') window.location.hash = target.hash
+    else onPageChange?.(page)
   }
 
   return (
@@ -326,10 +380,10 @@ export default function ScriptureReaderPage({
         onTranslationChange={(translation) => navigate({ translation, verse: null })}
         canGoPrevious={canGoPrevious}
         canGoNext={canGoNext}
-        onPrevious={() => navigate({ chapter: chapters[chapterIndex - 1], verse: null })}
-        onNext={() => navigate({ chapter: chapters[chapterIndex + 1], verse: null })}
+        onPrevious={() => navigate({ chapter: currentChapters[chapterIndex - 1], verse: null })}
+        onNext={() => navigate({ chapter: currentChapters[chapterIndex + 1], verse: null })}
       />
-      {chaptersStatus === 'error' && (
+      {currentChaptersStatus === 'error' && (
         <section
           className="reader-metadata-status"
           role="status"
@@ -380,8 +434,8 @@ export default function ScriptureReaderPage({
       />
       <BookPicker
         open={bookPickerOpen}
-        books={books}
-        booksStatus={booksStatus}
+        books={currentBooks}
+        booksStatus={currentBooksStatus}
         selectedCanon={route.canon}
         loadChapters={(book, signal) => getBookChapters(book, signal)}
         onRetryBooks={() => setBooksRetryRevision((value) => value + 1)}
@@ -402,11 +456,11 @@ export default function ScriptureReaderPage({
         onClose={() => setStudyToolsOpen(false)}
         onNavigate={typeof onPageChange === 'function' ? changePage : undefined}
       />
-      <SearchDialog
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onNavigate={navigateSearchResult}
-      />
+      {createElement(SearchComponent, {
+        open: searchOpen,
+        onClose: () => setSearchOpen(false),
+        onNavigate: navigateSearchResult,
+      })}
     </div>
   )
 }

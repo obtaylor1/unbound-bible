@@ -19,6 +19,22 @@ const CanonComparison = lazy(() => import('./components/CanonComparison'))
 const RaceMisuse = lazy(() => import('./components/RaceMisuse'))
 const Factbook = lazy(() => import('./components/Factbook'))
 
+export function ReaderLoadingFallback() {
+  return (
+    <>
+      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <main
+        id="main-content"
+        className="page-loading"
+        aria-label="Scripture Reader"
+        tabIndex="-1"
+      >
+        <p role="status">Opening Scripture reader…</p>
+      </main>
+    </>
+  )
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState(() => pageFromHash(window.location.hash))
   const [currentHash, setCurrentHash] = useState(() => window.location.hash)
@@ -155,7 +171,7 @@ function App() {
   if (currentPage === 'apocrypha') {
     return (
       <div className="app">
-        <Suspense fallback={<div className="page-loading" role="status">Opening Scripture reader…</div>}>
+        <Suspense fallback={<ReaderLoadingFallback />}>
           {renderCurrentPage()}
         </Suspense>
       </div>
