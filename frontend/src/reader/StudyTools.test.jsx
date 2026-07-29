@@ -155,9 +155,10 @@ describe('StudyTools', () => {
       'true',
     )
     const panel = screen.getByRole('region', { name: 'Compare translations' })
-    expect(panel).toHaveAttribute('aria-live', 'polite')
-    expect(panel).toHaveAttribute('aria-atomic', 'false')
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(panel).not.toHaveAttribute('aria-live')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No verified compare translations information is available for this verse.',
+    )
   })
 
   it('calls route destinations with a normalized reference without changing the inline panel', async () => {
@@ -341,7 +342,7 @@ describe('StudyTools', () => {
     )).toBeInTheDocument()
   })
 
-  it('announces refreshed and empty results through the labelled live panel', () => {
+  it('announces short refreshed and empty statuses without announcing the detail subtree', () => {
     const { rerender } = render(
       <StudyTools
         open
@@ -352,8 +353,14 @@ describe('StudyTools', () => {
     )
 
     const panel = screen.getByRole('region', { name: 'Context' })
-    expect(panel).toHaveAttribute('aria-live', 'polite')
+    expect(panel).not.toHaveAttribute('aria-live')
     expect(panel).toHaveTextContent('Verified historical setting.')
+    expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByRole('status')).toHaveAttribute('aria-atomic', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('Context updated — 1 result')
+    expect(
+      screen.getByText('Verified historical setting.').closest('[aria-live]'),
+    ).toBeNull()
 
     rerender(
       <StudyTools
@@ -364,13 +371,212 @@ describe('StudyTools', () => {
       />,
     )
     expect(panel).toHaveTextContent('Updated verified setting.')
+    expect(screen.getByRole('status')).toHaveTextContent('Context updated — 1 result')
 
     rerender(
       <StudyTools open reference={reference} details={{}} onClose={vi.fn()} />,
     )
-    expect(panel).toHaveTextContent(
+    expect(screen.getByRole('status')).toHaveTextContent(
       'No verified context information is available for this verse.',
     )
+  })
+
+  it('suppresses stale details synchronously across references until a new object arrives', () => {
+    const genesisDetails = { historical_context: 'Genesis historical context.' }
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1, verse: 1 }}
+        details={genesisDetails}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Genesis historical context.')).toBeInTheDocument()
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={genesisDetails}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Exodus 3:14')
+    expect(screen.queryByText('Genesis historical context.')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Context' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Study information is updating for Exodus 3:14.',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={{ historical_context: 'Exodus historical context.' }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Exodus historical context.')).toBeInTheDocument()
+    expect(screen.queryByText('Genesis historical context.')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Context' })).toHaveAttribute(
+      'aria-busy',
+      'false',
+    )
+  })
+
+  it('rejects coordinate-bearing details that do not match the current reference', () => {
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{
+          book: 'Exodus',
+          chapter: 1,
+          verse: 2,
+          historical_context: 'Mismatched context.',
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Mismatched context.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Verified study information is unavailable for Genesis 1:2.',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={reference}
+        details={{
+          book: 'Genesis',
+          chapter: 1,
+          verse: 2,
+          historical_context: 'Matching context.',
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Matching context.')).toBeInTheDocument()
+  })
+
+  it('bounds cyclic, deeply nested, and huge context payloads safely', () => {
+    const cyclic = { title: 'Cyclic note' }
+    cyclic.related = cyclic
+    let deep = 'Deepest useful detail'
+    for (let index = 0; index < 20; index += 1) deep = { layer: deep }
+    const huge = Array.from({ length: 120 }, (_, index) => `Historical note ${index + 1}`)
+
+    expect(() => {
+      render(
+        <StudyTools
+          open
+          reference={reference}
+          details={{ historical_context: [cyclic, deep, ...huge] }}
+          onClose={vi.fn()}
+        />,
+      )
+    }).not.toThrow()
+    expect(screen.getByText('Cyclic note')).toBeInTheDocument()
+    expect(screen.getAllByText('Additional details omitted').length).toBeGreaterThan(0)
+    expect(screen.getByText('Historical note 1')).toBeInTheDocument()
+    expect(screen.queryByText('Historical note 120')).not.toBeInTheDocument()
+  })
+
+  it('does not present metadata-only translations as verified verse text', async () => {
+    const user = userEvent.setup()
+    render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ translations: [{ code: 'KJV', language: 'English' }] }}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Compare translations' }))
+
+    expect(screen.getByRole('table')).toHaveTextContent('KJV')
+    expect(screen.getByRole('table')).toHaveTextContent('Translation text unavailable')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Compare translations updated — 0 verified results',
+    )
+    expect(screen.queryByText('Details available')).not.toBeInTheDocument()
+  })
+
+  it('filters HistoricalNote bookkeeping while retaining scholarly fields', () => {
+    render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{
+          historical_context: {
+            id: 91,
+            biblical_text_id: 12,
+            note: 'A documented Second Temple setting.',
+            period: 'Second Temple period',
+            source: 'Oxford Biblical Studies',
+            scholar: 'Dr. A. Scholar',
+            created_at: '2025-01-02T00:00:00Z',
+            updated_at: '2025-02-03T00:00:00Z',
+            internal_key: 'historical-note-91',
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const panel = screen.getByRole('region', { name: 'Context' })
+    expect(panel).toHaveTextContent('A documented Second Temple setting.')
+    expect(panel).toHaveTextContent('Second Temple period')
+    expect(panel).toHaveTextContent('Oxford Biblical Studies')
+    expect(panel).toHaveTextContent('Dr. A. Scholar')
+    expect(panel).not.toHaveTextContent('Biblical text id')
+    expect(panel).not.toHaveTextContent('2025-01-02')
+    expect(panel).not.toHaveTextContent('historical-note-91')
+  })
+
+  it('strictly rejects malformed chapter and verse primitives without throwing', () => {
+    const invalidValues = [
+      true,
+      false,
+      [],
+      [2],
+      {},
+      Symbol('chapter'),
+      1.5,
+      Number.POSITIVE_INFINITY,
+      -1,
+      0,
+      '+2',
+      '-2',
+      ' 2 ',
+      ' ',
+      '2.0',
+    ]
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={{ book: 'John', chapter: invalidValues[0], verse: 3 }}
+        details={{}}
+        onClose={vi.fn()}
+      />,
+    )
+
+    invalidValues.forEach((value) => {
+      expect(() => {
+        rerender(
+          <StudyTools
+            open
+            reference={{ book: 'John', chapter: value, verse: value }}
+            details={{}}
+            onClose={vi.fn()}
+          />,
+        )
+      }).not.toThrow()
+      expect(screen.getByRole('dialog')).toHaveAccessibleName('Current passage')
+    })
   })
 
   it('normalizes missing and malformed references without leaking implementation values', () => {
@@ -455,6 +661,7 @@ describe('StudyTools', () => {
 })
 
 describe('StudyTools responsive styles', () => {
+  // Task 9 owns Playwright/axe checks for mobile geometry, computed styles, and contrast.
   it('defines a token-driven right drawer and mobile bottom sheet contract', () => {
     expect(readerTokensCss).toMatch(/\.study-tools__dialog\s*\{[^}]*width:\s*min\(31rem,\s*100vw\)/i)
     expect(readerTokensCss).toMatch(/\.study-tools__dialog\s*\{[^}]*overflow-y:\s*auto/i)

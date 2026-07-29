@@ -4,6 +4,11 @@ import useDialogFocus from './useDialogFocus'
 
 const INLINE_TOOLS = STUDY_TOOLS.filter(({ kind }) => kind === 'inline')
 const CONTEXT_TOOL = INLINE_TOOLS[0]
+const MAX_RENDER_DEPTH = 6
+const MAX_RENDER_NODES = 200
+const MAX_COLLECTION_ITEMS = 50
+const MAX_STRING_LENGTH = 5000
+const OMITTED_MESSAGE = 'Additional details omitted'
 
 function cleanText(value) {
   if (typeof value === 'string') {
@@ -14,13 +19,23 @@ function cleanText(value) {
   return null
 }
 
+function limitedText(value, state) {
+  const text = cleanText(value)
+  if (!text) return null
+  if (text.length <= MAX_STRING_LENGTH) return text
+  if (state) state.omitted = true
+  return `${text.slice(0, MAX_STRING_LENGTH)}…`
+}
+
 function positiveInteger(value) {
-  if (
-    typeof value === 'string'
-    && (!value.trim() || !/^\d+$/.test(value.trim()))
-  ) return null
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && Number.isInteger(value) && value > 0
+      ? value
+      : null
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
   const number = Number(value)
-  return Number.isInteger(number) && number > 0 ? number : null
+  return Number.isSafeInteger(number) && number > 0 ? number : null
 }
 
 function normalizeReference(reference) {
@@ -32,7 +47,7 @@ function normalizeReference(reference) {
   const chapter = positiveInteger(reference.chapter)
   const verse = positiveInteger(reference.verse)
 
-  if (!book || !chapter) {
+  if (!book || book.length > 120 || !chapter) {
     return { value: {}, label: 'Current passage', hasVerse: false }
   }
 
@@ -47,7 +62,7 @@ function normalizeReference(reference) {
 function readableLabel(value) {
   const text = cleanText(value)
   if (!text) return null
-  const words = text.replace(/[_-]+/g, ' ').toLocaleLowerCase()
+  const words = text.slice(0, 120).replace(/[_-]+/g, ' ').toLocaleLowerCase()
   return words.charAt(0).toLocaleUpperCase() + words.slice(1)
 }
 
@@ -59,172 +74,146 @@ function translationLabel(value) {
     : readableLabel(text)
 }
 
-function recordEntries(record, excluded = []) {
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return []
-  const excludedKeys = new Set(excluded)
-  return Object.entries(record)
-    .filter(([key]) => !excludedKeys.has(key))
-    .map(([key, value]) => [readableLabel(key), value])
-    .filter(([key, value]) => key && usableValue(value))
+function isUserFacingKey(key) {
+  const normalized = key
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .toLocaleLowerCase()
+  return !(
+    normalized === 'id'
+    || normalized.endsWith('_id')
+    || normalized === 'created_at'
+    || normalized === 'updated_at'
+    || normalized === 'deleted_at'
+    || normalized.startsWith('internal')
+    || normalized.startsWith('system')
+    || normalized.startsWith('__')
+  )
 }
 
-function usableValue(value, seen = new Set()) {
-  if (cleanText(value)) return true
-  if (!value || typeof value !== 'object' || seen.has(value)) return false
-  const nextSeen = new Set(seen)
-  nextSeen.add(value)
-  if (Array.isArray(value)) return value.some((entry) => usableValue(entry, nextSeen))
-  return Object.values(value).some((entry) => usableValue(entry, nextSeen))
+function safeEntries(value) {
+  try {
+    return Object.entries(value)
+  } catch {
+    return []
+  }
 }
 
-function RecordDetails({ entries }) {
-  if (!entries.length) return null
+function normalizeGeneralValue(value, sharedState) {
+  const state = sharedState ?? { nodes: 0, omitted: false }
+  const omissionBefore = state.omitted
+
+  function normalizeNode(current, depth, path) {
+    const scalar = cleanText(current)
+    if (scalar) {
+      if (state.nodes >= MAX_RENDER_NODES) {
+        state.omitted = true
+        return null
+      }
+      state.nodes += 1
+      if (scalar.length > MAX_STRING_LENGTH) {
+        state.omitted = true
+        return { kind: 'text', text: `${scalar.slice(0, MAX_STRING_LENGTH)}…` }
+      }
+      return { kind: 'text', text: scalar }
+    }
+
+    if (!current || typeof current !== 'object') return null
+    if (depth >= MAX_RENDER_DEPTH || path.has(current)) {
+      state.omitted = true
+      return null
+    }
+    if (state.nodes >= MAX_RENDER_NODES) {
+      state.omitted = true
+      return null
+    }
+
+    state.nodes += 1
+    const nextPath = new Set(path)
+    nextPath.add(current)
+
+    if (Array.isArray(current)) {
+      if (current.length > MAX_COLLECTION_ITEMS) state.omitted = true
+      const items = current
+        .slice(0, MAX_COLLECTION_ITEMS)
+        .map((entry) => normalizeNode(entry, depth + 1, nextPath))
+        .filter(Boolean)
+      return items.length ? { kind: 'list', items } : null
+    }
+
+    const entries = safeEntries(current)
+      .filter(([key]) => isUserFacingKey(key))
+    if (entries.length > MAX_COLLECTION_ITEMS) state.omitted = true
+    const normalizedEntries = entries
+      .slice(0, MAX_COLLECTION_ITEMS)
+      .map(([key, entry]) => [
+        readableLabel(key),
+        normalizeNode(entry, depth + 1, nextPath),
+      ])
+      .filter(([label, entry]) => label && entry)
+    return normalizedEntries.length
+      ? { kind: 'record', entries: normalizedEntries }
+      : null
+  }
+
+  return {
+    node: normalizeNode(value, 0, new Set()),
+    omitted: state.omitted && !omissionBefore,
+  }
+}
+
+function GeneralNode({ node, block = false }) {
+  if (!node) return null
+  if (node.kind === 'text') {
+    return block
+      ? <p className="study-tools__prose">{node.text}</p>
+      : node.text
+  }
+  if (node.kind === 'list') {
+    return (
+      <ul className="study-tools__list">
+        {node.items.map((item, index) => (
+          <li key={index}><GeneralNode node={item} /></li>
+        ))}
+      </ul>
+    )
+  }
   return (
     <dl className="study-tools__record-details">
-      {entries.map(([label, value], index) => (
+      {node.entries.map(([label, entry], index) => (
         <div key={`${label}-${index}`}>
           <dt>{label}</dt>
-          <dd>{cleanText(value) ?? <GeneralContent value={value} />}</dd>
+          <dd><GeneralNode node={entry} /></dd>
         </div>
       ))}
     </dl>
   )
 }
 
-function GeneralContent({ value }) {
-  const scalar = cleanText(value)
-  if (scalar) return <p className="study-tools__prose">{scalar}</p>
-
-  if (Array.isArray(value)) {
-    const entries = value.filter((entry) => usableValue(entry))
-    if (!entries.length) return null
-    return (
-      <ul className="study-tools__list">
-        {entries.map((entry, index) => {
-          const entryScalar = cleanText(entry)
-          if (entryScalar) return <li key={`${entryScalar}-${index}`}>{entryScalar}</li>
-          const title = cleanText(entry.title ?? entry.label ?? entry.term ?? entry.word)
-          const text = cleanText(entry.text ?? entry.content ?? entry.description)
-          const details = recordEntries(
-            entry,
-            ['title', 'label', 'term', 'word', 'text', 'content', 'description'],
-          )
-          return (
-            <li key={`${title ?? 'entry'}-${index}`}>
-              {title && <strong>{title}</strong>}
-              {text && <p>{text}</p>}
-              <RecordDetails entries={details} />
-            </li>
-          )
-        })}
-      </ul>
-    )
-  }
-
-  const entries = recordEntries(value)
-  return entries.length ? (
-    <RecordDetails entries={entries} />
-  ) : null
+function recordEntries(record, excluded = [], state) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return []
+  const excludedKeys = new Set(excluded)
+  const entries = safeEntries(record)
+    .filter(([key]) => !excludedKeys.has(key) && isUserFacingKey(key))
+  if (state && entries.length > MAX_COLLECTION_ITEMS) state.omitted = true
+  return entries.slice(0, MAX_COLLECTION_ITEMS)
+    .map(([key, value]) => [readableLabel(key), normalizeGeneralValue(value, state)])
+    .filter(([key, result]) => key && result.node)
 }
 
-function translationRows(value) {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => {
-      const scalar = cleanText(entry)
-      if (scalar) return [{ name: `Translation ${index + 1}`, text: scalar, detail: null }]
-      if (!entry || typeof entry !== 'object') return []
-      const name = cleanText(
-        entry.code ?? entry.translation ?? entry.name ?? entry.label,
-      )
-      const text = cleanText(entry.text ?? entry.content ?? entry.value)
-      const detail = cleanText(entry.language ?? entry.title)
-      return name && (text || detail) ? [{ name, text, detail }] : []
-    })
-  }
-
-  if (!value || typeof value !== 'object') {
-    const scalar = cleanText(value)
-    return scalar ? [{ name: 'Translation', text: scalar, detail: null }] : []
-  }
-
-  return Object.entries(value).flatMap(([code, entry]) => {
-    const scalar = cleanText(entry)
-    if (scalar) return [{ name: code, text: scalar, detail: null }]
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
-    const text = cleanText(entry.text ?? entry.content ?? entry.value)
-    const detail = cleanText(entry.language ?? entry.name ?? entry.title)
-    return text || detail ? [{ name: code, text, detail }] : []
-  })
+function usableValue(value) {
+  return Boolean(normalizeGeneralValue(value).node)
 }
 
-function TranslationContent({ value, label }) {
-  const rows = translationRows(value)
-  if (!rows.length) return null
+function RecordDetails({ entries }) {
+  if (!entries.length) return null
   return (
-    <div className="study-tools__table-wrap">
-      <table aria-label={label} className="study-tools__table">
-        <thead>
-          <tr>
-            <th scope="col">Translation</th>
-            <th scope="col">Text</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ name, text, detail }, index) => (
-            <tr key={`${name}-${index}`}>
-              <th scope="row">
-                {translationLabel(name)}
-                {detail && <small>{detail}</small>}
-              </th>
-              <td>{text ?? 'Details available'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function languageRecords(value) {
-  const candidates = Array.isArray(value) ? value : [value]
-  return candidates.flatMap((entry) => {
-    const scalar = cleanText(entry)
-    if (scalar) return [{ title: scalar, entries: [] }]
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
-    const title = cleanText(
-      entry.text ?? entry.word_text ?? entry.word ?? entry.term ?? entry.title,
-    )
-    const entries = recordEntries(
-      entry,
-      ['text', 'word_text', 'word', 'term', 'title'],
-    )
-    return title || entries.length ? [{ title: title ?? 'Language insight', entries }] : []
-  })
-}
-
-function LanguageContent({ value }) {
-  const records = languageRecords(value)
-  if (!records.length) return null
-  return (
-    <dl className="study-tools__definitions" data-testid="study-tool-description-list">
-      {records.map(({ title, entries }, index) => (
-        <div key={`${title}-${index}`}>
-          <dt>{title}</dt>
+    <dl className="study-tools__record-details">
+      {entries.map(([label, result], index) => (
+        <div key={`${label}-${index}`}>
+          <dt>{label}</dt>
           <dd>
-            {entries.length
-              ? (
-                <dl className="study-tools__record-details">
-                  {entries.map(([label, entryValue], entryIndex) => (
-                    <div key={`${label}-${entryIndex}`}>
-                      <dt>{label}</dt>
-                      <dd>
-                        {cleanText(entryValue) ?? <GeneralContent value={entryValue} />}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              )
-              : 'Language detail'}
+            <GeneralNode node={result.node} />
+            {result.omitted && <OmittedMarker />}
           </dd>
         </div>
       ))}
@@ -232,46 +221,188 @@ function LanguageContent({ value }) {
   )
 }
 
+function GeneralContent({ value }) {
+  const result = normalizeGeneralValue(value)
+  if (!result.node) return result.omitted ? <OmittedMarker /> : null
+  return (
+    <>
+      <GeneralNode node={result.node} block />
+      {result.omitted && <OmittedMarker />}
+    </>
+  )
+}
+
+function translationRows(value) {
+  const state = { omitted: false }
+  const boundedText = (candidate) => limitedText(candidate, state)
+  const fromArray = (entries) => {
+    if (entries.length > MAX_COLLECTION_ITEMS) state.omitted = true
+    return entries.slice(0, MAX_COLLECTION_ITEMS).flatMap((entry, index) => {
+      const scalar = boundedText(entry)
+      if (scalar) return [{ name: `Translation ${index + 1}`, text: scalar, detail: null }]
+      if (!entry || typeof entry !== 'object') return []
+      const name = boundedText(
+        entry.code ?? entry.translation ?? entry.name ?? entry.label,
+      )
+      const text = boundedText(entry.text ?? entry.content ?? entry.value)
+      const detail = boundedText(entry.language ?? entry.title)
+      return name && (text || detail) ? [{ name, text, detail }] : []
+    })
+  }
+  if (Array.isArray(value)) return { rows: fromArray(value), omitted: state.omitted }
+
+  if (!value || typeof value !== 'object') {
+    const scalar = boundedText(value)
+    return {
+      rows: scalar ? [{ name: 'Translation', text: scalar, detail: null }] : [],
+      omitted: state.omitted,
+    }
+  }
+
+  if ('code' in value || 'translation' in value || 'name' in value) {
+    return { rows: fromArray([value]), omitted: state.omitted }
+  }
+
+  const entries = safeEntries(value)
+  if (entries.length > MAX_COLLECTION_ITEMS) state.omitted = true
+  const rows = entries.slice(0, MAX_COLLECTION_ITEMS).flatMap(([code, entry]) => {
+    const scalar = boundedText(entry)
+    if (scalar) return [{ name: code, text: scalar, detail: null }]
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const text = boundedText(entry.text ?? entry.content ?? entry.value)
+    const detail = boundedText(entry.language ?? entry.name ?? entry.title)
+    return text || detail ? [{ name: code, text, detail }] : []
+  })
+  return { rows, omitted: state.omitted }
+}
+
+function TranslationContent({ value, label }) {
+  const { rows, omitted } = translationRows(value)
+  if (!rows.length) return null
+  return (
+    <>
+      <div className="study-tools__table-wrap">
+        <table aria-label={label} className="study-tools__table">
+          <thead>
+            <tr>
+              <th scope="col">Translation</th>
+              <th scope="col">Text</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ name, text, detail }, index) => (
+              <tr key={`${name}-${index}`}>
+                <th scope="row">
+                  {translationLabel(name)}
+                  {detail && <small>{detail}</small>}
+                </th>
+                <td>{text ?? 'Translation text unavailable'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {omitted && <OmittedMarker />}
+    </>
+  )
+}
+
+function languageRecords(value) {
+  const allCandidates = Array.isArray(value) ? value : [value]
+  const state = {
+    nodes: 0,
+    omitted: allCandidates.length > MAX_COLLECTION_ITEMS,
+  }
+  const records = allCandidates.slice(0, MAX_COLLECTION_ITEMS).flatMap((entry) => {
+    const scalar = limitedText(entry, state)
+    if (scalar) return [{ title: scalar, entries: [] }]
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const title = limitedText(
+      entry.text ?? entry.word_text ?? entry.word ?? entry.term ?? entry.title,
+      state,
+    )
+    const entries = recordEntries(
+      entry,
+      ['text', 'word_text', 'word', 'term', 'title'],
+      state,
+    )
+    return title || entries.length ? [{ title: title ?? 'Language insight', entries }] : []
+  })
+  return { records, omitted: state.omitted }
+}
+
+function LanguageContent({ value }) {
+  const { records, omitted } = languageRecords(value)
+  if (!records.length) return null
+  return (
+    <>
+      <dl className="study-tools__definitions" data-testid="study-tool-description-list">
+        {records.map(({ title, entries }, index) => (
+          <div key={`${title}-${index}`}>
+            <dt>{title}</dt>
+            <dd>
+              {entries.length ? <RecordDetails entries={entries} /> : 'Language detail'}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {omitted && <OmittedMarker />}
+    </>
+  )
+}
+
 function crossReferenceRecords(value) {
-  const candidates = Array.isArray(value) ? value : [value]
-  return candidates.flatMap((entry) => {
-    const scalar = cleanText(entry)
+  const allCandidates = Array.isArray(value) ? value : [value]
+  const state = {
+    nodes: 0,
+    omitted: allCandidates.length > MAX_COLLECTION_ITEMS,
+  }
+  const records = allCandidates.slice(0, MAX_COLLECTION_ITEMS).flatMap((entry) => {
+    const scalar = limitedText(entry, state)
     if (scalar) return [{ title: scalar, text: null, description: null, details: [] }]
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
-    const book = cleanText(entry.book ?? entry.target_book)
+    const book = limitedText(entry.book ?? entry.target_book, state)
     const chapter = positiveInteger(entry.chapter ?? entry.target_chapter)
     const verse = positiveInteger(entry.verse ?? entry.target_verse)
     const derivedReference = book && chapter
       ? `${book} ${chapter}${verse ? `:${verse}` : ''}`
       : null
-    const title = cleanText(entry.reference ?? entry.title) ?? derivedReference
-    const text = cleanText(entry.text ?? entry.target_text ?? entry.content)
-    const description = cleanText(entry.description ?? entry.context)
+    const title = limitedText(entry.reference ?? entry.title, state) ?? derivedReference
+    const text = limitedText(entry.text ?? entry.target_text ?? entry.content, state)
+    const description = limitedText(entry.description ?? entry.context, state)
     const details = recordEntries(entry, [
       'book', 'target_book', 'chapter', 'target_chapter', 'verse', 'target_verse',
       'reference', 'title', 'text', 'target_text', 'content', 'description', 'context',
-    ])
+    ], state)
     return title || text || description || details.length
       ? [{ title: title ?? 'Related passage', text, description, details }]
       : []
   })
+  return { records, omitted: state.omitted }
 }
 
 function CrossReferenceContent({ value }) {
-  const records = crossReferenceRecords(value)
+  const { records, omitted } = crossReferenceRecords(value)
   if (!records.length) return null
   return (
-    <ul className="study-tools__list study-tools__references">
-      {records.map(({ title, text, description, details }, index) => (
-        <li key={`${title}-${index}`}>
-          <strong>{title}</strong>
-          {text && <p>{text}</p>}
-          {description && <p>{description}</p>}
-          <RecordDetails entries={details} />
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="study-tools__list study-tools__references">
+        {records.map(({ title, text, description, details }, index) => (
+          <li key={`${title}-${index}`}>
+            <strong>{title}</strong>
+            {text && <p>{text}</p>}
+            {description && <p>{description}</p>}
+            <RecordDetails entries={details} />
+          </li>
+        ))}
+      </ul>
+      {omitted && <OmittedMarker />}
+    </>
   )
+}
+
+function OmittedMarker() {
+  return <p className="study-tools__omitted">{OMITTED_MESSAGE}</p>
 }
 
 function detailValue(details, tool) {
@@ -282,36 +413,93 @@ function detailValue(details, tool) {
   return null
 }
 
-function InlinePanel({ tool, value, hasVerse, headingId }) {
+function detailsMatchReference(details, normalizedReference) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return true
+  const coordinates = [
+    ['book', (value) => cleanText(value)?.toLocaleLowerCase(), normalizedReference.value.book?.toLocaleLowerCase()],
+    ['chapter', positiveInteger, normalizedReference.value.chapter],
+    ['verse', positiveInteger, normalizedReference.value.verse],
+  ]
+  const suppliedCoordinates = coordinates.filter(([key]) => (
+    Object.prototype.hasOwnProperty.call(details, key)
+  ))
+  if (!suppliedCoordinates.length) return true
+  return suppliedCoordinates.every(([key, normalize, expected]) => {
+    const actual = normalize(details[key])
+    return actual != null && expected != null && actual === expected
+  })
+}
+
+function resultLabel(count, verified = false) {
+  return `${count} ${verified ? 'verified ' : ''}${count === 1 ? 'result' : 'results'}`
+}
+
+function InlinePanel({
+  tool,
+  value,
+  hasVerse,
+  headingId,
+  detailState,
+  referenceLabel,
+  announcementRevision,
+}) {
   let content = null
   let hasContent = false
+  let resultCount = 0
   if (tool.id === 'compare') {
-    hasContent = translationRows(value).length > 0
+    const { rows } = translationRows(value)
+    hasContent = rows.length > 0
+    resultCount = rows.filter(({ text }) => text).length
     content = <TranslationContent value={value} label={tool.label} />
   } else if (tool.id === 'languages') {
-    hasContent = languageRecords(value).length > 0
+    const { records } = languageRecords(value)
+    hasContent = records.length > 0
+    resultCount = records.length
     content = <LanguageContent value={value} />
   } else if (tool.id === 'cross-references') {
-    hasContent = crossReferenceRecords(value).length > 0
+    const { records } = crossReferenceRecords(value)
+    hasContent = records.length > 0
+    resultCount = records.length
     content = <CrossReferenceContent value={value} />
   } else {
-    hasContent = usableValue(value)
+    const normalized = normalizeGeneralValue(value)
+    hasContent = Boolean(normalized.node)
+    resultCount = normalized.node?.kind === 'list'
+      ? normalized.node.items.length
+      : (normalized.node ? 1 : 0)
     content = <GeneralContent value={value} />
+  }
+
+  let status
+  if (detailState === 'stale') {
+    status = `Study information is updating for ${referenceLabel}.`
+  } else if (detailState === 'mismatch') {
+    status = `Verified study information is unavailable for ${referenceLabel}.`
+  } else if (!hasContent) {
+    status = `No verified ${tool.label.toLocaleLowerCase()} information is available for this ${hasVerse ? 'verse' : 'passage'}.`
+  } else {
+    status = `${tool.label} updated — ${resultLabel(resultCount, tool.id === 'compare')}`
   }
 
   return (
     <section
       className="study-tools__content"
       aria-labelledby={headingId}
-      aria-live="polite"
-      aria-atomic="false"
+      aria-busy={detailState === 'stale'}
     >
       <h3 id={headingId}>{tool.label}</h3>
-      {hasContent ? content : (
-        <p className="study-tools__empty">
-          No verified {tool.label.toLocaleLowerCase()} information is available for this {hasVerse ? 'verse' : 'passage'}.
-        </p>
-      )}
+      <p
+        key={`${tool.id}-${detailState}-${announcementRevision}`}
+        className={hasContent && detailState === 'ready'
+          ? 'study-tools__visually-hidden'
+          : 'study-tools__empty'}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {status}
+      </p>
+      {detailState === 'ready' && hasContent ? content : null}
     </section>
   )
 }
@@ -328,6 +516,7 @@ export default function StudyTools({
   const panelId = useId()
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
+  const detailsAssociationRef = useRef(null)
   const [activeToolId, setActiveToolId] = useState(CONTEXT_TOOL.id)
   const normalizedReference = useMemo(
     () => normalizeReference(reference),
@@ -350,10 +539,27 @@ export default function StudyTools({
     if (open) setActiveToolId(CONTEXT_TOOL.id)
   }, [open, referenceKey])
 
+  if (
+    !detailsAssociationRef.current
+    || detailsAssociationRef.current.details !== details
+  ) {
+    detailsAssociationRef.current = {
+      details,
+      referenceKey,
+      revision: (detailsAssociationRef.current?.revision ?? 0) + 1,
+    }
+  }
+  let detailState = detailsAssociationRef.current.referenceKey === referenceKey
+    ? 'ready'
+    : 'stale'
+  if (detailState === 'ready' && !detailsMatchReference(details, normalizedReference)) {
+    detailState = 'mismatch'
+  }
+
   if (!open) return null
 
   const activeTool = INLINE_TOOLS.find(({ id }) => id === activeToolId) ?? CONTEXT_TOOL
-  const value = detailValue(details, activeTool)
+  const value = detailState === 'ready' ? detailValue(details, activeTool) : null
   const navigationAvailable = typeof onNavigate === 'function'
 
   return (
@@ -416,6 +622,9 @@ export default function StudyTools({
           value={value}
           hasVerse={normalizedReference.hasVerse}
           headingId={`${panelId}-${activeTool.id}`}
+          detailState={detailState}
+          referenceLabel={normalizedReference.label}
+          announcementRevision={detailsAssociationRef.current.revision}
         />
       </aside>
     </div>

@@ -881,6 +881,14 @@ button.scripture-pane__verse:focus-visible {
   line-height: 1.65;
 }
 
+.study-tools__omitted {
+  margin: 0.75rem 0 0;
+  color: var(--reader-secondary);
+  font-size: 0.85rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
 .study-tools__empty {
   padding: 1rem;
   color: var(--reader-secondary);
