@@ -1,4 +1,12 @@
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import SearchDialog from '../search/SearchDialog'
 import { pageFromKnownHash } from '../routing/pageRoutes'
 import BookPicker from './BookPicker'
@@ -71,19 +79,21 @@ export default function ScriptureReaderPage({
   const { fontSize, readingWidth } = useReaderPreferences()
   const selectedTranslationRef = useRef(route.translation)
   const routeRef = useRef(route)
-  selectedTranslationRef.current = route.translation
-  routeRef.current = route
 
   const navigate = useCallback((next) => {
     const current = routeRef.current
     const normalized = normalizeRoute(
       typeof next === 'function' ? next(current) : { ...current, ...next },
     )
-    routeRef.current = normalized
     setRoute(normalized)
-    const hash = readerHash(normalized)
-    if (window.location.hash !== hash) window.location.hash = hash
   }, [])
+
+  useLayoutEffect(() => {
+    routeRef.current = route
+    selectedTranslationRef.current = route.translation
+    const hash = readerHash(route)
+    if (window.location.hash !== hash) window.location.hash = hash
+  }, [route])
 
   useEffect(() => {
     const onHashChange = () => setRoute(parseReaderHash())
@@ -126,6 +136,9 @@ export default function ScriptureReaderPage({
     (book) => book.toLocaleLowerCase() === route.book.toLocaleLowerCase(),
   )
   const catalogReady = currentBooksStatus === 'ready'
+  const routeLoadAllowed = currentBooksStatus === 'error' || (
+    catalogReady && routeBookValid
+  )
 
   useEffect(() => {
     if (!catalogReady || currentBooks.length === 0 || routeBookValid) return
@@ -133,7 +146,7 @@ export default function ScriptureReaderPage({
   }, [catalogReady, currentBooks, navigate, routeBookValid])
 
   useEffect(() => {
-    if (!catalogReady || !routeBookValid) {
+    if (!routeLoadAllowed) {
       chaptersGeneration.current += 1
       setChapters([])
       setChaptersBookKey(null)
@@ -163,10 +176,10 @@ export default function ScriptureReaderPage({
       controller.abort()
       chaptersGeneration.current += 1
     }
-  }, [catalogReady, route.book, routeBookValid, chaptersRetryRevision])
+  }, [route.book, routeLoadAllowed, chaptersRetryRevision])
 
   useEffect(() => {
-    if (!catalogReady || !routeBookValid) {
+    if (!routeLoadAllowed) {
       chapterGeneration.current += 1
       setStatus(catalogReady && currentBooks.length === 0 ? 'empty' : 'loading')
       return undefined
@@ -211,7 +224,7 @@ export default function ScriptureReaderPage({
     currentBooks.length,
     route.book,
     route.chapter,
-    routeBookValid,
+    routeLoadAllowed,
     retryRevision,
     navigate,
   ])
@@ -358,7 +371,7 @@ export default function ScriptureReaderPage({
     }
     const page = pageFromKnownHash(target.hash)
     if (!page) return
-    if (page === 'apocrypha') window.location.hash = target.hash
+    if (page === 'apocrypha') navigate(parseReaderHash(target.hash))
     else onPageChange?.(page)
   }
 

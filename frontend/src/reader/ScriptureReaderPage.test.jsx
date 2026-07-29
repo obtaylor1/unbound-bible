@@ -202,12 +202,15 @@ describe('ScriptureReaderPage', () => {
     renderStrictReader()
     await screen.findByText('In the beginning.')
     getChapter.mockClear()
+    const hashChanges = vi.fn()
+    window.addEventListener('hashchange', hashChanges)
 
     fireEvent.click(screen.getByRole('button', { name: /Genesis 1 verse 2/ }))
 
     expect(window.location.hash).toContain('verse=2')
-    await Promise.resolve()
+    await waitFor(() => expect(hashChanges).toHaveBeenCalledTimes(1))
     expect(getChapter).not.toHaveBeenCalled()
+    window.removeEventListener('hashchange', hashChanges)
   })
 
   it('reacts to browser hash navigation and ignores stale chapter results', async () => {
@@ -413,16 +416,16 @@ describe('ScriptureReaderPage', () => {
     getBookChapters.mockRejectedValueOnce(new Error('chapters down')).mockResolvedValueOnce([1, 3])
     renderReader()
 
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    expect(window.location.hash).toContain('book=Genesis')
+    expect(screen.getByRole('status', { name: 'Chapter navigation unavailable' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous chapter' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next chapter' })).toBeDisabled()
+
     await user.click(screen.getByRole('button', { name: 'Choose a book' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Bible books could not load')
     await user.click(screen.getByRole('button', { name: 'Try loading books again' }))
     expect(await screen.findByRole('button', { name: 'Genesis' })).toBeInTheDocument()
-    await screen.findByText('In the beginning.')
-
-    expect(screen.getByRole('status', { name: 'Chapter navigation unavailable' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Previous chapter' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Next chapter' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'Try chapter navigation again' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next chapter' })).toBeEnabled())
   })
 
@@ -465,7 +468,8 @@ describe('ScriptureReaderPage', () => {
     await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
     expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open Scripture result' }))
-    expect(window.location.hash).toContain('book=Exodus&chapter=3&verse=2')
+    expect(window.location.hash).toContain('book=Exodus&chapter=3')
+    expect(window.location.hash).toContain('verse=2')
     expect(screen.queryByRole('dialog', { name: 'Search' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Search', hidden: true }))
@@ -512,6 +516,32 @@ describe('ScriptureReaderPage', () => {
     expect(navigateDocument).toHaveBeenCalledWith(
       new URL('/share/public-study#section', window.location.href).href,
     )
+  })
+
+  it('does not expose a reader route in the URL before React commits it', async () => {
+    let hashInsideHandler
+    function CommitObserverSearch({ open, onNavigate }) {
+      return open ? (
+        <button
+          type="button"
+          onClick={() => {
+            onNavigate('/#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81')
+            hashInsideHandler = window.location.hash
+          }}
+        >
+          Observe Scripture navigation
+        </button>
+      ) : null
+    }
+    renderReader({ SearchComponent: CommitObserverSearch })
+    await screen.findByText('In the beginning.')
+    const oldHash = window.location.hash
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search', hidden: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Observe Scripture navigation' }))
+
+    expect(hashInsideHandler).toBe(oldHash)
+    await waitFor(() => expect(window.location.hash).toContain('book=Exodus'))
   })
 
   it('integrates the real accessible search dialog', async () => {
