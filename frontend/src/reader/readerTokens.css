@@ -352,6 +352,123 @@
   opacity: 0.7;
 }
 
+.scripture-pane {
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+  box-sizing: border-box;
+  padding: clamp(2rem, 7vw, 5rem) clamp(1.25rem, 5vw, 3rem);
+  color: var(--reader-scripture);
+  font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  font-size: var(--reader-font-size);
+  line-height: 1.75;
+}
+
+.reader-width-wide .scripture-pane {
+  max-width: 64rem;
+}
+
+.reader-font-sm .scripture-pane {
+  font-size: 18px;
+}
+
+.reader-font-md .scripture-pane {
+  font-size: 21px;
+}
+
+.reader-font-lg .scripture-pane {
+  font-size: 24px;
+}
+
+.reader-font-xl .scripture-pane {
+  font-size: 27px;
+}
+
+.reader-font-xxl .scripture-pane {
+  font-size: 30px;
+}
+
+.scripture-pane__header {
+  margin-bottom: clamp(1.75rem, 5vw, 3rem);
+}
+
+.scripture-pane__header h1 {
+  margin: 0.15rem 0 0;
+  color: var(--reader-text);
+  font-size: clamp(1.8rem, 5vw, 2.75rem);
+  line-height: 1.15;
+}
+
+.scripture-pane__eyebrow {
+  margin: 0;
+  color: var(--reader-secondary);
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.scripture-pane__verses {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scripture-pane__verse {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  align-items: start;
+  box-sizing: border-box;
+  padding: 0.55rem 0.75rem;
+  overflow-wrap: anywhere;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scripture-pane__verse:hover,
+.scripture-pane__verse:focus-visible {
+  background: var(--reader-surface);
+  border-color: var(--reader-teal);
+}
+
+.scripture-pane__verse[aria-disabled='true'] {
+  cursor: default;
+}
+
+.scripture-pane__verse[aria-pressed='true'] {
+  color: var(--reader-scripture);
+  background: var(--reader-elevated);
+  box-shadow: inset 0.3rem 0 0 var(--reader-violet);
+  font-weight: 650;
+}
+
+.scripture-pane__verse-number {
+  padding-top: 0.12em;
+  color: var(--reader-violet);
+  font-family: system-ui, sans-serif;
+  font-size: 0.68em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.scripture-pane__verse-text {
+  min-width: 0;
+}
+
 .scripture-reader .auth-backdrop {
   background: color-mix(in srgb, var(--reader-canvas) 82%, transparent);
 }
