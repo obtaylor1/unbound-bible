@@ -9,33 +9,31 @@ const readerTokensCss = readFileSync(
   'utf8',
 )
 
-function cssBlocks(selector) {
-  return [...readerTokensCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+function cssBlocks(selector, source = readerTokensCss) {
+  return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selectorList]) => (
-    selectorList
-      .split(',')
-      .map((item) => item.trim())
-      .includes(selector)
+      selectorList
+        .split(',')
+        .map((item) => item.trim())
+        .includes(selector)
     ))
     .map(([, , declarations]) => declarations)
 }
 
-function cssBlock(selector) {
-  return cssBlocks(selector)[0] ?? ''
-}
-
-function cssDeclarations(selector) {
+function cssDeclarations(selector, source = readerTokensCss) {
   return Object.fromEntries(
-    cssBlocks(selector)
+    cssBlocks(selector, source)
       .flatMap((block) => [...block.matchAll(/^\s*([\w-]+):\s*([^;]+);/gm)])
       .map(([, property, value]) => [property, value.trim()]),
   )
 }
 
-function colorTokens(selector) {
+function colorTokens(selector, source = readerTokensCss) {
   return Object.fromEntries(
-    [...cssBlock(selector).matchAll(/(--[\w-]+):\s*(#[\dA-F]{6})/gi)]
-      .map(([, name, value]) => [name, value]),
+    Object.entries(cssDeclarations(selector, source))
+      .filter(([property, value]) => (
+        property.startsWith('--') && /^#[\dA-F]{6}$/i.test(value)
+      )),
   )
 }
 
@@ -81,6 +79,10 @@ describe('ReaderStatus', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/offline/i)
     expect(screen.getByRole('status')).toHaveTextContent(/already-loaded Scripture remains available/i)
     expect(screen.getByRole('status')).toHaveTextContent(/online study tools may not work/i)
+    expect(screen.getByRole('heading', {
+      level: 1,
+      name: 'You’re offline',
+    })).toBeInTheDocument()
   })
 
   it('offers the Books action when no passage text is available', () => {
@@ -164,6 +166,17 @@ describe('ReaderStatus', () => {
 })
 
 describe('reader action colors', () => {
+  it('honors later token declarations for a repeated selector', () => {
+    const repeatedSelectorCss = `
+      .token-fixture { --fixture-color: #000000; }
+      .token-fixture { --fixture-color: #FFFFFF; }
+    `
+
+    expect(colorTokens('.token-fixture', repeatedSelectorCss)).toEqual({
+      '--fixture-color': '#FFFFFF',
+    })
+  })
+
   it('keeps the semantic primary foreground at WCAG AA contrast in both themes', () => {
     const darkTokens = colorTokens('.scripture-reader')
     const lightOverrides = colorTokens("[data-reader-theme='light'] .scripture-reader")

@@ -39,7 +39,7 @@ export default function ReaderStatus({
         role="status"
         aria-labelledby={headingId}
       >
-        <h2 id={headingId}>You’re offline</h2>
+        <h1 id={headingId}>You’re offline</h1>
         <p>
           Already-loaded Scripture remains available, but online study tools may
           not work until your connection returns.
