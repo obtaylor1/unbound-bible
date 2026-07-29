@@ -154,8 +154,10 @@ describe('StudyTools', () => {
       'aria-pressed',
       'true',
     )
-    expect(screen.getByRole('heading', { name: 'Compare translations' })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Compare translations selected')
+    const panel = screen.getByRole('region', { name: 'Compare translations' })
+    expect(panel).toHaveAttribute('aria-live', 'polite')
+    expect(panel).toHaveAttribute('aria-atomic', 'false')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('calls route destinations with a normalized reference without changing the inline panel', async () => {
@@ -337,6 +339,38 @@ describe('StudyTools', () => {
     expect(screen.getByText(
       'No verified compare translations information is available for this passage.',
     )).toBeInTheDocument()
+  })
+
+  it('announces refreshed and empty results through the labelled live panel', () => {
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ historical_context: 'Verified historical setting.' }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const panel = screen.getByRole('region', { name: 'Context' })
+    expect(panel).toHaveAttribute('aria-live', 'polite')
+    expect(panel).toHaveTextContent('Verified historical setting.')
+
+    rerender(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ historical_context: 'Updated verified setting.' }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(panel).toHaveTextContent('Updated verified setting.')
+
+    rerender(
+      <StudyTools open reference={reference} details={{}} onClose={vi.fn()} />,
+    )
+    expect(panel).toHaveTextContent(
+      'No verified context information is available for this verse.',
+    )
   })
 
   it('normalizes missing and malformed references without leaking implementation values', () => {

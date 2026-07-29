@@ -300,7 +300,12 @@ function InlinePanel({ tool, value, hasVerse, headingId }) {
   }
 
   return (
-    <section className="study-tools__content" aria-labelledby={headingId}>
+    <section
+      className="study-tools__content"
+      aria-labelledby={headingId}
+      aria-live="polite"
+      aria-atomic="false"
+    >
       <h3 id={headingId}>{tool.label}</h3>
       {hasContent ? content : (
         <p className="study-tools__empty">
@@ -406,9 +411,6 @@ export default function StudyTools({
           Navigation unavailable
         </span>
 
-        <p className="study-tools__visually-hidden" role="status" aria-live="polite">
-          {activeTool.label} selected
-        </p>
         <InlinePanel
           tool={activeTool}
           value={value}
