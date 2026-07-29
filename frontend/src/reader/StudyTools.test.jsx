@@ -94,6 +94,14 @@ describe('study tool registry', () => {
     )
     expect(studyReferenceKey({ book: 'Genesis', chapter: true })).toBe('current-passage')
   })
+
+  it('creates nonthrowing stable keys for malformed Unicode book names', () => {
+    const malformed = { book: 'Bad\uD800Book', chapter: 1 }
+    expect(() => studyReferenceKey(malformed)).not.toThrow()
+    expect(studyReferenceKey(malformed)).toBe(
+      studyReferenceKey({ book: 'Bad\uFFFDBook', chapter: 1 }),
+    )
+  })
 })
 
 describe('StudyTools', () => {
@@ -390,6 +398,71 @@ describe('StudyTools', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'No verified context information is available for this verse.',
     )
+  })
+
+  it('replaces the short live node for a standalone new same-count details object', () => {
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ historical_context: 'First verified setting.' }}
+        detailsStatus="ready"
+        onClose={vi.fn()}
+      />,
+    )
+    const firstStatus = screen.getByRole('status')
+    expect(firstStatus).toHaveTextContent('Context updated — 1 result')
+
+    rerender(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ historical_context: 'Second verified setting.' }}
+        detailsStatus="ready"
+        onClose={vi.fn()}
+      />,
+    )
+    const secondStatus = screen.getByRole('status')
+    expect(secondStatus).not.toBe(firstStatus)
+    expect(secondStatus).toHaveTextContent('Context updated — 1 result')
+    expect(screen.getByText('Second verified setting.')).toBeInTheDocument()
+    expect(screen.queryByText('First verified setting.')).not.toBeInTheDocument()
+  })
+
+  it('uses the Task 8 request generation to announce same-object refreshes', () => {
+    const ownedKey = studyReferenceKey(reference)
+    const mutableDetails = { historical_context: 'Initial request result.' }
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={reference}
+        details={mutableDetails}
+        detailsReferenceKey={ownedKey}
+        detailsStatus="ready"
+        detailsRevision={4}
+        onClose={vi.fn()}
+      />,
+    )
+    const firstStatus = screen.getByRole('status')
+
+    mutableDetails.historical_context = 'Refreshed request result.'
+    rerender(
+      <StudyTools
+        open
+        reference={reference}
+        details={mutableDetails}
+        detailsReferenceKey={ownedKey}
+        detailsStatus="ready"
+        detailsRevision={5}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const refreshedStatus = screen.getByRole('status')
+    expect(refreshedStatus).not.toBe(firstStatus)
+    expect(refreshedStatus).toHaveTextContent('Context updated — 1 result')
+    expect(screen.getByText('Refreshed request result.')).toBeInTheDocument()
+    expect(screen.queryByText('Initial request result.')).not.toBeInTheDocument()
   })
 
   it('suppresses stale details synchronously until an explicitly owned result arrives', () => {

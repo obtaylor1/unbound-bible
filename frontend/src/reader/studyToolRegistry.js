@@ -4,6 +4,28 @@ function cleanReferenceText(value) {
   return trimmed || null
 }
 
+function toWellFormedReferenceText(value) {
+  if (typeof value.toWellFormed === 'function') return value.toWellFormed()
+  let result = ''
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1)
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        result += value[index] + value[index + 1]
+        index += 1
+      } else {
+        result += '\uFFFD'
+      }
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      result += '\uFFFD'
+    } else {
+      result += value[index]
+    }
+  }
+  return result
+}
+
 export function positiveStudyInteger(value) {
   if (typeof value === 'number') {
     return Number.isFinite(value) && Number.isSafeInteger(value) && value > 0
@@ -39,7 +61,7 @@ export function studyReferenceKey(reference) {
   const { value } = normalizeStudyReference(reference)
   if (!value.book || !value.chapter) return 'current-passage'
   return [
-    encodeURIComponent(value.book.toLocaleLowerCase()),
+    encodeURIComponent(toWellFormedReferenceText(value.book.toLocaleLowerCase())),
     value.chapter,
     value.verse ?? '',
   ].join('|')

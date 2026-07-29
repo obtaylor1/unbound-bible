@@ -14,6 +14,8 @@ const MAX_RENDER_NODES = 200
 const MAX_COLLECTION_ITEMS = 50
 const MAX_STRING_LENGTH = 5000
 const OMITTED_MESSAGE = 'Additional details omitted'
+const DETAILS_ANNOUNCEMENT_IDS = new WeakMap()
+let nextDetailsAnnouncementId = 1
 
 function cleanText(value) {
   if (typeof value === 'string') {
@@ -30,6 +32,24 @@ function limitedText(value, state) {
   if (text.length <= MAX_STRING_LENGTH) return text
   if (state) state.omitted = true
   return `${text.slice(0, MAX_STRING_LENGTH)}…`
+}
+
+function announcementRevision(details, explicitRevision) {
+  if (explicitRevision !== undefined) {
+    try {
+      return `request-${String(explicitRevision)}`
+    } catch {
+      return 'request-explicit'
+    }
+  }
+  if (details && (typeof details === 'object' || typeof details === 'function')) {
+    if (!DETAILS_ANNOUNCEMENT_IDS.has(details)) {
+      DETAILS_ANNOUNCEMENT_IDS.set(details, nextDetailsAnnouncementId)
+      nextDetailsAnnouncementId += 1
+    }
+    return `details-${DETAILS_ANNOUNCEMENT_IDS.get(details)}`
+  }
+  return `details-${details == null ? 'empty' : typeof details}`
 }
 
 function readableLabel(value) {
@@ -494,6 +514,7 @@ export default function StudyTools({
   reference,
   details,
   detailsReferenceKey,
+  detailsRevision,
   detailsStatus,
   onClose,
   onNavigate,
@@ -550,6 +571,8 @@ export default function StudyTools({
     : 'ready'
   const coordinates = coordinateOwnership(details, normalizedReference)
   const hasExplicitKey = typeof detailsReferenceKey === 'string'
+  const detailsKeyToken = hasExplicitKey ? detailsReferenceKey : 'implicit'
+  const liveRevision = announcementRevision(details, detailsRevision)
   let detailState = 'ready'
   if (normalizedStatus === 'loading') detailState = 'loading'
   else if (normalizedStatus === 'error') detailState = 'error'
@@ -631,7 +654,7 @@ export default function StudyTools({
           headingId={`${panelId}-${activeTool.id}`}
           detailState={detailState}
           referenceLabel={normalizedReference.label}
-          announcementRevision={`${referenceKey}-${normalizedStatus}-${detailsReferenceKey ?? 'implicit'}`}
+          announcementRevision={`${referenceKey}-${normalizedStatus}-${detailsKeyToken}-${liveRevision}`}
         />
       </aside>
     </div>
