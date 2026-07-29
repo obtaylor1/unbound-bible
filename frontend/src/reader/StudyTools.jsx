@@ -1,5 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { STUDY_TOOLS } from './studyToolRegistry'
+import { useId, useMemo, useRef, useState } from 'react'
+import {
+  normalizeStudyReference,
+  positiveStudyInteger,
+  STUDY_TOOLS,
+  studyReferenceKey,
+} from './studyToolRegistry'
 import useDialogFocus from './useDialogFocus'
 
 const INLINE_TOOLS = STUDY_TOOLS.filter(({ kind }) => kind === 'inline')
@@ -25,38 +30,6 @@ function limitedText(value, state) {
   if (text.length <= MAX_STRING_LENGTH) return text
   if (state) state.omitted = true
   return `${text.slice(0, MAX_STRING_LENGTH)}…`
-}
-
-function positiveInteger(value) {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && Number.isInteger(value) && value > 0
-      ? value
-      : null
-  }
-  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
-  const number = Number(value)
-  return Number.isSafeInteger(number) && number > 0 ? number : null
-}
-
-function normalizeReference(reference) {
-  if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
-    return { value: {}, label: 'Current passage', hasVerse: false }
-  }
-
-  const book = cleanText(reference.book)
-  const chapter = positiveInteger(reference.chapter)
-  const verse = positiveInteger(reference.verse)
-
-  if (!book || book.length > 120 || !chapter) {
-    return { value: {}, label: 'Current passage', hasVerse: false }
-  }
-
-  const value = verse ? { book, chapter, verse } : { book, chapter }
-  return {
-    value,
-    label: `${book} ${chapter}${verse ? `:${verse}` : ''}`,
-    hasVerse: Boolean(verse),
-  }
 }
 
 function readableLabel(value) {
@@ -362,8 +335,8 @@ function crossReferenceRecords(value) {
     if (scalar) return [{ title: scalar, text: null, description: null, details: [] }]
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
     const book = limitedText(entry.book ?? entry.target_book, state)
-    const chapter = positiveInteger(entry.chapter ?? entry.target_chapter)
-    const verse = positiveInteger(entry.verse ?? entry.target_verse)
+    const chapter = positiveStudyInteger(entry.chapter ?? entry.target_chapter)
+    const verse = positiveStudyInteger(entry.verse ?? entry.target_verse)
     const derivedReference = book && chapter
       ? `${book} ${chapter}${verse ? `:${verse}` : ''}`
       : null
@@ -413,21 +386,29 @@ function detailValue(details, tool) {
   return null
 }
 
-function detailsMatchReference(details, normalizedReference) {
-  if (!details || typeof details !== 'object' || Array.isArray(details)) return true
-  const coordinates = [
-    ['book', (value) => cleanText(value)?.toLocaleLowerCase(), normalizedReference.value.book?.toLocaleLowerCase()],
-    ['chapter', positiveInteger, normalizedReference.value.chapter],
-    ['verse', positiveInteger, normalizedReference.value.verse],
-  ]
-  const suppliedCoordinates = coordinates.filter(([key]) => (
-    Object.prototype.hasOwnProperty.call(details, key)
-  ))
-  if (!suppliedCoordinates.length) return true
-  return suppliedCoordinates.every(([key, normalize, expected]) => {
-    const actual = normalize(details[key])
-    return actual != null && expected != null && actual === expected
-  })
+function coordinateOwnership(details, normalizedReference) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return 'none'
+  const owns = (key) => Object.prototype.hasOwnProperty.call(details, key)
+  if (!['book', 'chapter', 'verse'].some(owns)) return 'none'
+
+  const requiredKeys = normalizedReference.hasVerse
+    ? ['book', 'chapter', 'verse']
+    : ['book', 'chapter']
+  if (!requiredKeys.every(owns)) return 'mismatch'
+  if (!normalizedReference.hasVerse && owns('verse')) return 'mismatch'
+
+  const book = cleanText(details.book)
+  const chapter = positiveStudyInteger(details.chapter)
+  const verse = normalizedReference.hasVerse
+    ? positiveStudyInteger(details.verse)
+    : null
+  return (
+    book?.toLocaleLowerCase() === normalizedReference.value.book?.toLocaleLowerCase()
+    && chapter === normalizedReference.value.chapter
+    && (!normalizedReference.hasVerse || verse === normalizedReference.value.verse)
+  )
+    ? 'match'
+    : 'mismatch'
 }
 
 function resultLabel(count, verified = false) {
@@ -471,8 +452,12 @@ function InlinePanel({
   }
 
   let status
-  if (detailState === 'stale') {
+  if (detailState === 'loading') {
+    status = `Study information is loading for ${referenceLabel}.`
+  } else if (detailState === 'stale') {
     status = `Study information is updating for ${referenceLabel}.`
+  } else if (detailState === 'error') {
+    status = `Verified study information could not be loaded for ${referenceLabel}.`
   } else if (detailState === 'mismatch') {
     status = `Verified study information is unavailable for ${referenceLabel}.`
   } else if (!hasContent) {
@@ -485,7 +470,7 @@ function InlinePanel({
     <section
       className="study-tools__content"
       aria-labelledby={headingId}
-      aria-busy={detailState === 'stale'}
+      aria-busy={detailState === 'stale' || detailState === 'loading'}
     >
       <h3 id={headingId}>{tool.label}</h3>
       <p
@@ -508,6 +493,8 @@ export default function StudyTools({
   open,
   reference,
   details,
+  detailsReferenceKey,
+  detailsStatus,
   onClose,
   onNavigate,
 }) {
@@ -516,17 +503,20 @@ export default function StudyTools({
   const panelId = useId()
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
-  const detailsAssociationRef = useRef(null)
-  const [activeToolId, setActiveToolId] = useState(CONTEXT_TOOL.id)
   const normalizedReference = useMemo(
-    () => normalizeReference(reference),
+    () => normalizeStudyReference(reference),
     [reference],
   )
-  const referenceKey = [
-    normalizedReference.value.book ?? '',
-    normalizedReference.value.chapter ?? '',
-    normalizedReference.value.verse ?? '',
-  ].join(':')
+  const referenceKey = studyReferenceKey(reference)
+  const ownershipRef = useRef({
+    lastReferenceKey: referenceKey,
+    referenceChanged: false,
+  })
+  const wasOpenRef = useRef(open)
+  const [activeSelection, setActiveSelection] = useState(() => ({
+    id: CONTEXT_TOOL.id,
+    referenceKey,
+  }))
 
   useDialogFocus({
     open,
@@ -535,30 +525,47 @@ export default function StudyTools({
     onClose,
   })
 
-  useEffect(() => {
-    if (open) setActiveToolId(CONTEXT_TOOL.id)
-  }, [open, referenceKey])
-
+  if (ownershipRef.current.lastReferenceKey !== referenceKey) {
+    ownershipRef.current.lastReferenceKey = referenceKey
+    ownershipRef.current.referenceChanged = true
+  }
+  const freshOpen = open && !wasOpenRef.current
+  wasOpenRef.current = open
+  const resetActiveTool = activeSelection.referenceKey !== referenceKey || freshOpen
   if (
-    !detailsAssociationRef.current
-    || detailsAssociationRef.current.details !== details
+    resetActiveTool
+    && (
+      activeSelection.id !== CONTEXT_TOOL.id
+      || activeSelection.referenceKey !== referenceKey
+    )
   ) {
-    detailsAssociationRef.current = {
-      details,
-      referenceKey,
-      revision: (detailsAssociationRef.current?.revision ?? 0) + 1,
-    }
+    setActiveSelection({ id: CONTEXT_TOOL.id, referenceKey })
   }
-  let detailState = detailsAssociationRef.current.referenceKey === referenceKey
-    ? 'ready'
-    : 'stale'
-  if (detailState === 'ready' && !detailsMatchReference(details, normalizedReference)) {
-    detailState = 'mismatch'
-  }
+  const effectiveActiveToolId = resetActiveTool
+    ? CONTEXT_TOOL.id
+    : activeSelection.id
+
+  const normalizedStatus = ['loading', 'ready', 'error'].includes(detailsStatus)
+    ? detailsStatus
+    : 'ready'
+  const coordinates = coordinateOwnership(details, normalizedReference)
+  const hasExplicitKey = typeof detailsReferenceKey === 'string'
+  let detailState = 'ready'
+  if (normalizedStatus === 'loading') detailState = 'loading'
+  else if (normalizedStatus === 'error') detailState = 'error'
+  else if (details == null) detailState = 'ready'
+  else if (hasExplicitKey && detailsReferenceKey !== referenceKey) detailState = 'stale'
+  else if (coordinates === 'mismatch') detailState = 'mismatch'
+  else if (
+    !hasExplicitKey
+    && coordinates === 'none'
+    && ownershipRef.current.referenceChanged
+  ) detailState = 'stale'
 
   if (!open) return null
 
-  const activeTool = INLINE_TOOLS.find(({ id }) => id === activeToolId) ?? CONTEXT_TOOL
+  const activeTool = INLINE_TOOLS.find(({ id }) => id === effectiveActiveToolId)
+    ?? CONTEXT_TOOL
   const value = detailState === 'ready' ? detailValue(details, activeTool) : null
   const navigationAvailable = typeof onNavigate === 'function'
 
@@ -604,7 +611,7 @@ export default function StudyTools({
                 aria-describedby={unavailable ? unavailableId : undefined}
                 disabled={unavailable}
                 onClick={() => {
-                  if (inline) setActiveToolId(tool.id)
+                  if (inline) setActiveSelection({ id: tool.id, referenceKey })
                   else if (navigationAvailable) onNavigate(tool.page, normalizedReference.value)
                 }}
               >
@@ -624,7 +631,7 @@ export default function StudyTools({
           headingId={`${panelId}-${activeTool.id}`}
           detailState={detailState}
           referenceLabel={normalizedReference.label}
-          announcementRevision={detailsAssociationRef.current.revision}
+          announcementRevision={`${referenceKey}-${normalizedStatus}-${detailsReferenceKey ?? 'implicit'}`}
         />
       </aside>
     </div>

@@ -4,7 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import StudyTools from './StudyTools'
-import { STUDY_TOOLS } from './studyToolRegistry'
+import { STUDY_TOOLS, studyReferenceKey } from './studyToolRegistry'
 
 const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
 
@@ -83,6 +83,16 @@ describe('study tool registry', () => {
     ])
     expect(Object.isFrozen(STUDY_TOOLS)).toBe(true)
     expect(STUDY_TOOLS.every(Object.isFrozen)).toBe(true)
+  })
+
+  it('exports a stable normalized reference key for page orchestration', () => {
+    expect(studyReferenceKey({ book: ' Genesis ', chapter: '1', verse: '2' })).toBe(
+      studyReferenceKey({ book: 'Genesis', chapter: 1, verse: 2 }),
+    )
+    expect(studyReferenceKey({ book: 'Genesis', chapter: 1 })).not.toBe(
+      studyReferenceKey({ book: 'Genesis', chapter: 1, verse: 2 }),
+    )
+    expect(studyReferenceKey({ book: 'Genesis', chapter: true })).toBe('current-passage')
   })
 })
 
@@ -333,6 +343,7 @@ describe('StudyTools', () => {
         open
         reference={{ book: 'Psalms', chapter: 23 }}
         details={{ translations: [null, {}, '', { text: null }] }}
+        detailsReferenceKey={studyReferenceKey({ book: 'Psalms', chapter: 23 })}
         onClose={vi.fn()}
       />,
     )
@@ -381,7 +392,7 @@ describe('StudyTools', () => {
     )
   })
 
-  it('suppresses stale details synchronously across references until a new object arrives', () => {
+  it('suppresses stale details synchronously until an explicitly owned result arrives', () => {
     const genesisDetails = { historical_context: 'Genesis historical context.' }
     const { rerender } = render(
       <StudyTools
@@ -416,6 +427,11 @@ describe('StudyTools', () => {
         open
         reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
         details={{ historical_context: 'Exodus historical context.' }}
+        detailsReferenceKey={studyReferenceKey({
+          book: 'Exodus',
+          chapter: 3,
+          verse: 14,
+        })}
         onClose={vi.fn()}
       />,
     )
@@ -425,6 +441,109 @@ describe('StudyTools', () => {
       'aria-busy',
       'false',
     )
+  })
+
+  it('treats null as current empty data across reference changes and reports failures truthfully', () => {
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1, verse: 1 }}
+        details={null}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No verified context information is available for this verse.',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={null}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No verified context information is available for this verse.',
+    )
+    expect(screen.getByRole('region', { name: 'Context' })).toHaveAttribute(
+      'aria-busy',
+      'false',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={null}
+        detailsStatus="error"
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Verified study information could not be loaded for Exodus 3:14.',
+    )
+  })
+
+  it('shows loading without old content and rejects a mismatched coordinate-less late result', () => {
+    const genesisKey = studyReferenceKey({ book: 'Genesis', chapter: 1, verse: 1 })
+    const exodusKey = studyReferenceKey({ book: 'Exodus', chapter: 3, verse: 14 })
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1, verse: 1 }}
+        details={{ historical_context: 'Genesis result.' }}
+        detailsReferenceKey={genesisKey}
+        onClose={vi.fn()}
+      />,
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={{ historical_context: 'Genesis result.' }}
+        detailsReferenceKey={genesisKey}
+        detailsStatus="loading"
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Genesis result.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Study information is loading for Exodus 3:14.',
+    )
+    expect(screen.getByRole('region', { name: 'Context' })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={{ historical_context: 'Late Genesis result.' }}
+        detailsReferenceKey={genesisKey}
+        detailsStatus="ready"
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Late Genesis result.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Study information is updating for Exodus 3:14.',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Exodus', chapter: 3, verse: 14 }}
+        details={{ historical_context: 'Owned Exodus result.' }}
+        detailsReferenceKey={exodusKey}
+        detailsStatus="ready"
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Owned Exodus result.')).toBeInTheDocument()
   })
 
   it('rejects coordinate-bearing details that do not match the current reference', () => {
@@ -460,6 +579,49 @@ describe('StudyTools', () => {
       />,
     )
     expect(screen.getByText('Matching context.')).toBeInTheDocument()
+  })
+
+  it('requires complete coordinates whenever a payload claims coordinate ownership', () => {
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{ book: 'Genesis', historical_context: 'Partial book only.' }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Partial book only.')).not.toBeInTheDocument()
+
+    rerender(
+      <StudyTools
+        open
+        reference={reference}
+        details={{
+          book: 'Genesis',
+          chapter: 1,
+          historical_context: 'Missing target verse.',
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Missing target verse.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Verified study information is unavailable for Genesis 1:2.',
+    )
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1 }}
+        details={{
+          book: 'Genesis',
+          chapter: 1,
+          historical_context: 'Complete passage coordinates.',
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Complete passage coordinates.')).toBeInTheDocument()
   })
 
   it('bounds cyclic, deeply nested, and huge context payloads safely', () => {
@@ -547,6 +709,8 @@ describe('StudyTools', () => {
       Symbol('chapter'),
       1.5,
       Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.MIN_SAFE_INTEGER - 1,
       -1,
       0,
       '+2',
@@ -651,11 +815,16 @@ describe('StudyTools', () => {
     )
 
     await user.click(screen.getByRole('button', { name: 'Compare translations' }))
-    await user.click(screen.getByRole('button', { name: 'Change reference' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change reference' }))
     expect(screen.getByRole('button', { name: 'Context' })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
+    expect(screen.getByRole('button', { name: 'Compare translations' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(screen.getByRole('region', { name: 'Context' })).toBeInTheDocument()
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Exodus 3:14')
   })
 })

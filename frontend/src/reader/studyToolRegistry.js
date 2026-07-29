@@ -1,3 +1,50 @@
+function cleanReferenceText(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+export function positiveStudyInteger(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && Number.isSafeInteger(value) && value > 0
+      ? value
+      : null
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number > 0 ? number : null
+}
+
+export function normalizeStudyReference(reference) {
+  if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
+    return { value: {}, label: 'Current passage', hasVerse: false }
+  }
+
+  const book = cleanReferenceText(reference.book)
+  const chapter = positiveStudyInteger(reference.chapter)
+  const verse = positiveStudyInteger(reference.verse)
+  if (!book || book.length > 120 || !chapter) {
+    return { value: {}, label: 'Current passage', hasVerse: false }
+  }
+
+  const value = verse ? { book, chapter, verse } : { book, chapter }
+  return {
+    value,
+    label: `${book} ${chapter}${verse ? `:${verse}` : ''}`,
+    hasVerse: Boolean(verse),
+  }
+}
+
+export function studyReferenceKey(reference) {
+  const { value } = normalizeStudyReference(reference)
+  if (!value.book || !value.chapter) return 'current-passage'
+  return [
+    encodeURIComponent(value.book.toLocaleLowerCase()),
+    value.chapter,
+    value.verse ?? '',
+  ].join('|')
+}
+
 const tools = [
   {
     id: 'context',
