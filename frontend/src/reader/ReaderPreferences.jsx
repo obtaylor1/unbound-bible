@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import './readerTokens.css'
 
 const STORAGE_KEY = 'unbound.reader.preferences'
 
@@ -48,7 +49,11 @@ export function ReaderPreferencesProvider({ children }) {
   }, [preferences.theme])
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences))
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences))
+    } catch {
+      // Preferences remain available for the current session when storage is unavailable.
+    }
   }, [preferences])
 
   function setPreference(key, value) {
