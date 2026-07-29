@@ -11,12 +11,18 @@ export default function ReaderHeader({
   const [authOpen, setAuthOpen] = useState(false)
   const { user } = useAuth()
   const authContainerRef = useRef(null)
+  const headerActionsRef = useRef(null)
   const signInTriggerRef = useRef(null)
+  const shouldRestoreAuthFocusRef = useRef(false)
+
+  function openAuthDialog() {
+    shouldRestoreAuthFocusRef.current = true
+    setAuthOpen(true)
+  }
 
   useEffect(() => {
     if (!authOpen) return undefined
 
-    const trigger = signInTriggerRef.current
     const dialog = authContainerRef.current?.querySelector('[role="dialog"]')
     if (!dialog) return undefined
 
@@ -61,9 +67,24 @@ export default function ReaderHeader({
     document.addEventListener('keydown', handleDialogKeyDown)
     return () => {
       document.removeEventListener('keydown', handleDialogKeyDown)
-      if (trigger?.isConnected) trigger.focus()
     }
   }, [authOpen])
+
+  useEffect(() => {
+    if (authOpen || !shouldRestoreAuthFocusRef.current) return
+
+    shouldRestoreAuthFocusRef.current = false
+    const originalTrigger = signInTriggerRef.current
+    const accountTrigger = headerActionsRef.current?.querySelector(
+      '.account-menu .nav-signin',
+    )
+    const fallbackAction = headerActionsRef.current?.querySelector('button')
+    const focusTarget = originalTrigger?.isConnected
+      ? originalTrigger
+      : accountTrigger || fallbackAction
+
+    focusTarget?.focus()
+  }, [authOpen, user])
 
   return (
     <>
@@ -82,6 +103,7 @@ export default function ReaderHeader({
         </button>
 
         <nav
+          ref={headerActionsRef}
           className="reader-header__actions"
           aria-label="Scripture reader actions"
         >
@@ -98,7 +120,7 @@ export default function ReaderHeader({
               ref={signInTriggerRef}
               className="reader-header__sign-in"
               type="button"
-              onClick={() => setAuthOpen(true)}
+              onClick={openAuthDialog}
             >
               Sign in
             </button>
@@ -107,7 +129,9 @@ export default function ReaderHeader({
       </header>
 
       <div ref={authContainerRef} className="reader-header__auth">
-        <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+        {authOpen && (
+          <AuthDialog open onClose={() => setAuthOpen(false)} />
+        )}
       </div>
     </>
   )

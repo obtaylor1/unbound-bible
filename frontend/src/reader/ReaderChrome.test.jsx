@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { useState } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -108,6 +109,38 @@ function renderHeader(authValue = { user: null, status: 'anonymous' }, props = {
   return callbacks
 }
 
+function AuthenticatingHeader({ onLogin }) {
+  const [user, setUser] = useState(null)
+
+  const login = async (payload) => {
+    onLogin(payload)
+    const authenticatedUser = {
+      username: 'Miriam',
+      email: payload.email,
+    }
+    setUser(authenticatedUser)
+    return authenticatedUser
+  }
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        status: user ? 'authenticated' : 'anonymous',
+        login,
+        register: vi.fn(),
+        logout: vi.fn(),
+      }}
+    >
+      <ReaderHeader
+        onHome={vi.fn()}
+        onOpenBooks={vi.fn()}
+        onOpenStudyTools={vi.fn()}
+      />
+    </AuthContext.Provider>
+  )
+}
+
 function renderToolbar(props = {}) {
   const callbacks = {
     reference: 'John 3',
@@ -204,6 +237,43 @@ describe('ReaderHeader', () => {
     await user.click(screen.getByRole('button', { name: 'Close' }))
 
     expect(trigger).toHaveFocus()
+  })
+
+  it('moves focus to the account trigger after successful sign in', async () => {
+    const user = userEvent.setup()
+    const onLogin = vi.fn()
+    render(<AuthenticatingHeader onLogin={onLogin} />)
+
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    const dialog = screen.getByRole('dialog', { name: 'Welcome back' })
+    await user.type(within(dialog).getByRole('textbox', { name: 'Email' }), 'miriam@example.com')
+    await user.type(within(dialog).getByLabelText('Password'), 'a-secure-password')
+    await user.click(within(dialog).getByRole('button', { name: 'Sign in' }))
+
+    const accountTrigger = await screen.findByRole('button', { name: 'Miriam' })
+    expect(onLogin).toHaveBeenCalledWith({
+      email: 'miriam@example.com',
+      password: 'a-secure-password',
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(accountTrigger).toHaveFocus()
+  })
+
+  it('reopens in sign-in mode after closing registration mode', async () => {
+    const user = userEvent.setup()
+    renderHeader()
+
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(screen.getByRole('button', {
+      name: 'New here? Create an account',
+    }))
+    expect(screen.getByRole('dialog', { name: 'Create your account' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(screen.getByRole('dialog', { name: 'Welcome back' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Create your account' })).not.toBeInTheDocument()
   })
 
   it('uses the existing account menu for signed-in readers', () => {
