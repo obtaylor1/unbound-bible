@@ -547,12 +547,7 @@
   .comparison-summary-actions { justify-content: flex-end; }
 }
 
-@media (max-width: 900px) {
-  .comparison-workspace { padding: 20px; }
-  .compare-toolbar { grid-template-columns: 1fr 0.55fr; }
-  .compare-toolbar-passage { border-bottom: 1px solid rgba(151, 168, 197, 0.12); padding-bottom: 13px; }
-  .compare-toolbar-view { border-right: 0; border-bottom: 1px solid rgba(151, 168, 197, 0.12); padding-bottom: 13px; }
-  .compare-toolbar-options { padding-left: 2px; }
+@media (max-width: 1180px) {
   .comparison-main-layout { grid-template-columns: minmax(0, 1fr); }
   .comparison-sources-trigger {
     display: flex;
@@ -602,6 +597,14 @@
   }
   .comparison-sources-mobile-header button { width: 44px; min-height: 44px; border: 0; color: var(--compare-muted); background: transparent; font-size: 1.8rem; }
   .comparison-left-rail .comparison-note-panel { margin-top: 14px; }
+}
+
+@media (max-width: 900px) {
+  .comparison-workspace { padding: 20px; }
+  .compare-toolbar { grid-template-columns: 1fr 0.55fr; }
+  .compare-toolbar-passage { border-bottom: 1px solid rgba(151, 168, 197, 0.12); padding-bottom: 13px; }
+  .compare-toolbar-view { border-right: 0; border-bottom: 1px solid rgba(151, 168, 197, 0.12); padding-bottom: 13px; }
+  .compare-toolbar-options { padding-left: 2px; }
   .comparison-card-grid { grid-template-columns: 1fr; }
   .translation-card { min-height: 365px; }
 }

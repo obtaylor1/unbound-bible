@@ -50,6 +50,15 @@ test('compares two default sources and keeps unavailable text accurate', async (
   await expect(page.getByRole('article', { name: 'Ethiopian Orthodox Critical Text' })).toContainText('Text unavailable')
   await expect(page.getByRole('article', { name: 'King James Version' })).toContainText('In the beginning God created the heaven and the earth.')
   await expect(page.getByRole('dialog', { name: 'Study Tools' })).toBeHidden()
+
+  const collapsedTrigger = page.getByRole('button', { name: /Choose translations/ })
+  if (await collapsedTrigger.isVisible()) {
+    await page.getByRole('article', { name: 'Ethiopian Orthodox Critical Text' })
+      .getByRole('button', { name: 'Choose another source' })
+      .click()
+    await expect(page.getByRole('dialog', { name: 'Translation sources' })).toBeVisible()
+    await page.getByRole('button', { name: 'Close translation selector' }).click()
+  }
 })
 
 test('caps comparison at four sources and aligns the chapter view', async ({ page }) => {

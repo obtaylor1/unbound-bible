@@ -13,6 +13,7 @@ const TOOL_DESTINATIONS = {
   'cross-references': { initialTab: 'insights', initialInsightSubTab: 'crossrefs' },
   words: { initialTab: 'insights', initialInsightSubTab: 'lexicon' },
   notes: { initialTab: 'insights', initialInsightSubTab: 'canon' },
+  assistant: { initialTab: 'chat', initialInsightSubTab: 'crossrefs' },
 }
 
 export default function ComparisonStudyDrawer({
@@ -134,7 +135,7 @@ export default function ComparisonStudyDrawer({
           id="comparison-study-panel"
           className={`comparison-study-content tool-${activeTool}`}
           role="tabpanel"
-          aria-label={TOOLS.find((tool) => tool.id === activeTool)?.label}
+          aria-label={TOOLS.find((tool) => tool.id === activeTool)?.label ?? 'Study Assistant'}
         >
           <StudyAssistantSidebar
             book={book}
@@ -147,7 +148,7 @@ export default function ComparisonStudyDrawer({
           />
         </div>
 
-        <button type="button" className="comparison-ask-assistant" aria-label="Ask Study Assistant" onClick={() => setActiveTool('insights')}>
+        <button type="button" className="comparison-ask-assistant" aria-label="Ask Study Assistant" onClick={() => setActiveTool('assistant')}>
           <strong>✦ Ask Study Assistant</strong>
           <span>Ask any question about this passage</span>
         </button>

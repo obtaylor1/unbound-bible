@@ -290,6 +290,14 @@ export default function TextualComparisonWorkspace() {
     setStudyToolsOpen(true)
   }
 
+  const handleChooseSource = () => {
+    if (window.matchMedia?.('(max-width: 1180px)').matches) {
+      setSourcesOpen(true)
+      return
+    }
+    document.querySelector('.translation-search input')?.focus()
+  }
+
   const handleNoteChange = (event) => {
     const value = event.target.value
     setComparisonNote(value)
@@ -431,7 +439,7 @@ export default function TextualComparisonWorkspace() {
                         bookmarked={bookmarks.includes(referenceKey)}
                         onBookmark={handleBookmark}
                         onOpenNotes={() => openStudyTools('notes')}
-                        onChooseSource={() => document.querySelector('.translation-search input')?.focus()}
+                        onChooseSource={handleChooseSource}
                         onLearnMore={() => openStudyTools('insights')}
                       />
                     )

@@ -10,8 +10,8 @@ import ComparisonStudyDrawer from './ComparisonStudyDrawer'
 import { buildSourceState, TRANSLATION_BY_KEY } from './comparisonModel'
 
 vi.mock('../StudyAssistantSidebar', () => ({
-  default: ({ book, chapter, verse, initialInsightSubTab }) => (
-    <div data-testid="existing-study-assistant" data-active-tool={initialInsightSubTab}>Study content for {book} {chapter}:{verse}</div>
+  default: ({ book, chapter, verse, initialTab, initialInsightSubTab }) => (
+    <div data-testid="existing-study-assistant" data-active-tab={initialTab} data-active-tool={initialInsightSubTab}>Study content for {book} {chapter}:{verse}</div>
   ),
 }))
 
@@ -273,6 +273,15 @@ describe('ComparisonStudyDrawer', () => {
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('tab', { name: 'Cross-References' })).toHaveFocus()
     expect(screen.getByRole('tab', { name: 'Cross-References' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('opens the existing assistant chat from the persistent action', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+    await user.click(screen.getByRole('button', { name: 'Open Study Tools' }))
+    await user.click(screen.getByRole('button', { name: 'Ask Study Assistant' }))
+
+    expect(screen.getByTestId('existing-study-assistant')).toHaveAttribute('data-active-tab', 'chat')
   })
 
   it('closes with its visible close button', async () => {
