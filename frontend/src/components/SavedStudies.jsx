@@ -25,7 +25,11 @@ export default function SavedStudies({ reference }) {
   const createNote = async (event) => {
     event.preventDefault()
     const content = draft.trim()
-    if (!content || !canCreateReferenceNote) return
+    if (
+      !content
+      || !canCreateReferenceNote
+      || !['anonymous', 'authenticated'].includes(status)
+    ) return
     const payload = {
       passage_reference: normalizedReference.label,
       content,
@@ -98,7 +102,7 @@ export default function SavedStudies({ reference }) {
     {status === 'anonymous' && <div className="empty-workspace-card"><strong>Your work is saved only on this device.</strong><p>Sign in to keep it private and available across devices.</p></div>}
     {status === 'authenticated' && guestCount > 0 && <div className="empty-workspace-card"><strong>Local work found</strong><p>{guestNotes.length} notes and {guestStudies.length} studies are ready to import.</p><button className="export-btn" onClick={importGuestData}>Review and import</button></div>}
     {message && <p role="status">{message}</p>}
-    {canCreateReferenceNote && (
+    {canCreateReferenceNote && ['anonymous', 'authenticated'].includes(status) && (
       <form className="saved-note-composer" onSubmit={createNote}>
         <h3>Add a note for {normalizedReference.label}</h3>
         <label htmlFor="saved-note-content">Note for {normalizedReference.label}</label>

@@ -62,4 +62,13 @@ describe('SavedStudies note creation', () => {
     }))
     expect(screen.getByText('A private note.')).toBeVisible()
   })
+
+  it('waits for authentication restoration before offering note creation', () => {
+    renderStudies('loading')
+
+    expect(screen.queryByLabelText('Note for Genesis 1:2')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save note' })).not.toBeInTheDocument()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem('unbound_notes')).toBeNull()
+  })
 })
