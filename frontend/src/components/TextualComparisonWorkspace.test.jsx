@@ -32,7 +32,7 @@ function jsonResponse(data, ok = true) {
 }
 
 function installFetch({ rows = genesisRows, chapterOk = true } = {}) {
-  global.fetch = vi.fn((url) => {
+  globalThis.fetch = vi.fn((url) => {
     if (String(url).includes('available-books')) return jsonResponse({ books: ['Genesis', '1 Enoch'] })
     if (String(url).includes('chapter-content')) return jsonResponse({ content: rows }, chapterOk)
     return jsonResponse({})
@@ -123,7 +123,7 @@ describe('TextualComparisonWorkspace', () => {
   it('ignores a stale chapter response after the book changes', async () => {
     let resolveGenesis
     const genesisPromise = new Promise((resolve) => { resolveGenesis = resolve })
-    global.fetch = vi.fn((url) => {
+    globalThis.fetch = vi.fn((url) => {
       const value = String(url)
       if (value.includes('available-books')) return jsonResponse({ books: ['Genesis', '1 Enoch'] })
       if (value.includes('book=Genesis')) return genesisPromise
