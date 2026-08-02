@@ -43,10 +43,16 @@ function MarkerPanel({ headingId, reference, referenceKey }) {
     }
     const next = { ...markers, [referenceKey]: nextEntry }
     if (!nextEntry.highlighted && !nextEntry.bookmarked) delete next[referenceKey]
-    window.localStorage.setItem(VERSE_MARKERS_KEY, JSON.stringify(next))
     setMarkers(next)
     const action = kind === 'highlighted' ? 'Highlight' : 'Bookmark'
-    setMessage(`${active ? `${action}ed` : `${action} removed from`} ${reference.label}`)
+    try {
+      window.localStorage.setItem(VERSE_MARKERS_KEY, JSON.stringify(next))
+      setMessage(`${active ? `${action}ed` : `${action} removed from`} ${reference.label}`)
+    } catch {
+      setMessage(
+        `${action} ${active ? 'added' : 'removed'} for ${reference.label}, but this change could not be saved on this device.`,
+      )
+    }
   }
 
   return (

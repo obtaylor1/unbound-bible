@@ -248,6 +248,23 @@ describe('StudyTools', () => {
     expect(screen.queryByRole('button', { name: /Highlight Genesis/ })).not.toBeInTheDocument()
   })
 
+  it('retains a verse marker for the session and announces storage failure', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage unavailable', 'QuotaExceededError')
+    })
+    const user = userEvent.setup()
+    render(<StudyTools open reference={reference} details={{}} onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Highlights and bookmarks' }))
+    const highlight = screen.getByRole('button', { name: 'Highlight Genesis 1:2' })
+    await user.click(highlight)
+
+    expect(highlight).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Highlight added for Genesis 1:2, but this change could not be saved on this device.',
+    )
+  })
+
   it('disables route tools accessibly when navigation is unavailable', async () => {
     const user = userEvent.setup()
     render(<StudyTools open />)

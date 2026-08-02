@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
@@ -19,6 +19,14 @@ function renderStudies(status = 'anonymous') {
       <SavedStudies reference={{ book: 'Genesis', chapter: 1, verse: 2 }} />
     </AuthContext.Provider>,
   )
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((next) => {
+    resolve = next
+  })
+  return { promise, resolve }
 }
 
 afterEach(() => {
@@ -70,5 +78,49 @@ describe('SavedStudies note creation', () => {
     expect(screen.queryByRole('button', { name: 'Save note' })).not.toBeInTheDocument()
     expect(api.post).not.toHaveBeenCalled()
     expect(window.localStorage.getItem('unbound_notes')).toBeNull()
+  })
+
+  it('ignores a stale private response after the user becomes anonymous', async () => {
+    const remoteNotes = deferred()
+    const remoteStudies = deferred()
+    api.get.mockImplementation((path) => (
+      path === '/notes' ? remoteNotes.promise : remoteStudies.promise
+    ))
+    window.localStorage.setItem('unbound_notes', JSON.stringify([{
+      id: 'local-note',
+      passage_reference: 'Genesis 1:2',
+      content: 'Local note.',
+    }]))
+
+    const { rerender } = renderStudies('authenticated')
+    rerender(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <SavedStudies reference={{ book: 'Genesis', chapter: 1, verse: 2 }} />
+      </AuthContext.Provider>,
+    )
+    expect(await screen.findByText('Local note.')).toBeVisible()
+
+    await act(async () => {
+      remoteNotes.resolve([{
+        id: 'private-note',
+        passage_reference: 'Genesis 1:2',
+        content: 'Private account note.',
+      }])
+      remoteStudies.resolve([])
+      await Promise.all([remoteNotes.promise, remoteStudies.promise])
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Private account note.')).not.toBeInTheDocument()
+      expect(screen.getByText('Local note.')).toBeVisible()
+    })
+  })
+
+  it('treats malformed local storage as an empty collection', () => {
+    window.localStorage.setItem('unbound_notes', JSON.stringify({ unexpected: true }))
+    window.localStorage.setItem('unbound_saved_studies', JSON.stringify(['bad', null]))
+
+    expect(() => renderStudies()).not.toThrow()
+    expect(screen.getByText('No saved notes yet.')).toBeVisible()
   })
 })

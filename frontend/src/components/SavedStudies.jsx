@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './SavedStudies.css'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
 import { normalizeStudyReference } from '../reader/studyToolRegistry'
 
 const readLocal = (key) => {
-  try { return JSON.parse(localStorage.getItem(key) || '[]') }
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]')
+    return Array.isArray(value)
+      ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : []
+  }
   catch { return [] }
 }
 
@@ -17,6 +22,7 @@ export default function SavedStudies({ reference }) {
   const [query, setQuery] = useState('')
   const [message, setMessage] = useState('')
   const [draft, setDraft] = useState('')
+  const loadGeneration = useRef(0)
   const normalizedReference = normalizeStudyReference(reference)
   const canCreateReferenceNote = Boolean(
     normalizedReference.value.book && normalizedReference.value.chapter,
@@ -57,14 +63,29 @@ export default function SavedStudies({ reference }) {
   }
 
   const load = useCallback(async () => {
-    if (status === 'authenticated') {
-      const [remoteNotes, remoteStudies] = await Promise.all([api.get('/notes'), api.get('/studies')])
-      setNotes(remoteNotes); setStudies(remoteStudies)
-    } else if (status === 'anonymous') {
-      setNotes(readLocal('unbound_notes')); setStudies(readLocal('unbound_saved_studies'))
+    const generation = ++loadGeneration.current
+    try {
+      if (status === 'authenticated') {
+        const [remoteNotes, remoteStudies] = await Promise.all([api.get('/notes'), api.get('/studies')])
+        if (generation !== loadGeneration.current) return
+        setNotes(Array.isArray(remoteNotes) ? remoteNotes : [])
+        setStudies(Array.isArray(remoteStudies) ? remoteStudies : [])
+      } else if (status === 'anonymous') {
+        setNotes(readLocal('unbound_notes')); setStudies(readLocal('unbound_saved_studies'))
+      } else {
+        setNotes([])
+        setStudies([])
+      }
+    } catch (error) {
+      if (generation === loadGeneration.current) setMessage(error.message)
     }
   }, [status])
-  useEffect(() => { load().catch((error) => setMessage(error.message)) }, [load])
+  useEffect(() => {
+    load()
+    return () => {
+      loadGeneration.current += 1
+    }
+  }, [load])
 
   const guestNotes = readLocal('unbound_notes')
   const guestStudies = readLocal('unbound_saved_studies')
