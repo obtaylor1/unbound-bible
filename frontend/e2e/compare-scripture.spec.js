@@ -27,10 +27,26 @@ async function openComparison(page) {
   await expect(page.getByRole('heading', { name: 'Compare translations' })).toBeVisible()
 }
 
+async function openSourcesIfCollapsed(page) {
+  const trigger = page.getByRole('button', { name: /Choose translations/ })
+  if (await trigger.isVisible()) await trigger.click()
+}
+
+async function closeSourcesIfExpanded(page) {
+  const close = page.getByRole('button', { name: 'Close translation selector' })
+  if (await close.isVisible()) await close.click()
+}
+
+async function expectSourceCount(page, count) {
+  const trigger = page.getByRole('button', { name: /Choose translations/ })
+  if (await trigger.isVisible()) await expect(trigger).toContainText(`${count}/4`)
+  else await expect(page.getByText(`Comparing ${count} translations`)).toBeVisible()
+}
+
 test('compares two default sources and keeps unavailable text accurate', async ({ page }) => {
   await openComparison(page)
 
-  await expect(page.getByText('Comparing 2 translations')).toBeVisible()
+  await expectSourceCount(page, 2)
   await expect(page.getByRole('article', { name: 'Ethiopian Orthodox Critical Text' })).toContainText('Text unavailable')
   await expect(page.getByRole('article', { name: 'King James Version' })).toContainText('In the beginning God created the heaven and the earth.')
   await expect(page.getByRole('dialog', { name: 'Study Tools' })).toBeHidden()
@@ -38,11 +54,13 @@ test('compares two default sources and keeps unavailable text accurate', async (
 
 test('caps comparison at four sources and aligns the chapter view', async ({ page }) => {
   await openComparison(page)
+  await openSourcesIfCollapsed(page)
 
   await page.getByRole('checkbox', { name: 'American Standard Version, ASV' }).check()
   await page.getByRole('checkbox', { name: 'World English Bible, WEB' }).check()
   await expect(page.getByText('Comparing 4 translations')).toBeVisible()
   await expect(page.getByRole('checkbox', { name: 'New Living Translation, NLT' })).toBeDisabled()
+  await closeSourcesIfExpanded(page)
 
   await page.getByRole('button', { name: 'Chapter view' }).click()
   await expect(page.getByRole('heading', { name: 'Genesis chapter 1 comparison' })).toBeVisible()
@@ -75,6 +93,9 @@ test('opens an Ethiopian-canon source from the passage selector', async ({ page 
   await openComparison(page)
 
   await page.getByRole('combobox', { name: 'Book' }).selectOption('1 Enoch')
+  await openSourcesIfCollapsed(page)
+  await page.getByRole('checkbox', { name: '1 Enoch, R. H. Charles, 1EN_CH' }).check()
+  await closeSourcesIfExpanded(page)
   await expect(page.getByRole('article', { name: '1 Enoch, R. H. Charles' })).toContainText('The words of the blessing of Enoch.')
 })
 

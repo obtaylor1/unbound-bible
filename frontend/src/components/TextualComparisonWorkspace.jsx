@@ -8,8 +8,8 @@ import TranslationComparisonCard from './textualComparison/TranslationComparison
 import ComparisonStudyDrawer from './textualComparison/ComparisonStudyDrawer'
 import {
   DEFAULT_TRANSLATIONS,
+  MAX_TRANSLATIONS,
   TRANSLATION_BY_KEY,
-  TRANSLATIONS,
   applyTranslationToggle,
   buildSourceState,
   diffWords,
@@ -43,13 +43,6 @@ function safeStoredList(key) {
   } catch {
     return []
   }
-}
-
-function translationKeyForRow(row) {
-  const code = String(row?.translation ?? '').trim().toLocaleLowerCase()
-  return TRANSLATIONS.find((translation) => (
-    translation.key === code || translation.code.toLocaleLowerCase() === code
-  ))?.key
 }
 
 function RequestState({ status, onRetry }) {
@@ -147,6 +140,7 @@ export default function TextualComparisonWorkspace() {
   const [highlightDifferences, setHighlightDifferences] = useState(true)
   const [viewMode, setViewMode] = useState('verse')
   const [studyToolsOpen, setStudyToolsOpen] = useState(false)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
   const [studyTool, setStudyTool] = useState('insights')
   const [shareOpen, setShareOpen] = useState(false)
   const [bookmarks, setBookmarks] = useState(() => safeStoredList('unbound_bookmarks'))
@@ -155,6 +149,9 @@ export default function TextualComparisonWorkspace() {
   const requestGeneration = useRef(0)
   const noteTimer = useRef(null)
   const studyTriggerRef = useRef(null)
+  const sourcesTriggerRef = useRef(null)
+  const sourcesPanelRef = useRef(null)
+  const sourcesCloseRef = useRef(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -189,15 +186,6 @@ export default function TextualComparisonWorkspace() {
           setVerse((current) => verseValues.includes(current) ? current : verseValues[0])
         }
 
-        const availableKeys = [...new Set(nextRows.map(translationKeyForRow).filter(Boolean))]
-        if (availableKeys.length) {
-          setSelectedTranslations((current) => {
-            if (current.some((key) => availableKeys.includes(key))) return current
-            const nextAvailable = availableKeys[0]
-            setBaseTranslation(nextAvailable)
-            return ['eth81', nextAvailable].filter((key, index, list) => list.indexOf(key) === index)
-          })
-        }
       })
       .catch((error) => {
         if (controller.signal.aborted || generation !== requestGeneration.current || error?.name === 'AbortError') return
@@ -218,6 +206,40 @@ export default function TextualComparisonWorkspace() {
   useEffect(() => () => {
     if (noteTimer.current) clearTimeout(noteTimer.current)
   }, [])
+
+  useEffect(() => {
+    if (!sourcesOpen) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const focusTimer = setTimeout(() => sourcesCloseRef.current?.focus(), 0)
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSourcesOpen(false)
+        sourcesTriggerRef.current?.focus()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = sourcesPanelRef.current?.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])',
+      )
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      clearTimeout(focusTimer)
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [sourcesOpen])
 
   const bookOptions = books.length ? books : Object.keys(BOOK_CHAPTERS)
   const chapterOptions = Array.from({ length: BOOK_CHAPTERS[book] ?? 1 }, (_, index) => index + 1)
@@ -328,7 +350,36 @@ export default function TextualComparisonWorkspace() {
       />
 
       <div className="comparison-main-layout">
-        <div className="comparison-left-rail">
+        <button
+          ref={sourcesTriggerRef}
+          type="button"
+          className="comparison-sources-trigger"
+          aria-expanded={sourcesOpen}
+          aria-controls="comparison-sources-panel"
+          onClick={() => setSourcesOpen(true)}
+        >
+          Choose translations <span>{selectedTranslations.length}/{MAX_TRANSLATIONS}</span>
+        </button>
+        {sourcesOpen && (
+          <button
+            type="button"
+            className="comparison-sources-backdrop"
+            aria-label="Dismiss translation selector"
+            onClick={() => { setSourcesOpen(false); sourcesTriggerRef.current?.focus() }}
+          />
+        )}
+        <div
+          ref={sourcesPanelRef}
+          id="comparison-sources-panel"
+          className={`comparison-left-rail ${sourcesOpen ? 'is-open' : ''}`}
+          role={sourcesOpen ? 'dialog' : undefined}
+          aria-modal={sourcesOpen ? 'true' : undefined}
+          aria-label={sourcesOpen ? 'Translation sources' : undefined}
+        >
+          <header className="comparison-sources-mobile-header">
+            <strong>Translation sources</strong>
+            <button ref={sourcesCloseRef} type="button" aria-label="Close translation selector" onClick={() => { setSourcesOpen(false); sourcesTriggerRef.current?.focus() }}>×</button>
+          </header>
           <TranslationSelector
             selected={selectedTranslations}
             baseTranslation={baseTranslation}

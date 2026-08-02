@@ -84,7 +84,7 @@ describe('comparisonModel', () => {
     ])).toMatchObject({
       availableCount: 2,
       differenceCount: 3,
-      message: 'Both available sources describe God as the creator at the beginning of creation.',
+      message: 'The available sources preserve the same passage with some differences in wording.',
     })
   })
 })

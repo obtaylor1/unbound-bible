@@ -10,8 +10,8 @@ import ComparisonStudyDrawer from './ComparisonStudyDrawer'
 import { buildSourceState, TRANSLATION_BY_KEY } from './comparisonModel'
 
 vi.mock('../StudyAssistantSidebar', () => ({
-  default: ({ book, chapter, verse }) => (
-    <div data-testid="existing-study-assistant">Study content for {book} {chapter}:{verse}</div>
+  default: ({ book, chapter, verse, initialInsightSubTab }) => (
+    <div data-testid="existing-study-assistant" data-active-tool={initialInsightSubTab}>Study content for {book} {chapter}:{verse}</div>
   ),
 }))
 
@@ -249,6 +249,30 @@ describe('ComparisonStudyDrawer', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Study Tools' })).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+
+  it('routes each outer tab to the matching existing study tool', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+    await user.click(screen.getByRole('button', { name: 'Open Study Tools' }))
+
+    await user.click(screen.getByRole('tab', { name: 'Words' }))
+    expect(screen.getByTestId('existing-study-assistant')).toHaveAttribute('data-active-tool', 'lexicon')
+
+    await user.click(screen.getByRole('tab', { name: 'Cross-References' }))
+    expect(screen.getByTestId('existing-study-assistant')).toHaveAttribute('data-active-tool', 'crossrefs')
+  })
+
+  it('supports arrow-key navigation across study tool tabs', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+    await user.click(screen.getByRole('button', { name: 'Open Study Tools' }))
+
+    const insights = screen.getByRole('tab', { name: 'Insights' })
+    insights.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('tab', { name: 'Cross-References' })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Cross-References' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('closes with its visible close button', async () => {

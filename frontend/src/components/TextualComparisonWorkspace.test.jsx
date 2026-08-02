@@ -136,6 +136,9 @@ describe('TextualComparisonWorkspace', () => {
     const user = userEvent.setup()
     render(<TextualComparisonWorkspace />)
     await user.selectOptions(screen.getByRole('combobox', { name: 'Book' }), '1 Enoch')
+    await screen.findByText('Choose an available source to begin comparing this passage.')
+    expect(screen.getByRole('checkbox', { name: /King James Version/ })).toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: /1 Enoch, R. H. Charles/ }))
     expect(await screen.findByText('The words of the blessing of Enoch.')).toBeInTheDocument()
 
     resolveGenesis({ ok: true, json: () => Promise.resolve({ content: genesisRows }) })

@@ -160,6 +160,8 @@ export function summarizeComparison(texts) {
   return {
     availableCount: available.length,
     differenceCount,
-    message: 'Both available sources describe God as the creator at the beginning of creation.',
+    message: differenceCount
+      ? 'The available sources preserve the same passage with some differences in wording.'
+      : 'The available sources use the same wording for this passage.',
   }
 }

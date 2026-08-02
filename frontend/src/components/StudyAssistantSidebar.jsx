@@ -10,11 +10,13 @@ function StudyAssistantSidebar({
   chapter = 1, 
   verse = 1, 
   onClose,
-  onAddNote // Callback to add note to verse
+  onAddNote, // Callback to add note to verse
+  initialTab = 'insights',
+  initialInsightSubTab = 'crossrefs',
 }) {
   const { status: authStatus } = useAuth()
-  const [activeTab, setActiveTab] = useState('insights') // 'insights' or 'chat'
-  const [activeInsightSubTab, setActiveInsightSubTab] = useState('crossrefs') // crossrefs, commentary, translation, lexicon, canon
+  const [activeTab, setActiveTab] = useState(initialTab) // 'insights' or 'chat'
+  const [activeInsightSubTab, setActiveInsightSubTab] = useState(initialInsightSubTab) // crossrefs, commentary, lexicon, canon
   const [verseDetails, setVerseDetails] = useState(null)
   const [loading, setLoading] = useState(false)
   const [noteText, setNoteText] = useState('')
@@ -30,6 +32,11 @@ function StudyAssistantSidebar({
   const [studyId, setStudyId] = useState(null)
 
   const chatEndRef = useRef(null)
+
+  useEffect(() => {
+    setActiveTab(initialTab)
+    setActiveInsightSubTab(initialInsightSubTab)
+  }, [initialInsightSubTab, initialTab])
 
   // Fetch verse details on coordinate change
   useEffect(() => {
