@@ -293,7 +293,7 @@ export default function TextualComparisonWorkspace() {
   }
 
   return (
-    <main className="comparison-workspace" data-testid="comparison-workspace">
+    <div className="comparison-workspace" data-testid="comparison-workspace">
       <div className="comparison-atmosphere" aria-hidden="true" />
       <header className="comparison-page-heading">
         <div>
@@ -428,6 +428,6 @@ export default function TextualComparisonWorkspace() {
         onClose={() => setShareOpen(false)}
         shareData={shareData}
       />
-    </main>
+    </div>
   )
 }

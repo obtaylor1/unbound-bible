@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 const rows = [
   { book: 'Genesis', chapter: 1, verse: 1, translation: 'KJV', text: 'In the beginning God created the heaven and the earth.' },
@@ -12,10 +13,12 @@ async function openComparison(page) {
     contentType: 'application/json',
     body: JSON.stringify({ books: ['Genesis', '1 Enoch'] }),
   }))
-  await page.route('**/api/biblical-texts/chapter-content**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ content: rows }),
-  }))
+  await page.route('**/api/biblical-texts/chapter-content**', (route) => {
+    const content = route.request().url().includes('book=1%20Enoch')
+      ? [{ book: '1 Enoch', chapter: 1, verse: 1, translation: '1EN_CH', text: 'The words of the blessing of Enoch.' }]
+      : rows
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ content }) })
+  })
   await page.route('**/api/v1/texts/**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ cross_references: [], commentary: [], original_words: [] }),
@@ -66,4 +69,20 @@ test('fits without horizontal overflow', async ({ page }) => {
     content: document.documentElement.scrollWidth,
   }))
   expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport)
+})
+
+test('opens an Ethiopian-canon source from the passage selector', async ({ page }) => {
+  await openComparison(page)
+
+  await page.getByRole('combobox', { name: 'Book' }).selectOption('1 Enoch')
+  await expect(page.getByRole('article', { name: '1 Enoch, R. H. Charles' })).toContainText('The words of the blessing of Enoch.')
+})
+
+test('has no automated accessibility violations in the workspace', async ({ page }) => {
+  await openComparison(page)
+
+  const results = await new AxeBuilder({ page })
+    .include('[data-testid="comparison-workspace"]')
+    .analyze()
+  expect(results.violations).toEqual([])
 })
