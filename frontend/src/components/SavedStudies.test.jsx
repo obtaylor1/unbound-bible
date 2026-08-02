@@ -23,10 +23,12 @@ function renderStudies(status = 'anonymous') {
 
 function deferred() {
   let resolve
-  const promise = new Promise((next) => {
+  let reject
+  const promise = new Promise((next, fail) => {
     resolve = next
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, reject, resolve }
 }
 
 afterEach(() => {
@@ -169,6 +171,49 @@ describe('SavedStudies note creation', () => {
 
     expect(screen.queryByText('Private pending note.')).not.toBeInTheDocument()
     expect(screen.getByText('No saved notes yet.')).toBeVisible()
+  })
+
+  it('does not let an old-session save rejection invalidate a new account load', async () => {
+    const oldSave = deferred()
+    const newNotes = deferred()
+    const newStudies = deferred()
+    let accountLoad = 0
+    api.get.mockImplementation((path) => {
+      accountLoad += 1
+      if (accountLoad <= 2) return Promise.resolve([])
+      return path === '/notes' ? newNotes.promise : newStudies.promise
+    })
+    api.post.mockReturnValue(oldSave.promise)
+    const user = userEvent.setup()
+    const { rerender } = renderStudies('authenticated')
+
+    await user.type(screen.getByLabelText('Note for Genesis 1:2'), 'Old session draft.')
+    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    rerender(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <SavedStudies reference={{ book: 'Genesis', chapter: 1, verse: 2 }} />
+      </AuthContext.Provider>,
+    )
+    rerender(
+      <AuthContext.Provider value={{ user: { id: 'new-user' }, status: 'authenticated' }}>
+        <SavedStudies reference={{ book: 'Genesis', chapter: 1, verse: 2 }} />
+      </AuthContext.Provider>,
+    )
+
+    await act(async () => {
+      oldSave.reject(new Error('Old session save failed'))
+      await oldSave.promise.catch(() => {})
+      newNotes.resolve([{
+        id: 'new-account-note',
+        passage_reference: 'Genesis 1:2',
+        content: 'New account note.',
+      }])
+      newStudies.resolve([])
+      await Promise.all([newNotes.promise, newStudies.promise])
+    })
+
+    expect(screen.getByText('New account note.')).toBeVisible()
+    expect(screen.queryByText('Old session draft.')).not.toBeInTheDocument()
   })
 
   it('treats malformed local storage as an empty collection', () => {

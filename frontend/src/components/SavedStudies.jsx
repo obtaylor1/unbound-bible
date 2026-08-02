@@ -79,13 +79,13 @@ export default function SavedStudies({ reference }) {
       setActiveView('notes')
       setMessage(`Note saved for ${normalizedReference.label}.`)
     } catch (error) {
-      if (notesRevision.current === mutationNotesRevision) {
-        notesRevision.current -= 1
-      }
       if (
         mutationAuthGeneration !== authGeneration.current
         || statusRef.current !== mutationStatus
       ) return
+      if (notesRevision.current === mutationNotesRevision) {
+        notesRevision.current -= 1
+      }
       setMessage(`Your note could not be saved: ${error.message}`)
     }
   }
