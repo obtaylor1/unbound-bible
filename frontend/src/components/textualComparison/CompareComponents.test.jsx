@@ -3,6 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import ComparisonToolbar from './ComparisonToolbar'
 import TranslationSelector from './TranslationSelector'
+import ComparisonSummary from './ComparisonSummary'
+import TranslationComparisonCard from './TranslationComparisonCard'
+import { buildSourceState, TRANSLATION_BY_KEY } from './comparisonModel'
 
 const toolbarProps = {
   books: ['Genesis', 'Exodus'],
@@ -114,5 +117,74 @@ describe('TranslationSelector', () => {
     expect(screen.getByRole('checkbox', { name: /World English Bible, British Edition/ })).toBeDisabled()
     await user.click(screen.getByRole('checkbox', { name: /King James Version/ }))
     expect(onToggle).toHaveBeenCalledWith('kjv')
+  })
+})
+
+describe('ComparisonSummary', () => {
+  it('gives beginners a clear summary and three next actions', () => {
+    render(
+      <ComparisonSummary
+        reference="Genesis 1:1"
+        summary={{
+          availableCount: 2,
+          differenceCount: 3,
+          message: 'Both available sources describe God as the creator at the beginning of creation.',
+        }}
+        onShowDifferences={vi.fn()}
+        onExplainVerse={vi.fn()}
+        onViewOriginalWords={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Genesis 1:1 comparison' })).toBeInTheDocument()
+    expect(screen.getByText(/Both available sources describe God/)).toBeInTheDocument()
+    expect(screen.getByText('3 wording differences found')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show Differences' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Explain This Verse' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View Original Words' })).toBeInTheDocument()
+  })
+})
+
+describe('TranslationComparisonCard', () => {
+  const commonProps = {
+    reference: 'Genesis 1:1',
+    source: TRANSLATION_BY_KEY.kjv,
+    state: { kind: 'available', text: 'In the beginning God created the heaven and the earth.' },
+    baseText: 'At first God made the heaven and the earth.',
+    isBase: false,
+    highlightDifferences: true,
+    differenceCount: 3,
+    bookmarked: false,
+    onBookmark: vi.fn(),
+    onOpenNotes: vi.fn(),
+    onChooseSource: vi.fn(),
+  }
+
+  it('uses a consistent source hierarchy and visible difference state', () => {
+    render(<TranslationComparisonCard {...commonProps} />)
+
+    expect(screen.getByRole('article', { name: 'King James Version' })).toBeInTheDocument()
+    expect(screen.getByText('KJV')).toBeInTheDocument()
+    expect(screen.getByText('Genesis 1:1')).toBeInTheDocument()
+    expect(screen.getByText('3 differences')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Bookmark Genesis 1:1 in KJV' })).toBeInTheDocument()
+  })
+
+  it('uses an accurate compact notice for missing Ethiopian text', () => {
+    render(
+      <TranslationComparisonCard
+        {...commonProps}
+        source={TRANSLATION_BY_KEY.eth81}
+        state={buildSourceState({ key: 'eth81', book: 'Genesis', text: null })}
+        isBase
+      />,
+    )
+
+    expect(screen.getByText('Text unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/has not yet been added/)).toBeInTheDocument()
+    expect(screen.queryByText('Canon Exclusion')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Learn more about text availability' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose another source' })).toBeInTheDocument()
+    expect(screen.getByText('Base reference')).toBeInTheDocument()
   })
 })
