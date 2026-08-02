@@ -116,6 +116,61 @@ describe('SavedStudies note creation', () => {
     })
   })
 
+  it('does not let an older account load erase a newly saved note', async () => {
+    const remoteNotes = deferred()
+    const remoteStudies = deferred()
+    api.get.mockImplementation((path) => (
+      path === '/notes' ? remoteNotes.promise : remoteStudies.promise
+    ))
+    api.post.mockResolvedValue({
+      id: 'new-note',
+      passage_reference: 'Genesis 1:2',
+      content: 'Newly saved note.',
+    })
+    const user = userEvent.setup()
+    renderStudies('authenticated')
+
+    await user.type(screen.getByLabelText('Note for Genesis 1:2'), 'Newly saved note.')
+    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    expect(await screen.findByText('Newly saved note.')).toBeVisible()
+
+    await act(async () => {
+      remoteNotes.resolve([])
+      remoteStudies.resolve([{ id: 'study-1', title: 'Loaded study' }])
+      await Promise.all([remoteNotes.promise, remoteStudies.promise])
+    })
+
+    expect(screen.getByText('Newly saved note.')).toBeVisible()
+  })
+
+  it('does not insert an authenticated save that finishes after logout', async () => {
+    api.get.mockResolvedValue([])
+    const savedNote = deferred()
+    api.post.mockReturnValue(savedNote.promise)
+    const user = userEvent.setup()
+    const { rerender } = renderStudies('authenticated')
+
+    await user.type(screen.getByLabelText('Note for Genesis 1:2'), 'Private pending note.')
+    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    rerender(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <SavedStudies reference={{ book: 'Genesis', chapter: 1, verse: 2 }} />
+      </AuthContext.Provider>,
+    )
+
+    await act(async () => {
+      savedNote.resolve({
+        id: 'private-pending',
+        passage_reference: 'Genesis 1:2',
+        content: 'Private pending note.',
+      })
+      await savedNote.promise
+    })
+
+    expect(screen.queryByText('Private pending note.')).not.toBeInTheDocument()
+    expect(screen.getByText('No saved notes yet.')).toBeVisible()
+  })
+
   it('treats malformed local storage as an empty collection', () => {
     window.localStorage.setItem('unbound_notes', JSON.stringify({ unexpected: true }))
     window.localStorage.setItem('unbound_saved_studies', JSON.stringify(['bad', null]))

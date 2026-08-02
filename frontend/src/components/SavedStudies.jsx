@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import './SavedStudies.css'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
@@ -23,6 +30,9 @@ export default function SavedStudies({ reference }) {
   const [message, setMessage] = useState('')
   const [draft, setDraft] = useState('')
   const loadGeneration = useRef(0)
+  const notesRevision = useRef(0)
+  const authGeneration = useRef(0)
+  const statusRef = useRef(status)
   const normalizedReference = normalizeStudyReference(reference)
   const canCreateReferenceNote = Boolean(
     normalizedReference.value.book && normalizedReference.value.chapter,
@@ -36,13 +46,17 @@ export default function SavedStudies({ reference }) {
       || !canCreateReferenceNote
       || !['anonymous', 'authenticated'].includes(status)
     ) return
+    const mutationStatus = status
+    const mutationAuthGeneration = authGeneration.current
+    const mutationNotesRevision = notesRevision.current + 1
+    notesRevision.current = mutationNotesRevision
     const payload = {
       passage_reference: normalizedReference.label,
       content,
     }
     try {
       let created
-      if (status === 'authenticated') {
+      if (mutationStatus === 'authenticated') {
         created = await api.post('/notes', payload)
       } else {
         created = {
@@ -53,22 +67,45 @@ export default function SavedStudies({ reference }) {
         const nextNotes = [created, ...readLocal('unbound_notes')]
         localStorage.setItem('unbound_notes', JSON.stringify(nextNotes))
       }
+      if (
+        mutationAuthGeneration !== authGeneration.current
+        || statusRef.current !== mutationStatus
+      ) return
+      if (!created || typeof created !== 'object') {
+        throw new Error('The saved note response was invalid')
+      }
       setNotes((current) => [created, ...current.filter((note) => note.id !== created.id)])
       setDraft('')
       setActiveView('notes')
       setMessage(`Note saved for ${normalizedReference.label}.`)
     } catch (error) {
+      if (notesRevision.current === mutationNotesRevision) {
+        notesRevision.current -= 1
+      }
+      if (
+        mutationAuthGeneration !== authGeneration.current
+        || statusRef.current !== mutationStatus
+      ) return
       setMessage(`Your note could not be saved: ${error.message}`)
     }
   }
 
+  useLayoutEffect(() => {
+    statusRef.current = status
+    authGeneration.current += 1
+    setDraft('')
+  }, [status])
+
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current
+    const startingNotesRevision = notesRevision.current
     try {
       if (status === 'authenticated') {
         const [remoteNotes, remoteStudies] = await Promise.all([api.get('/notes'), api.get('/studies')])
         if (generation !== loadGeneration.current) return
-        setNotes(Array.isArray(remoteNotes) ? remoteNotes : [])
+        if (startingNotesRevision === notesRevision.current) {
+          setNotes(Array.isArray(remoteNotes) ? remoteNotes : [])
+        }
         setStudies(Array.isArray(remoteStudies) ? remoteStudies : [])
       } else if (status === 'anonymous') {
         setNotes(readLocal('unbound_notes')); setStudies(readLocal('unbound_saved_studies'))
