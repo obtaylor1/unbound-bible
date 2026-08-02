@@ -34,6 +34,7 @@ export default function ComparisonToolbar({
   onBaseTranslationChange,
   onHighlightDifferencesChange,
   onOpenStudyTools,
+  studyTriggerRef,
 }) {
   return (
     <section className="compare-toolbar" aria-label="Comparison controls">
@@ -108,7 +109,7 @@ export default function ComparisonToolbar({
         </div>
       </fieldset>
 
-      <button type="button" className="compare-study-trigger" onClick={onOpenStudyTools}>
+      <button ref={studyTriggerRef} type="button" className="compare-study-trigger" onClick={onOpenStudyTools}>
         Open Study Tools <span aria-hidden="true">›</span>
       </button>
     </section>
