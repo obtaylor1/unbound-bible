@@ -116,6 +116,51 @@
   background: rgba(212, 175, 55, 0.1);
 }
 
+.export-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.saved-note-composer {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 24px;
+  padding: clamp(16px, 3vw, 24px);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  border-radius: 12px;
+}
+
+.saved-note-composer h3 {
+  margin: 0;
+  color: #FDFBF7;
+  font-size: 1.2rem;
+}
+
+.saved-note-composer label {
+  color: #FDFBF7;
+  font-weight: 700;
+}
+
+.saved-note-composer textarea {
+  width: 100%;
+  min-height: 7rem;
+  box-sizing: border-box;
+  padding: 12px;
+  resize: vertical;
+  color: #FDFBF7;
+  background: #111a36;
+  border: 1px solid rgba(253, 251, 247, 0.38);
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.saved-note-composer .export-btn {
+  min-height: 48px;
+  justify-self: start;
+}
+
 /* Saved Content Grid Layout */
 .saved-content-grid {
   min-height: 380px;

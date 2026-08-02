@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import SearchDialog from '../search/SearchDialog'
+import SkipLink from '../components/SkipLink'
 import { pageFromKnownHash } from '../routing/pageRoutes'
 import BookPicker from './BookPicker'
 import PassageToolbar from './PassageToolbar'
@@ -20,7 +21,7 @@ import StudyTools from './StudyTools'
 import { parseReaderHash, readerHash } from './readerRoute'
 import {
   getBookChapters,
-  getBooks,
+  getBookCatalog,
   getChapter,
   getVerseDetails,
 } from './scriptureApi'
@@ -76,9 +77,21 @@ export default function ScriptureReaderPage({
   const chaptersGeneration = useRef(0)
   const chapterGeneration = useRef(0)
   const detailsGeneration = useRef(0)
+  const chapterMetadataCache = useRef(new Map())
+  const mainRef = useRef(null)
   const { fontSize, readingWidth } = useReaderPreferences()
   const selectedTranslationRef = useRef(route.translation)
   const routeRef = useRef(route)
+
+  const loadChapterMetadata = useCallback(async (book, signal, canon) => {
+    const key = `${canon ?? routeRef.current.canon}\u0000${book}`
+    if (chapterMetadataCache.current.has(key)) {
+      return chapterMetadataCache.current.get(key)
+    }
+    const loaded = await getBookChapters(book, signal)
+    if (!signal?.aborted) chapterMetadataCache.current.set(key, loaded)
+    return loaded
+  }, [])
 
   const navigate = useCallback((next) => {
     const current = routeRef.current
@@ -110,7 +123,7 @@ export default function ScriptureReaderPage({
     setBooks([])
     setBooksCanonKey((current) => current === route.canon ? current : null)
     setBooksStatus('loading')
-    getBooks(route.canon, controller.signal)
+    getBookCatalog(route.canon, controller.signal)
       .then((nextBooks) => {
         if (generation !== booksGeneration.current || controller.signal.aborted) return
         setBooks(Array.isArray(nextBooks) ? nextBooks : [])
@@ -137,7 +150,8 @@ export default function ScriptureReaderPage({
   )
   const currentBooksStatus = catalogOwnedByRoute ? booksStatus : 'loading'
   const routeBookValid = currentBooks.some(
-    (book) => book.toLocaleLowerCase() === route.book.toLocaleLowerCase(),
+    (book) => (typeof book === 'string' ? book : book?.name)?.toLocaleLowerCase()
+      === route.book.toLocaleLowerCase(),
   )
   const catalogReady = currentBooksStatus === 'ready'
   const routeLoadAllowed = (
@@ -148,7 +162,11 @@ export default function ScriptureReaderPage({
 
   useEffect(() => {
     if (!catalogReady || currentBooks.length === 0 || routeBookValid) return
-    navigate({ book: currentBooks[0], chapter: 1, verse: null })
+    navigate({
+      book: typeof currentBooks[0] === 'string' ? currentBooks[0] : currentBooks[0].name,
+      chapter: 1,
+      verse: null,
+    })
   }, [catalogReady, currentBooks, navigate, routeBookValid])
 
   useEffect(() => {
@@ -164,7 +182,7 @@ export default function ScriptureReaderPage({
     setChapters([])
     setChaptersBookKey(null)
     setChaptersStatus('loading')
-    getBookChapters(route.book, controller.signal)
+    loadChapterMetadata(route.book, controller.signal, route.canon)
       .then((nextChapters) => {
         if (generation !== chaptersGeneration.current || controller.signal.aborted) return
         setChapters(nextChapters)
@@ -182,7 +200,7 @@ export default function ScriptureReaderPage({
       controller.abort()
       chaptersGeneration.current += 1
     }
-  }, [route.book, routeLoadAllowed, chaptersRetryRevision])
+  }, [route.book, route.canon, routeLoadAllowed, chaptersRetryRevision, loadChapterMetadata])
 
   useEffect(() => {
     if (!routeLoadAllowed) {
@@ -386,7 +404,7 @@ export default function ScriptureReaderPage({
       className={`scripture-reader scripture-reader-shell reader-font-${fontSize} reader-width-${readingWidth}`}
       data-testid="scripture-reader"
     >
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <SkipLink />
       <ReaderHeader
         onHome={() => changePage('home')}
         onOpenBooks={openBooks}
@@ -417,7 +435,7 @@ export default function ScriptureReaderPage({
           </button>
         </section>
       )}
-      <main id="main-content" className="scripture-reader-shell__main" tabIndex="-1">
+      <main ref={mainRef} id="main-content" className="scripture-reader-shell__main" tabIndex="-1">
         {status === 'ready' || (status === 'offline' && currentRowsLoaded) ? (
           <>
             {status === 'offline' && (
@@ -456,7 +474,7 @@ export default function ScriptureReaderPage({
         books={currentBooks}
         booksStatus={currentBooksStatus}
         selectedCanon={route.canon}
-        loadChapters={(book, signal) => getBookChapters(book, signal)}
+        loadChapters={(book, signal) => loadChapterMetadata(book, signal, route.canon)}
         onRetryBooks={() => setBooksRetryRevision((value) => value + 1)}
         onCanonChange={(canon) => navigate({ canon, chapter: 1, verse: null })}
         onChoose={({ book, chapter }) => {

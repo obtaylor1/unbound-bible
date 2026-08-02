@@ -51,7 +51,12 @@ const test = base.extend({
 test.beforeEach(async ({ page, browserDiagnostics }) => {
   void browserDiagnostics
   await page.route('**/api/v1/books?**', (route) => route.fulfill({
-    json: { books: [{ name: 'Genesis' }, { name: 'Exodus' }] },
+    json: { books: [
+      { name: 'Genesis', testament: 'Old Testament', collection: 'Pentateuch' },
+      { name: 'Exodus', testament: 'Old Testament', collection: 'Pentateuch' },
+      { name: 'Matthew', testament: 'New Testament', collection: 'Gospels' },
+      { name: '1 Enoch' },
+    ] },
   }))
   await page.route('**/api/biblical-texts/book-content?**', (route) => route.fulfill({
     json: { content: [{ chapter: 1 }, { chapter: 2 }] },
@@ -170,9 +175,11 @@ test('renders Scripture first with labelled reader structure and no overflow', a
   await expectNoHorizontalOverflow(page)
 
   const skipLink = page.getByRole('link', { name: 'Skip to main content' })
+  const shareableUrl = page.url()
   await skipLink.focus()
   await skipLink.press('Enter')
   await expect(page.locator('#main-content')).toBeFocused()
+  await expect(page).toHaveURL(shareableUrl)
 
   const lastVerse = page.getByRole('button', { name: /Genesis 1 verse 3/ })
   await lastVerse.scrollIntoViewIfNeeded()
@@ -348,7 +355,19 @@ test('book picker traps focus, supports Escape, restores its exact opener, and f
   await expect(opener).toBeFocused()
 })
 
-test('selected verse Study Tools expose all seven truthful destinations and restore focus', async ({ page }) => {
+test('book picker combines keyboard-accessible testament, collection, and search filters', async ({ page }) => {
+  await openReader(page)
+  await page.getByRole('button', { name: 'Choose a book' }).click()
+  const picker = page.getByRole('dialog', { name: 'Choose a book and chapter' })
+  await picker.getByRole('combobox', { name: 'Testament' }).selectOption('New Testament')
+  await expect(picker.getByRole('button', { name: 'Matthew' })).toBeVisible()
+  await expect(picker.getByRole('button', { name: 'Genesis', exact: true })).toBeHidden()
+  await picker.getByRole('combobox', { name: 'Collection' }).selectOption('Gospels')
+  await picker.getByRole('searchbox', { name: 'Search Bible books' }).fill('mat')
+  await expect(picker.getByRole('button', { name: 'Matthew' })).toBeVisible()
+})
+
+test('selected verse Study Tools expose all truthful destinations and restore focus', async ({ page }) => {
   await openReader(page)
   await page.getByRole('button', { name: /Genesis 1 verse 1/ }).click()
   await expect(page).toHaveURL(/verse=1/)
@@ -372,7 +391,8 @@ test('selected verse Study Tools expose all seven truthful destinations and rest
     'Compare translations',
     'Original languages',
     'Cross-references',
-    'Notes',
+    'Add or view notes',
+    'Highlights and bookmarks',
     'Ask the Bible',
     'Decolonial audit',
   ]) {
@@ -388,6 +408,12 @@ test('selected verse Study Tools expose all seven truthful destinations and rest
   await dialog.getByRole('button', { name: 'Cross-references' }).click()
   await expect(dialog.getByText('John 1:1', { exact: true })).toBeVisible()
 
+  await dialog.getByRole('button', { name: 'Highlights and bookmarks' }).click()
+  await dialog.getByRole('button', { name: 'Highlight Genesis 1:1' }).press('Enter')
+  await expect(dialog.getByRole('button', { name: 'Highlight Genesis 1:1' })).toHaveAttribute('aria-pressed', 'true')
+  await dialog.getByRole('button', { name: 'Bookmark Genesis 1:1' }).press('Enter')
+  await expect(dialog.getByRole('status')).toContainText('Bookmarked Genesis 1:1')
+
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await expect(opener).toBeFocused()
@@ -398,7 +424,7 @@ test('route Study Tools activate their real destinations from selected Genesis 1
   // Unit coverage verifies the selected reference object handed to onNavigate.
   // The browser boundary verifies each destination URL from the selected reader state.
   const destinations = [
-    ['Notes', '#library', { level: 2, name: 'Notes & saved studies' }],
+    ['Add or view notes', '#library', { level: 2, name: 'Notes & saved studies' }],
     ['Ask the Bible', '#aistudy', { level: 1, name: /Ask the Bible/ }],
     ['Decolonial audit', '#race-misuse', { level: 2, name: 'Race & Scripture Misuse' }],
   ]
@@ -413,6 +439,20 @@ test('route Study Tools activate their real destinations from selected Genesis 1
     await expect(page).toHaveURL(new RegExp(`${hash}$`))
     await expect(page.getByRole('heading', destinationHeading)).toBeVisible()
   }
+})
+
+test('keyboard users can add a note for the selected verse', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'note behavior does not vary by viewport')
+  await openReader(page)
+  await page.getByRole('button', { name: /Genesis 1 verse 2/ }).press('Enter')
+  await page.getByRole('button', { name: 'Open study tools' }).click()
+  await page.getByRole('button', { name: 'Add or view notes' }).press('Enter')
+
+  const editor = page.getByRole('textbox', { name: 'Note for Genesis 1:2' })
+  await editor.fill('Creation moves from chaos toward order.')
+  await page.getByRole('button', { name: 'Save note' }).press('Enter')
+  await expect(page.getByRole('status')).toContainText('Note saved for Genesis 1:2')
+  await expect(page.getByText('Creation moves from chaos toward order.')).toBeVisible()
 })
 
 test('search follows the real keyboard combobox flow and restores its opener', async ({ page }, testInfo) => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getBookChapters,
+  getBookCatalog,
   getBooks,
   getChapter,
   getVerseDetails,
@@ -20,6 +21,24 @@ describe('scripture API', () => {
 
     await expect(getBooks('ethio81', signal)).resolves.toEqual(['Genesis', '1 Enoch'])
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/books?canon=ETHIO81', { signal })
+  })
+
+  it('preserves normalized testament and collection metadata in the catalog contract', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ books: [
+        { name: ' Genesis ', testament: 'old', collection: 'Pentateuch' },
+        { name: 'Matthew', testament: 'New Testament', collection: 'Gospels' },
+        { name: '1 Enoch' },
+        { title: 'Ignored' },
+      ] }),
+    }))
+
+    await expect(getBookCatalog('ethio81')).resolves.toEqual([
+      { name: 'Genesis', testament: 'Old Testament', collection: 'Pentateuch' },
+      { name: 'Matthew', testament: 'New Testament', collection: 'Gospels' },
+      { name: '1 Enoch', testament: null, collection: null },
+    ])
   })
 
   it.each([

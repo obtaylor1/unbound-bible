@@ -614,6 +614,25 @@ def get_available_books(canon: str = "PROT66", db: Session = Depends(get_db)):
         catholic_books = protestant_books.union({
             "Tobit", "Judith", "Wisdom of Solomon", "Sirach", "Baruch", "1 Maccabees", "2 Maccabees"
         })
+
+        new_testament_books = {
+            "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "1 Corinthians", "2 Corinthians",
+            "Galatians", "Ephesians", "Philippians", "Colossians", "1 Thessalonians", "2 Thessalonians",
+            "1 Timothy", "2 Timothy", "Titus", "Philemon", "Hebrews", "James", "1 Peter", "2 Peter",
+            "1 John", "2 John", "3 John", "Jude", "Revelation"
+        }
+        book_collections = {
+            **{name: "Pentateuch" for name in {"Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy"}},
+            **{name: "Historical Books" for name in {"Joshua", "Judges", "Ruth", "1 Samuel", "2 Samuel", "1 Kings", "2 Kings", "1 Chronicles", "2 Chronicles", "Ezra", "Nehemiah", "Esther", "Tobit", "Judith", "1 Maccabees", "2 Maccabees"}},
+            **{name: "Wisdom and Poetry" for name in {"Job", "Psalms", "Proverbs", "Ecclesiastes", "Song of Solomon", "Wisdom of Solomon", "Sirach"}},
+            **{name: "Major Prophets" for name in {"Isaiah", "Jeremiah", "Lamentations", "Ezekiel", "Daniel", "Baruch"}},
+            **{name: "Minor Prophets" for name in {"Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi"}},
+            **{name: "Gospels" for name in {"Matthew", "Mark", "Luke", "John"}},
+            "Acts": "Acts",
+            **{name: "Pauline Letters" for name in {"Romans", "1 Corinthians", "2 Corinthians", "Galatians", "Ephesians", "Philippians", "Colossians", "1 Thessalonians", "2 Thessalonians", "1 Timothy", "2 Timothy", "Titus", "Philemon"}},
+            **{name: "General Letters" for name in {"Hebrews", "James", "1 Peter", "2 Peter", "1 John", "2 John", "3 John", "Jude"}},
+            "Revelation": "Apocalyptic Literature",
+        }
         
         # Define Ethiopian Orthodox canon books (81-88 books, excluding extra-canonical reference works)
         extra_canonical_books = {"Antiquities", "Genesis Targum"}
@@ -635,6 +654,12 @@ def get_available_books(canon: str = "PROT66", db: Session = Depends(get_db)):
                 
             book_info = {
                 "name": book_name,
+                "testament": (
+                    "New Testament" if book_name in new_testament_books
+                    else "Old Testament" if book_name in catholic_books
+                    else None
+                ),
+                "collection": book_collections.get(book_name),
                 "canonical_status": {
                     "protestant": is_prot,
                     "catholic": is_cath,

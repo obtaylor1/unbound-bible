@@ -9,6 +9,12 @@ import useDialogFocus from './useDialogFocus'
 const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
 
 const books = ['Genesis', { name: 'Exodus' }, ' Psalms ', 'Genesis', '', null]
+const catalogBooks = [
+  { name: 'Genesis', testament: 'Old Testament', collection: 'Pentateuch' },
+  { name: 'Psalms', testament: 'Old Testament', collection: 'Wisdom and Poetry' },
+  { name: 'Matthew', testament: 'New Testament', collection: 'Gospels' },
+  { name: '1 Enoch', testament: null, collection: null },
+]
 
 function deferred() {
   let resolve
@@ -367,6 +373,35 @@ afterEach(() => {
 })
 
 describe('BookPicker', () => {
+  it('combines labelled Testament, collection, and search filters without hiding unknown books under All', async () => {
+    const user = userEvent.setup()
+    render(
+      <BookPicker
+        open
+        books={catalogBooks}
+        selectedCanon="ETHIO81"
+        loadChapters={() => [1]}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Testament' })).toHaveValue('all')
+    expect(screen.getByRole('combobox', { name: 'Collection' })).toHaveValue('all')
+    expect(screen.getByRole('button', { name: '1 Enoch' })).toBeVisible()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Testament' }), 'Old Testament')
+    expect(screen.getByRole('button', { name: 'Genesis' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Matthew' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '1 Enoch' })).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Collection' }), 'Wisdom and Poetry')
+    expect(screen.getByRole('button', { name: 'Psalms' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Genesis' })).not.toBeInTheDocument()
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search Bible books' }), 'psa')
+    expect(screen.getByRole('button', { name: 'Psalms' })).toBeVisible()
+  })
+
   it('renders a named modal dialog and filters normalized books with trimmed, case-insensitive search', async () => {
     const user = userEvent.setup()
     render(<PickerHarness />)

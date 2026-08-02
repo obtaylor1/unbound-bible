@@ -10,13 +10,13 @@ import ReaderBottomNavigation from './ReaderBottomNavigation'
 import ScriptureReaderPage from './ScriptureReaderPage'
 import {
   getBookChapters,
-  getBooks,
+  getBookCatalog,
   getChapter,
   getVerseDetails,
 } from './scriptureApi'
 
 vi.mock('./scriptureApi', () => ({
-  getBooks: vi.fn(),
+  getBookCatalog: vi.fn(),
   getChapter: vi.fn(),
   getBookChapters: vi.fn(),
   getVerseDetails: vi.fn(),
@@ -96,7 +96,7 @@ function renderStrictReader(props = {}) {
 beforeEach(() => {
   window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=KJV&canon=ETHIO81'
   window.localStorage.clear()
-  getBooks.mockResolvedValue(['Genesis', 'Exodus'])
+  getBookCatalog.mockResolvedValue(['Genesis', 'Exodus'])
   getBookChapters.mockResolvedValue([1, 3])
   getChapter.mockResolvedValue(rows)
   getVerseDetails.mockResolvedValue({
@@ -236,7 +236,7 @@ describe('ScriptureReaderPage', () => {
     const firstBooks = deferred()
     const currentBooks = deferred()
     const currentChapters = deferred()
-    getBooks
+    getBookCatalog
       .mockReturnValueOnce(firstBooks.promise)
       .mockReturnValueOnce(currentBooks.promise)
       .mockResolvedValue(['Exodus'])
@@ -364,7 +364,7 @@ describe('ScriptureReaderPage', () => {
 
   it('supports picker canon and chapter choice flows', async () => {
     const user = userEvent.setup()
-    getBooks.mockImplementation((canon) => Promise.resolve(
+    getBookCatalog.mockImplementation((canon) => Promise.resolve(
       canon === 'CATH73' ? ['Tobit'] : ['Genesis', 'Exodus'],
     ))
     renderReader()
@@ -382,7 +382,7 @@ describe('ScriptureReaderPage', () => {
 
   it('atomically swaps canon catalogs before validating or fetching a passage', async () => {
     const catholicBooks = deferred()
-    getBooks.mockImplementation((canon) => (
+    getBookCatalog.mockImplementation((canon) => (
       canon === 'CATH73' ? catholicBooks.promise : Promise.resolve(['Genesis', 'Exodus'])
     ))
     renderReader()
@@ -412,7 +412,7 @@ describe('ScriptureReaderPage', () => {
 
   it('shows recoverable books and chapter-navigation metadata failures', async () => {
     const user = userEvent.setup()
-    getBooks.mockRejectedValueOnce(new Error('books down')).mockResolvedValueOnce(['Genesis'])
+    getBookCatalog.mockRejectedValueOnce(new Error('books down')).mockResolvedValueOnce(['Genesis'])
     getBookChapters.mockRejectedValueOnce(new Error('chapters down')).mockResolvedValueOnce([1, 3])
     renderReader()
 
@@ -434,7 +434,7 @@ describe('ScriptureReaderPage', () => {
   it('preserves the passage while retrying its failed canon catalog', async () => {
     const user = userEvent.setup()
     const retryBooks = deferred()
-    getBooks
+    getBookCatalog
       .mockRejectedValueOnce(new Error('books down'))
       .mockReturnValueOnce(retryBooks.promise)
     renderReader()
@@ -494,7 +494,7 @@ describe('ScriptureReaderPage', () => {
     renderReader({ onPageChange, SearchComponent: MockSearchDialog })
     await screen.findByText('In the beginning.')
     await user.click(screen.getByRole('button', { name: 'Open study tools' }))
-    await user.click(screen.getByRole('button', { name: 'Notes' }))
+    await user.click(screen.getByRole('button', { name: 'Add or view notes' }))
     expect(onPageChange).toHaveBeenCalledWith('notes', {
       book: 'Genesis', chapter: 1,
     })
@@ -607,11 +607,24 @@ describe('ScriptureReaderPage', () => {
     expect(getChapter).toHaveBeenCalledTimes(1)
   })
 
+  it('reuses resolved chapter metadata when the picker opens the current book', async () => {
+    const user = userEvent.setup()
+    renderReader()
+    await screen.findByText('In the beginning.')
+    await waitFor(() => expect(getBookChapters).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+
+    expect(await screen.findByRole('button', { name: 'Chapter 1' })).toBeVisible()
+    expect(getBookChapters).toHaveBeenCalledTimes(1)
+  })
+
   it('aborts requests and removes its hash listener on unmount', async () => {
     const chapterSignals = []
     const booksSignals = []
     const chapterNumberSignals = []
-    getBooks.mockImplementation((_, signal) => {
+    getBookCatalog.mockImplementation((_, signal) => {
       booksSignals.push(signal)
       return Promise.resolve(['Genesis'])
     })
@@ -659,7 +672,7 @@ describe('ScriptureReaderPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Choose a book' }))
     expect(detailSignals[0].aborted).toBe(true)
-    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(screen.getByRole('button', { name: 'Exodus' }))
     await waitFor(() => expect(pickerSignals).toHaveLength(1))
     unmount()
     expect(pickerSignals[0].aborted).toBe(true)
@@ -677,19 +690,38 @@ describe('ScriptureReaderPage', () => {
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
   })
 
-  it('keeps the reader mounted when its skip link targets the main landmark', async () => {
+  it('preserves the selected verse when App opens the note destination', async () => {
+    const user = userEvent.setup()
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+
+    await screen.findByText('The earth was without form.')
+    await user.click(screen.getByRole('button', { name: /Genesis 1 verse 2/ }))
+    await user.click(screen.getByRole('button', { name: 'Open study tools' }))
+    await user.click(screen.getByRole('button', { name: 'Add or view notes' }))
+
+    expect(await screen.findByRole('heading', { name: 'Add a note for Genesis 1:2' })).toBeVisible()
+  })
+
+  it('focuses the reader main from its skip link without destroying the shareable route', async () => {
+    const user = userEvent.setup()
     render(
       <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
         <App />
       </AuthContext.Provider>,
     )
     await screen.findByTestId('scripture-reader')
+    const originalHash = window.location.hash
 
-    window.location.hash = '#main-content'
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    await user.click(screen.getByRole('link', { name: 'Skip to main content' }))
 
     expect(await screen.findByTestId('scripture-reader')).toBeInTheDocument()
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+    expect(screen.getByRole('main')).toHaveFocus()
+    expect(window.location.hash).toBe(originalHash)
   })
 
   it('returns Home when browser history reaches the hashless root', async () => {
@@ -741,5 +773,7 @@ describe('ScriptureReaderPage', () => {
       'main-content',
     )
     expect(screen.getByRole('status')).toHaveTextContent('Opening Scripture reader')
+    expect(document.querySelectorAll('.reader-loading-skeleton__line').length).toBeGreaterThan(2)
+    expect(document.querySelector('.reader-loading-skeleton')).toHaveAttribute('aria-hidden', 'true')
   })
 })

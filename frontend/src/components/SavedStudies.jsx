@@ -2,19 +2,55 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './SavedStudies.css'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
+import { normalizeStudyReference } from '../reader/studyToolRegistry'
 
 const readLocal = (key) => {
   try { return JSON.parse(localStorage.getItem(key) || '[]') }
   catch { return [] }
 }
 
-export default function SavedStudies() {
+export default function SavedStudies({ reference }) {
   const { status } = useAuth()
   const [activeView, setActiveView] = useState('notes')
   const [notes, setNotes] = useState([])
   const [studies, setStudies] = useState([])
   const [query, setQuery] = useState('')
   const [message, setMessage] = useState('')
+  const [draft, setDraft] = useState('')
+  const normalizedReference = normalizeStudyReference(reference)
+  const canCreateReferenceNote = Boolean(
+    normalizedReference.value.book && normalizedReference.value.chapter,
+  )
+
+  const createNote = async (event) => {
+    event.preventDefault()
+    const content = draft.trim()
+    if (!content || !canCreateReferenceNote) return
+    const payload = {
+      passage_reference: normalizedReference.label,
+      content,
+    }
+    try {
+      let created
+      if (status === 'authenticated') {
+        created = await api.post('/notes', payload)
+      } else {
+        created = {
+          ...payload,
+          id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          updated_at: new Date().toISOString(),
+        }
+        const nextNotes = [created, ...readLocal('unbound_notes')]
+        localStorage.setItem('unbound_notes', JSON.stringify(nextNotes))
+      }
+      setNotes((current) => [created, ...current.filter((note) => note.id !== created.id)])
+      setDraft('')
+      setActiveView('notes')
+      setMessage(`Note saved for ${normalizedReference.label}.`)
+    } catch (error) {
+      setMessage(`Your note could not be saved: ${error.message}`)
+    }
+  }
 
   const load = useCallback(async () => {
     if (status === 'authenticated') {
@@ -62,6 +98,21 @@ export default function SavedStudies() {
     {status === 'anonymous' && <div className="empty-workspace-card"><strong>Your work is saved only on this device.</strong><p>Sign in to keep it private and available across devices.</p></div>}
     {status === 'authenticated' && guestCount > 0 && <div className="empty-workspace-card"><strong>Local work found</strong><p>{guestNotes.length} notes and {guestStudies.length} studies are ready to import.</p><button className="export-btn" onClick={importGuestData}>Review and import</button></div>}
     {message && <p role="status">{message}</p>}
+    {canCreateReferenceNote && (
+      <form className="saved-note-composer" onSubmit={createNote}>
+        <h3>Add a note for {normalizedReference.label}</h3>
+        <label htmlFor="saved-note-content">Note for {normalizedReference.label}</label>
+        <textarea
+          id="saved-note-content"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          rows="4"
+          maxLength="5000"
+          required
+        />
+        <button className="export-btn" type="submit" disabled={!draft.trim()}>Save note</button>
+      </form>
+    )}
     <div className="controls-row">
       <div className="view-toggle"><button className={`toggle-btn ${activeView === 'notes' ? 'active' : ''}`} onClick={() => setActiveView('notes')}>Notes ({notes.length})</button><button className={`toggle-btn ${activeView === 'studies' ? 'active' : ''}`} onClick={() => setActiveView('studies')}>Studies ({studies.length})</button></div>
       <input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" aria-label="Search your library" />

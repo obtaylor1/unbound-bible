@@ -33,6 +33,14 @@ export default defineConfig({
       },
     },
     {
+      name: 'tablet-portrait-768',
+      use: {
+        ...devices['iPad (gen 7)'],
+        browserName: 'chromium',
+        viewport: { width: 768, height: 1024 },
+      },
+    },
+    {
       name: 'mobile-390',
       use: {
         ...devices['iPhone 13'],

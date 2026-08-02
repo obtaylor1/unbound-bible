@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import './App.css'
 import Navigation from './components/Navigation'
 import HomePage from './components/HomePage'
+import SkipLink from './components/SkipLink'
 import {
   hashForPage,
   pageFromHash,
@@ -26,7 +27,7 @@ const Factbook = lazy(() => import('./components/Factbook'))
 export function ReaderLoadingFallback() {
   return (
     <>
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <SkipLink />
       <main
         id="main-content"
         className="page-loading"
@@ -34,6 +35,13 @@ export function ReaderLoadingFallback() {
         tabIndex="-1"
       >
         <p role="status">Opening Scripture reader…</p>
+        <div className="reader-loading-skeleton" aria-hidden="true">
+          <span className="reader-loading-skeleton__title" />
+          <span className="reader-loading-skeleton__line" />
+          <span className="reader-loading-skeleton__line" />
+          <span className="reader-loading-skeleton__line reader-loading-skeleton__line--short" />
+          <span className="reader-loading-skeleton__line" />
+        </div>
       </main>
     </>
   )
@@ -42,13 +50,18 @@ export function ReaderLoadingFallback() {
 function App() {
   const [currentPage, setCurrentPage] = useState(() => pageFromHash(window.location.hash))
   const [currentHash, setCurrentHash] = useState(() => window.location.hash)
+  const [pageContext, setPageContext] = useState(null)
   const mainRef = useRef(null)
+  const pendingHashRef = useRef(null)
 
   useEffect(() => {
     const handleHashChange = () => {
       if (window.location.hash === '#main-content') return
+      const internalNavigation = pendingHashRef.current === window.location.hash
+      pendingHashRef.current = null
       setCurrentHash(window.location.hash)
       setCurrentPage(pageFromHash(window.location.hash))
+      if (!internalNavigation) setPageContext(null)
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
@@ -61,11 +74,15 @@ function App() {
     })
   }, [currentPage])
 
-  const handlePageChange = (pageId) => {
+  const handlePageChange = (pageId, context = null) => {
     setCurrentPage(pageId)
+    setPageContext(context)
     const nextHash = hashForPage(pageId)
     setCurrentHash(nextHash)
-    if (window.location.hash !== nextHash) window.location.hash = nextHash
+    if (window.location.hash !== nextHash) {
+      pendingHashRef.current = nextHash
+      window.location.hash = nextHash
+    }
   }
 
   const renderCurrentPage = () => {
@@ -164,7 +181,7 @@ function App() {
       case 'notes':
         return (
           <div className="page-container">
-            <SavedStudies />
+            <SavedStudies reference={pageContext} />
           </div>
         )
       
@@ -185,7 +202,7 @@ function App() {
 
   return (
     <div className="app">
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <SkipLink />
       <Navigation currentPage={currentPage} onPageChange={handlePageChange} />
       <main ref={mainRef} id="main-content" tabIndex="-1" aria-label={titleForPage(currentPage)} className="app-main">
         <Suspense fallback={<div className="page-loading" role="status">Opening study tools…</div>}>

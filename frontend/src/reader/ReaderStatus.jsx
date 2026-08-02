@@ -18,6 +18,13 @@ export default function ReaderStatus({
         aria-labelledby={headingId}
       >
         <h1 id={headingId}>Loading {reference}…</h1>
+        <div className="reader-loading-skeleton" aria-hidden="true">
+          <span className="reader-loading-skeleton__title" />
+          <span className="reader-loading-skeleton__line" />
+          <span className="reader-loading-skeleton__line" />
+          <span className="reader-loading-skeleton__line reader-loading-skeleton__line--short" />
+          <span className="reader-loading-skeleton__line" />
+        </div>
       </section>
     )
   }

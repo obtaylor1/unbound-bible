@@ -11,18 +11,23 @@ const CANONS = [
 function normalizeBooks(books) {
   if (!Array.isArray(books)) return []
 
-  const names = books
-    .map((book) => (typeof book === 'string' ? book : book?.name))
-    .filter((name) => typeof name === 'string')
-    .map((name) => name.trim())
-    .filter(Boolean)
-
   const seen = new Set()
-  return names.filter((name) => {
+  return books.flatMap((book) => {
+    const name = (typeof book === 'string' ? book : book?.name)?.trim()
+    if (!name) return []
     const key = name.toLocaleLowerCase()
-    if (seen.has(key)) return false
+    if (seen.has(key)) return []
     seen.add(key)
-    return true
+    const metadata = typeof book === 'object' && book ? book : {}
+    return [{
+      name,
+      testament: typeof metadata.testament === 'string' && metadata.testament.trim()
+        ? metadata.testament.trim()
+        : null,
+      collection: typeof metadata.collection === 'string' && metadata.collection.trim()
+        ? metadata.collection.trim()
+        : null,
+    }]
   })
 }
 
@@ -68,6 +73,8 @@ export default function BookPicker({
   const wasOpenRef = useRef(false)
   const focusIntentRef = useRef(null)
   const [query, setQuery] = useState('')
+  const [testament, setTestament] = useState('all')
+  const [collection, setCollection] = useState('all')
   const [selectedBook, setSelectedBook] = useState(null)
   const [chapters, setChapters] = useState([])
   const [chapterState, setChapterState] = useState('idle')
@@ -78,6 +85,8 @@ export default function BookPicker({
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
+    setTestament('all')
+    setCollection('all')
     setSelectedBook(null)
     setChapters([])
     setChapterState('idle')
@@ -112,6 +121,8 @@ export default function BookPicker({
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
+    setTestament('all')
+    setCollection('all')
     setSelectedBook(null)
     setChapters([])
     setChapterState('idle')
@@ -158,6 +169,8 @@ export default function BookPicker({
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       setQuery('')
+      setTestament('all')
+      setCollection('all')
       setSelectedBook(null)
       setChapters([])
       setChapterState('idle')
@@ -167,9 +180,20 @@ export default function BookPicker({
   }, [open])
 
   const normalizedBooks = useMemo(() => normalizeBooks(books), [books])
+  const testaments = useMemo(() => [...new Set(
+    normalizedBooks.map((book) => book.testament).filter(Boolean),
+  )].sort(), [normalizedBooks])
+  const collections = useMemo(() => [...new Set(
+    normalizedBooks
+      .filter((book) => testament === 'all' || book.testament === testament)
+      .map((book) => book.collection)
+      .filter(Boolean),
+  )].sort(), [normalizedBooks, testament])
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const filteredBooks = normalizedBooks.filter((book) => (
-    book.toLocaleLowerCase().includes(normalizedQuery)
+    (testament === 'all' || book.testament === testament)
+    && (collection === 'all' || book.collection === collection)
+    && book.name.toLocaleLowerCase().includes(normalizedQuery)
   ))
   const chooseBook = async (book) => {
     requestControllerRef.current?.abort()
@@ -229,6 +253,8 @@ export default function BookPicker({
     requestSequence.current += 1
     focusIntentRef.current = 'books'
     setQuery('')
+    setTestament('all')
+    setCollection('all')
     setSelectedBook(null)
     setChapters([])
     setChapterState('idle')
@@ -284,17 +310,44 @@ export default function BookPicker({
           </label>
 
           {!selectedBook && (
-            <label className="book-picker__field">
-              <span>Search Bible books</span>
-              <input
-                ref={searchRef}
-                className="book-picker__control"
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Try Genesis or Romans"
-              />
-            </label>
+            <>
+              <label className="book-picker__field">
+                <span>Testament</span>
+                <select
+                  className="book-picker__control"
+                  value={testament}
+                  onChange={(event) => {
+                    setTestament(event.target.value)
+                    setCollection('all')
+                  }}
+                >
+                  <option value="all">All testaments</option>
+                  {testaments.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="book-picker__field">
+                <span>Collection</span>
+                <select
+                  className="book-picker__control"
+                  value={collection}
+                  onChange={(event) => setCollection(event.target.value)}
+                >
+                  <option value="all">All collections</option>
+                  {collections.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="book-picker__field">
+                <span>Search Bible books</span>
+                <input
+                  ref={searchRef}
+                  className="book-picker__control"
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Try Genesis or Romans"
+                />
+              </label>
+            </>
           )}
         </div>
 
@@ -323,10 +376,10 @@ export default function BookPicker({
                   <button
                     className="book-picker__book book-picker__control"
                     type="button"
-                    key={book}
-                    onClick={() => chooseBook(book)}
+                    key={book.name}
+                    onClick={() => chooseBook(book.name)}
                   >
-                    {book}
+                    {book.name}
                   </button>
                 ))}
               </div>

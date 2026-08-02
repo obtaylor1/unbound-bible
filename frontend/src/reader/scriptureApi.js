@@ -8,13 +8,39 @@ export async function requestJson(url, signal) {
 }
 
 export async function getBooks(canon, signal) {
+  const catalog = await getBookCatalog(canon, signal)
+  return catalog.map(({ name }) => name)
+}
+
+function normalizedTaxonomy(value, kind) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const text = value.trim()
+  if (kind === 'testament') {
+    const compact = text.toLocaleLowerCase().replace(/[^a-z]/g, '')
+    if (compact === 'old' || compact === 'oldtestament') return 'Old Testament'
+    if (compact === 'new' || compact === 'newtestament') return 'New Testament'
+  }
+  return text
+}
+
+export async function getBookCatalog(canon, signal) {
   const normalizedCanon = String(canon ?? '').trim().toUpperCase() || 'ETHIO81'
   const params = new URLSearchParams({ canon: normalizedCanon })
   const data = await requestJson(`/api/v1/books?${params}`, signal)
 
-  return (data.books ?? [])
-    .map((book) => typeof book === 'string' ? book : book?.name)
-    .filter((book) => typeof book === 'string')
+  const seen = new Set()
+  return (data.books ?? []).flatMap((book) => {
+    const name = (typeof book === 'string' ? book : book?.name)?.trim()
+    if (!name) return []
+    const key = name.toLocaleLowerCase()
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{
+      name,
+      testament: normalizedTaxonomy(book?.testament, 'testament'),
+      collection: normalizedTaxonomy(book?.collection, 'collection'),
+    }]
+  })
 }
 
 export async function getChapter({ book, chapter }, signal) {

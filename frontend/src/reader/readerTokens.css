@@ -828,6 +828,10 @@ button.scripture-pane__verse:focus-visible {
   overscroll-behavior: contain;
 }
 
+.study-tools__drag-handle {
+  display: none;
+}
+
 .study-tools__header {
   display: flex;
   align-items: flex-start;
@@ -940,6 +944,24 @@ button.scripture-pane__verse:focus-visible {
   margin: 0;
   overflow-wrap: anywhere;
   line-height: 1.65;
+}
+
+.study-tools__marker-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+
+.study-tools__marker-actions button {
+  padding: 0.75rem;
+  font-weight: 750;
+}
+
+.study-tools__marker-actions button[aria-pressed='true'] {
+  color: var(--reader-on-primary);
+  background: var(--reader-primary);
+  border-color: var(--reader-gold);
 }
 
 .study-tools__omitted {
@@ -1196,6 +1218,15 @@ button.scripture-pane__verse:focus-visible {
     border-inline-start: 0;
     border-radius: 1rem 1rem 0 0;
     box-shadow: 0 -1rem 3rem color-mix(in srgb, var(--reader-canvas) 72%, transparent);
+  }
+
+  .study-tools__drag-handle {
+    display: block;
+    width: 3rem;
+    height: 0.3rem;
+    margin: -0.35rem auto 0.75rem;
+    border-radius: 999px;
+    background: var(--reader-secondary-control-border);
   }
 
   .reader-header__actions .account-menu {

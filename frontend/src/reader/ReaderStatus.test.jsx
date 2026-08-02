@@ -66,11 +66,14 @@ function contrastRatio(firstColor, secondColor) {
 
 describe('ReaderStatus', () => {
   it('announces the passage while it is loading', () => {
-    render(<ReaderStatus state="loading" reference="John 3" />)
+    const { container } = render(<ReaderStatus state="loading" reference="John 3" />)
 
     const status = screen.getByRole('status')
     expect(status).toHaveClass('reader-status', 'reader-status--loading')
     expect(status).toHaveTextContent('Loading John 3…')
+    const skeleton = container.querySelector('.reader-loading-skeleton')
+    expect(skeleton).toHaveAttribute('aria-hidden', 'true')
+    expect(skeleton.querySelectorAll('.reader-loading-skeleton__line')).toHaveLength(4)
   })
 
   it('explains offline limitations without implying loaded Scripture is lost', () => {

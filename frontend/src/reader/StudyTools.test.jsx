@@ -42,11 +42,12 @@ function StudyToolsHarness({ initialReference = reference, initialDetails = {}, 
 }
 
 afterEach(() => {
+  window.localStorage.clear()
   vi.restoreAllMocks()
 })
 
 describe('study tool registry', () => {
-  it('is the single immutable mapping for all seven exact tool labels and routes', () => {
+  it('is the single immutable mapping for all approved tool labels and routes', () => {
     expect(STUDY_TOOLS).toEqual([
       {
         id: 'context',
@@ -72,7 +73,8 @@ describe('study tool registry', () => {
         label: 'Cross-references',
         detailKeys: ['cross_references'],
       },
-      { id: 'notes', kind: 'route', label: 'Notes', page: 'notes' },
+      { id: 'notes', kind: 'route', label: 'Add or view notes', page: 'notes' },
+      { id: 'markers', kind: 'local', label: 'Highlights and bookmarks' },
       { id: 'ask', kind: 'route', label: 'Ask the Bible', page: 'chat' },
       {
         id: 'audit',
@@ -192,7 +194,7 @@ describe('StudyTools', () => {
       />,
     )
 
-    await user.click(screen.getByRole('button', { name: 'Notes' }))
+    await user.click(screen.getByRole('button', { name: 'Add or view notes' }))
     await user.click(screen.getByRole('button', { name: 'Ask the Bible' }))
     await user.click(screen.getByRole('button', { name: 'Decolonial audit' }))
 
@@ -208,11 +210,49 @@ describe('StudyTools', () => {
     expect(screen.getByText('Ancient setting.')).toBeInTheDocument()
   })
 
+  it('adds and removes a highlight and bookmark for the unambiguous selected verse', async () => {
+    const user = userEvent.setup()
+    render(<StudyTools open reference={reference} details={{}} onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Highlights and bookmarks' }))
+    const panel = screen.getByRole('region', { name: 'Highlights and bookmarks' })
+    expect(within(panel).getByText('Genesis 1:2')).toBeInTheDocument()
+
+    const highlight = within(panel).getByRole('button', { name: 'Highlight Genesis 1:2' })
+    const bookmark = within(panel).getByRole('button', { name: 'Bookmark Genesis 1:2' })
+    expect(highlight).toHaveAttribute('aria-pressed', 'false')
+    expect(bookmark).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(highlight)
+    await user.click(bookmark)
+    expect(highlight).toHaveAttribute('aria-pressed', 'true')
+    expect(bookmark).toHaveAttribute('aria-pressed', 'true')
+    expect(within(panel).getByRole('status')).toHaveTextContent('Bookmarked Genesis 1:2')
+    expect(JSON.parse(window.localStorage.getItem('unbound_verse_markers'))).toEqual({
+      'genesis|1|2': { reference: 'Genesis 1:2', highlighted: true, bookmarked: true },
+    })
+
+    await user.click(highlight)
+    expect(highlight).toHaveAttribute('aria-pressed', 'false')
+    expect(JSON.parse(window.localStorage.getItem('unbound_verse_markers'))['genesis|1|2']).toEqual({
+      reference: 'Genesis 1:2', highlighted: false, bookmarked: true,
+    })
+  })
+
+  it('explains that verse markers require a selected verse', async () => {
+    const user = userEvent.setup()
+    render(<StudyTools open reference={{ book: 'Genesis', chapter: 1 }} details={{}} onClose={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Highlights and bookmarks' }))
+
+    expect(screen.getByText('Select a verse before adding a highlight or bookmark.')).toBeVisible()
+    expect(screen.queryByRole('button', { name: /Highlight Genesis/ })).not.toBeInTheDocument()
+  })
+
   it('disables route tools accessibly when navigation is unavailable', async () => {
     const user = userEvent.setup()
     render(<StudyTools open />)
 
-    const notes = screen.getByRole('button', { name: 'Notes' })
+    const notes = screen.getByRole('button', { name: 'Add or view notes' })
     expect(notes).toBeDisabled()
     expect(notes).toHaveAccessibleDescription('Navigation unavailable')
     await user.click(notes)
@@ -878,7 +918,7 @@ describe('StudyTools', () => {
     await user.click(screen.getByRole('button', { name: 'Open study tools' }))
     await user.click(screen.getByRole('button', { name: 'Compare translations' }))
     await user.click(screen.getByRole('button', { name: 'Refresh details' }))
-    await user.click(screen.getByRole('button', { name: 'Notes' }))
+    await user.click(screen.getByRole('button', { name: 'Add or view notes' }))
     expect(screen.getByRole('button', { name: 'Compare translations' })).toHaveAttribute(
       'aria-pressed',
       'true',

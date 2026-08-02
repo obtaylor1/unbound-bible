@@ -92,7 +92,8 @@ const tools = [
     label: 'Cross-references',
     detailKeys: ['cross_references'],
   },
-  { id: 'notes', kind: 'route', label: 'Notes', page: 'notes' },
+  { id: 'notes', kind: 'route', label: 'Add or view notes', page: 'notes' },
+  { id: 'markers', kind: 'local', label: 'Highlights and bookmarks' },
   { id: 'ask', kind: 'route', label: 'Ask the Bible', page: 'chat' },
   {
     id: 'audit',

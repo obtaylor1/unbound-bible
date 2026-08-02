@@ -8,6 +8,7 @@ import {
 import useDialogFocus from './useDialogFocus'
 
 const INLINE_TOOLS = STUDY_TOOLS.filter(({ kind }) => kind === 'inline')
+const SELECTABLE_TOOLS = STUDY_TOOLS.filter(({ kind }) => ['inline', 'local'].includes(kind))
 const CONTEXT_TOOL = INLINE_TOOLS[0]
 const MAX_RENDER_DEPTH = 6
 const MAX_RENDER_NODES = 200
@@ -16,6 +17,72 @@ const MAX_STRING_LENGTH = 5000
 const OMITTED_MESSAGE = 'Additional details omitted'
 const DETAILS_ANNOUNCEMENT_IDS = new WeakMap()
 let nextDetailsAnnouncementId = 1
+const VERSE_MARKERS_KEY = 'unbound_verse_markers'
+
+function readVerseMarkers() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(VERSE_MARKERS_KEY) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function MarkerPanel({ headingId, reference, referenceKey }) {
+  const [markers, setMarkers] = useState(readVerseMarkers)
+  const [message, setMessage] = useState('')
+  const entry = markers[referenceKey] ?? {}
+
+  const toggle = (kind) => {
+    const active = !entry[kind]
+    const nextEntry = {
+      reference: reference.label,
+      highlighted: Boolean(entry.highlighted),
+      bookmarked: Boolean(entry.bookmarked),
+      [kind]: active,
+    }
+    const next = { ...markers, [referenceKey]: nextEntry }
+    if (!nextEntry.highlighted && !nextEntry.bookmarked) delete next[referenceKey]
+    window.localStorage.setItem(VERSE_MARKERS_KEY, JSON.stringify(next))
+    setMarkers(next)
+    const action = kind === 'highlighted' ? 'Highlight' : 'Bookmark'
+    setMessage(`${active ? `${action}ed` : `${action} removed from`} ${reference.label}`)
+  }
+
+  return (
+    <section className="study-tools__content" role="region" aria-labelledby={headingId}>
+      <h3 id={headingId}>Highlights and bookmarks</h3>
+      {!reference.hasVerse ? (
+        <p className="study-tools__empty">Select a verse before adding a highlight or bookmark.</p>
+      ) : (
+        <>
+          <p className="study-tools__prose">Save <strong>{reference.label}</strong> on this device.</p>
+          <div className="study-tools__marker-actions">
+            <button
+              type="button"
+              className="study-tools__control"
+              aria-label={`Highlight ${reference.label}`}
+              aria-pressed={Boolean(entry.highlighted)}
+              onClick={() => toggle('highlighted')}
+            >
+              {entry.highlighted ? 'Remove highlight' : 'Highlight verse'}
+            </button>
+            <button
+              type="button"
+              className="study-tools__control"
+              aria-label={`Bookmark ${reference.label}`}
+              aria-pressed={Boolean(entry.bookmarked)}
+              onClick={() => toggle('bookmarked')}
+            >
+              {entry.bookmarked ? 'Remove bookmark' : 'Bookmark verse'}
+            </button>
+          </div>
+          <p role="status" aria-live="polite" aria-atomic="true">{message}</p>
+        </>
+      )}
+    </section>
+  )
+}
 
 function cleanText(value) {
   if (typeof value === 'string') {
@@ -588,9 +655,11 @@ export default function StudyTools({
 
   if (!open) return null
 
-  const activeTool = INLINE_TOOLS.find(({ id }) => id === effectiveActiveToolId)
+  const activeTool = SELECTABLE_TOOLS.find(({ id }) => id === effectiveActiveToolId)
     ?? CONTEXT_TOOL
-  const value = detailState === 'ready' ? detailValue(details, activeTool) : null
+  const value = activeTool.kind === 'inline' && detailState === 'ready'
+    ? detailValue(details, activeTool)
+    : null
   const navigationAvailable = typeof onNavigate === 'function'
 
   return (
@@ -604,6 +673,7 @@ export default function StudyTools({
         aria-labelledby={titleId}
         tabIndex={-1}
       >
+        <span className="study-tools__drag-handle" aria-hidden="true" />
         <header className="study-tools__header">
           <div>
             <p className="study-tools__eyebrow">Study Tools</p>
@@ -624,18 +694,18 @@ export default function StudyTools({
 
         <nav className="study-tools__choices" aria-label="Study tool choices">
           {STUDY_TOOLS.map((tool) => {
-            const inline = tool.kind === 'inline'
-            const unavailable = !inline && !navigationAvailable
+            const selectable = ['inline', 'local'].includes(tool.kind)
+            const unavailable = tool.kind === 'route' && !navigationAvailable
             return (
               <button
                 key={tool.id}
                 type="button"
-                className={`study-tools__control study-tools__choice${inline && tool.id === activeTool.id ? ' study-tools__choice--active' : ''}`}
-                aria-pressed={inline ? tool.id === activeTool.id : undefined}
+                className={`study-tools__control study-tools__choice${selectable && tool.id === activeTool.id ? ' study-tools__choice--active' : ''}`}
+                aria-pressed={selectable ? tool.id === activeTool.id : undefined}
                 aria-describedby={unavailable ? unavailableId : undefined}
                 disabled={unavailable}
                 onClick={() => {
-                  if (inline) setActiveSelection({ id: tool.id, referenceKey })
+                  if (selectable) setActiveSelection({ id: tool.id, referenceKey })
                   else if (navigationAvailable) onNavigate(tool.page, normalizedReference.value)
                 }}
               >
@@ -648,15 +718,23 @@ export default function StudyTools({
           Navigation unavailable
         </span>
 
-        <InlinePanel
-          tool={activeTool}
-          value={value}
-          hasVerse={normalizedReference.hasVerse}
-          headingId={`${panelId}-${activeTool.id}`}
-          detailState={detailState}
-          referenceLabel={normalizedReference.label}
-          announcementRevision={`${referenceKey}-${normalizedStatus}-${detailsKeyToken}-${liveRevision}`}
-        />
+        {activeTool.kind === 'local' ? (
+          <MarkerPanel
+            headingId={`${panelId}-${activeTool.id}`}
+            reference={normalizedReference}
+            referenceKey={referenceKey}
+          />
+        ) : (
+          <InlinePanel
+            tool={activeTool}
+            value={value}
+            hasVerse={normalizedReference.hasVerse}
+            headingId={`${panelId}-${activeTool.id}`}
+            detailState={detailState}
+            referenceLabel={normalizedReference.label}
+            announcementRevision={`${referenceKey}-${normalizedStatus}-${detailsKeyToken}-${liveRevision}`}
+          />
+        )}
       </aside>
     </div>
   )
