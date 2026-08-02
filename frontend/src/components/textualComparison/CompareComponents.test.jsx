@@ -178,6 +178,14 @@ describe('TranslationComparisonCard', () => {
     expect(screen.getByRole('button', { name: 'Bookmark Genesis 1:1 in KJV' })).toBeInTheDocument()
   })
 
+  it('does not mark every word when the selected base text is unavailable', () => {
+    const { container } = render(
+      <TranslationComparisonCard {...commonProps} baseText="" differenceCount={0} />,
+    )
+
+    expect(container.querySelectorAll('mark')).toHaveLength(0)
+  })
+
   it('uses an accurate compact notice for missing Ethiopian text', () => {
     render(
       <TranslationComparisonCard

@@ -34,7 +34,7 @@ export default function TranslationComparisonCard({
   onLearnMore,
 }) {
   const renderedWords = state.kind === 'available'
-    ? diffWords(state.text, highlightDifferences ? baseText : state.text)
+    ? diffWords(state.text, highlightDifferences && baseText ? baseText : state.text)
     : []
 
   return (

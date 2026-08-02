@@ -118,7 +118,7 @@ function ChapterComparison({
                     <article key={key} aria-label={`${source.name}, verse ${verse}`}>
                       <strong>{source.code}</strong>
                       {text ? (
-                        <p>{diffWords(text, highlightDifferences ? baseText : text).map((word, index) => (
+                        <p>{diffWords(text, highlightDifferences && baseText ? baseText : text).map((word, index) => (
                           word.differs ? <mark key={`${word.text}-${index}`}>{word.text}</mark> : word.text
                         ))}</p>
                       ) : <p className="chapter-source-empty">Text unavailable</p>}
