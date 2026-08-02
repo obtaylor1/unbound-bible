@@ -1,11 +1,19 @@
-import { render, screen } from '@testing-library/react'
+import { useRef, useState } from 'react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import ComparisonToolbar from './ComparisonToolbar'
 import TranslationSelector from './TranslationSelector'
 import ComparisonSummary from './ComparisonSummary'
 import TranslationComparisonCard from './TranslationComparisonCard'
+import ComparisonStudyDrawer from './ComparisonStudyDrawer'
 import { buildSourceState, TRANSLATION_BY_KEY } from './comparisonModel'
+
+vi.mock('../StudyAssistantSidebar', () => ({
+  default: ({ book, chapter, verse }) => (
+    <div data-testid="existing-study-assistant">Study content for {book} {chapter}:{verse}</div>
+  ),
+}))
 
 const toolbarProps = {
   books: ['Genesis', 'Exodus'],
@@ -186,5 +194,60 @@ describe('TranslationComparisonCard', () => {
     expect(screen.getByRole('button', { name: 'Learn more about text availability' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Choose another source' })).toBeInTheDocument()
     expect(screen.getByText('Base reference')).toBeInTheDocument()
+  })
+})
+
+function DrawerHarness() {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef(null)
+  return (
+    <>
+      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>Open Study Tools</button>
+      <ComparisonStudyDrawer
+        open={open}
+        triggerRef={triggerRef}
+        book="Genesis"
+        chapter={1}
+        verse={1}
+        onClose={() => setOpen(false)}
+        onAddNote={vi.fn()}
+      />
+    </>
+  )
+}
+
+describe('ComparisonStudyDrawer', () => {
+  it('is closed by default and exposes one clear tool row when opened', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+
+    expect(screen.queryByRole('dialog', { name: 'Study Tools' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open Study Tools' }))
+
+    expect(screen.getByRole('dialog', { name: 'Study Tools' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Insights' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Cross-References' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Words' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Notes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ask Study Assistant' })).toBeInTheDocument()
+  })
+
+  it('closes with Escape and restores focus to the trigger', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+    const trigger = screen.getByRole('button', { name: 'Open Study Tools' })
+    await user.click(trigger)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Study Tools' })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('closes with its visible close button', async () => {
+    const user = userEvent.setup()
+    render(<DrawerHarness />)
+    await user.click(screen.getByRole('button', { name: 'Open Study Tools' }))
+    await user.click(screen.getByRole('button', { name: 'Close Study Tools' }))
+    expect(screen.queryByRole('dialog', { name: 'Study Tools' })).not.toBeInTheDocument()
   })
 })
