@@ -49,11 +49,8 @@ def active_publication(session, edition_code):
     ))
 
 
-def set_edition(session, edition_code, **values):
-    edition = session.get(TextEdition, edition_code)
-    for name, value in values.items():
-        setattr(edition, name, value)
-    session.flush()
+def set_run_manifest(run, **values):
+    run.manifest_snapshot = {**run.manifest_snapshot, **values}
 
 
 def test_publish_result_is_immutable(ingest_session):
@@ -63,6 +60,107 @@ def test_publish_result_is_immutable(ingest_session):
 
     with pytest.raises(FrozenInstanceError):
         result.changed = False
+
+
+def test_publish_blocks_positive_error_count_without_error_finding_rows(ingest_session):
+    from app.library.ingest.publish import PublicationBlocked, publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Unsafe counter state')
+    run.error_count = 1
+    ingest_session.flush()
+
+    with pytest.raises(PublicationBlocked, match='error count'):
+        publish_run(ingest_session, run.id)
+
+    assert active_publication(ingest_session, 'target') is None
+    assert legacy_rows(ingest_session, 'target') == []
+
+
+def test_publish_allows_warnings_when_error_count_is_zero(ingest_session):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Reviewed warning')
+    run.warning_count = 1
+    ingest_session.flush()
+
+    result = publish_run(ingest_session, run.id)
+
+    assert result.changed is True
+    assert run.status == 'published'
+
+
+def test_publish_promotes_manifest_metadata_and_failure_preserves_live_catalog(
+    ingest_session, monkeypatch
+):
+    import app.library.ingest.publish as publisher
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Promoted text')
+    run.manifest_snapshot = {
+        **run.manifest_snapshot,
+        'name': 'Reviewed Ethiopian Edition',
+        'reading_language': "Ge'ez",
+        'source_language': "Ge'ez",
+        'script': "Ge'ez",
+        'attribution': 'Reviewed attribution.',
+        'relationship': 'exact_ethiopian',
+    }
+    live = ingest_session.get(TextEdition, 'target')
+    live.name = 'Current Live Edition'
+    live.reading_language = 'English'
+    live.verification_status = 'verified'
+    live.source_checksum = 'f' * 64
+    ingest_session.flush()
+    before = (
+        live.name, live.reading_language, live.source_language, live.script,
+        live.relationship, live.verification_status, live.source_checksum,
+    )
+
+    original_insert = publisher._insert_legacy_rows
+    monkeypatch.setattr(
+        publisher,
+        '_insert_legacy_rows',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('injected failure')),
+    )
+    with pytest.raises(RuntimeError, match='injected failure'):
+        publisher.publish_run(ingest_session, run.id)
+
+    ingest_session.expire_all()
+    current = ingest_session.get(TextEdition, 'target')
+    assert (
+        current.name, current.reading_language, current.source_language, current.script,
+        current.relationship, current.verification_status, current.source_checksum,
+    ) == before
+
+    monkeypatch.setattr(publisher, '_insert_legacy_rows', original_insert)
+    publisher.publish_run(ingest_session, run.id)
+
+    ingest_session.expire_all()
+    promoted = ingest_session.get(TextEdition, 'target')
+    assert (
+        promoted.name,
+        promoted.reading_language,
+        promoted.source_language,
+        promoted.script,
+        promoted.attribution,
+        promoted.relationship,
+        promoted.verification_status,
+        promoted.source_checksum,
+    ) == (
+        'Reviewed Ethiopian Edition',
+        "Ge'ez",
+        "Ge'ez",
+        "Ge'ez",
+        'Reviewed attribution.',
+        'exact_ethiopian',
+        'verified',
+        run.source_checksum,
+    )
 
 
 def test_publish_replaces_only_target_edition_with_canonical_books_and_coverage(ingest_session):
@@ -89,7 +187,7 @@ def test_publish_replaces_only_target_edition_with_canonical_books_and_coverage(
         staged.source_locator,
     )
     ingest_session.flush()
-    set_edition(ingest_session, 'target', relationship='exact_ethiopian', reading_language='English')
+    set_run_manifest(run, relationship='exact_ethiopian', reading_language='English')
 
     result = publish_run(ingest_session, run.id)
 
@@ -274,9 +372,8 @@ def test_coverage_status_truthfully_reflects_edition_relationship(
 
     create_legacy_texts(ingest_session)
     run = make_ingest_run(ingest_session, 'target', 'Target text')
-    set_edition(
-        ingest_session,
-        'target',
+    set_run_manifest(
+        run,
         relationship=relationship,
         reading_language=language,
     )
@@ -394,9 +491,12 @@ def test_rollback_restores_immediately_previous_rows_and_refuses_to_oscillate(in
 
     create_legacy_texts(ingest_session)
     old = make_ingest_run(ingest_session, 'target', 'Old exact text')
+    set_run_manifest(old, name='Old reviewed edition', reading_language='English')
     publish_run(ingest_session, old.id)
     new = make_ingest_run(ingest_session, 'target', 'New exact text')
+    set_run_manifest(new, name='New reviewed edition', reading_language="Ge'ez")
     publish_run(ingest_session, new.id)
+    assert ingest_session.get(TextEdition, 'target').name == 'New reviewed edition'
 
     result = rollback_edition(ingest_session, 'target')
 
@@ -409,6 +509,10 @@ def test_rollback_restores_immediately_previous_rows_and_refuses_to_oscillate(in
     active = active_publication(ingest_session, 'target')
     assert (active.run_id, active.previous_run_id) == (old.id, None)
     assert old.status == 'published' and new.status == 'rolled_back'
+    restored_edition = ingest_session.get(TextEdition, 'target')
+    assert (restored_edition.name, restored_edition.reading_language) == (
+        'Old reviewed edition', 'English'
+    )
     assert old.source_checksum in ingest_session.scalar(select(EditionCoverage.note).where(
         EditionCoverage.edition_code == 'target'
     ))

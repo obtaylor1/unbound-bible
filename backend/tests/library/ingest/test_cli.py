@@ -1,6 +1,7 @@
 import json
 from hashlib import sha256
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
@@ -109,6 +110,7 @@ def test_stage_has_an_injectable_adapter_boundary_and_structured_output(
 ):
     from app.library.ingest import cli
     from app.library.ingest.types import NormalizedVerse
+    from app.library.models import TextEdition
 
     manifest_path = _manifest(tmp_path / 'manifest.json')
     monkeypatch.setitem(
@@ -130,6 +132,23 @@ def test_stage_has_an_injectable_adapter_boundary_and_structured_output(
     assert payload['errors'] == 0
     assert payload['warnings'] == 0
     assert payload['next_action'] == 'validate'
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session:
+            placeholder = session.get(TextEdition, 'CLI_TEST')
+            assert (
+                placeholder.name,
+                placeholder.reading_language,
+                placeholder.verification_status,
+                placeholder.source_checksum,
+            ) == (
+                'Pending publication (CLI_TEST)',
+                'Undetermined',
+                'staged',
+                None,
+            )
+    finally:
+        engine.dispose()
 
 
 def test_stage_fails_clearly_when_phase_three_adapter_is_not_installed(
@@ -146,6 +165,122 @@ def test_stage_fails_clearly_when_phase_three_adapter_is_not_installed(
     assert result.exit_code != 0
     assert 'adapter' in result.output.lower()
     assert 'not installed' in result.output.lower()
+
+
+def test_staging_and_failed_validation_preserve_published_edition_metadata(
+    cli_database, tmp_path, monkeypatch
+):
+    from app.library.ingest import cli
+    from app.library.ingest.types import NormalizedVerse
+    from app.library.models import TextEdition
+    from sqlalchemy import text
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text('''
+                CREATE TABLE biblical_texts (
+                    id INTEGER PRIMARY KEY, book TEXT NOT NULL, chapter INTEGER NOT NULL,
+                    verse INTEGER NOT NULL, text TEXT NOT NULL, translation TEXT
+                )
+            '''))
+    finally:
+        engine.dispose()
+
+    current_text = {'value': 'Published text.'}
+    monkeypatch.setitem(cli.ADAPTERS, 'usfm', lambda *_: (
+        NormalizedVerse(
+            'genesis', 'Genesis', 1, 1, current_text['value'], 'genesis.usfm:1:1'
+        ),
+    ))
+    first_manifest = _manifest(tmp_path / 'first.json', source_content=b'first')
+    first = _json(runner.invoke(cli.app, [
+        'stage', '--manifest', str(first_manifest), '--database-url', cli_database,
+    ]))
+    _json(runner.invoke(cli.app, [
+        'validate', '--run-id', first['run_id'], '--database-url', cli_database,
+    ]))
+    _json(runner.invoke(cli.app, [
+        'publish', '--run-id', first['run_id'], '--confirm', '--database-url', cli_database,
+    ]))
+
+    replacement_manifest = _manifest(tmp_path / 'replacement.json', source_content=b'second')
+    replacement_payload = json.loads(replacement_manifest.read_text(encoding='utf-8'))
+    replacement_payload.update({
+        'name': 'Unpublished Replacement',
+        'reading_language': "Ge'ez",
+        'source_language': "Ge'ez",
+        'script': "Ge'ez",
+    })
+    replacement_manifest.write_text(json.dumps(replacement_payload), encoding='utf-8')
+    current_text['value'] = 'Text unavailable.'
+    replacement = _json(runner.invoke(cli.app, [
+        'stage', '--manifest', str(replacement_manifest), '--database-url', cli_database,
+    ]))
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session:
+            edition = session.get(TextEdition, 'CLI_TEST')
+            assert (
+                edition.name, edition.reading_language, edition.verification_status,
+                edition.source_checksum,
+            ) == (
+                'CLI test edition', 'English', 'verified', first['checksum'],
+            )
+    finally:
+        engine.dispose()
+
+    validation = _json(runner.invoke(cli.app, [
+        'validate', '--run-id', replacement['run_id'], '--database-url', cli_database,
+    ]))
+    assert validation['errors'] == 1
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session:
+            edition = session.get(TextEdition, 'CLI_TEST')
+            assert (
+                edition.name, edition.reading_language, edition.verification_status,
+                edition.source_checksum,
+            ) == (
+                'CLI test edition', 'English', 'verified', first['checksum'],
+            )
+    finally:
+        engine.dispose()
+
+
+def test_publish_cli_refuses_verified_run_with_positive_error_count(
+    cli_database, tmp_path, monkeypatch
+):
+    from app.library.ingest import cli
+    from app.library.ingest.models import ScriptureIngestRun
+    from app.library.ingest.types import NormalizedVerse
+
+    monkeypatch.setitem(cli.ADAPTERS, 'usfm', lambda *_: (
+        NormalizedVerse('genesis', 'Genesis', 1, 1, 'Unsafe counter.', 'genesis.usfm:1:1'),
+    ))
+    manifest_path = _manifest(tmp_path / 'manifest.json')
+    staged = _json(runner.invoke(cli.app, [
+        'stage', '--manifest', str(manifest_path), '--database-url', cli_database,
+    ]))
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session, session.begin():
+            run = session.get(ScriptureIngestRun, UUID(staged['run_id']))
+            run.status = 'verified'
+            run.error_count = 1
+    finally:
+        engine.dispose()
+
+    result = runner.invoke(cli.app, [
+        'publish', '--run-id', staged['run_id'], '--confirm',
+        '--database-url', cli_database,
+    ])
+
+    assert result.exit_code != 0
+    assert 'error count' in result.output.lower()
 
 
 def test_rollback_command_restores_the_previous_published_run(

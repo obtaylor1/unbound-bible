@@ -117,34 +117,22 @@ def _load_manifest(path: Path) -> SourceManifest:
         _fail(f'Unable to load manifest {path}: {error}')
 
 
-def _upsert_edition(session: Session, manifest: SourceManifest, checksum: str) -> None:
+def _ensure_edition_foreign_key(session: Session, manifest: SourceManifest) -> None:
+    """Create only the non-authoritative shell required by the run foreign key."""
     edition = session.get(TextEdition, manifest.edition_code)
-    values = {
-        'name': manifest.name,
-        'reading_language': manifest.reading_language,
-        'source_language': manifest.source_language,
-        'script': manifest.script,
-        'translator': manifest.translator,
-        'publisher': manifest.publisher,
-        'published_year': manifest.published_year,
-        'license_spdx': manifest.license_spdx,
-        'attribution': manifest.attribution,
-        'provenance_url': str(manifest.provenance_url),
-        'source_tradition': manifest.source_tradition,
-        'relationship': manifest.relationship,
-        'versification': manifest.versification,
-        'expected_coverage': {
-            work_id: coverage.model_dump(mode='json')
-            for work_id, coverage in manifest.expected_works.items()
-        },
-        'verification_status': 'staged',
-        'source_checksum': checksum,
-    }
-    if edition is None:
-        session.add(TextEdition(edition_code=manifest.edition_code, **values))
-    else:
-        for field, value in values.items():
-            setattr(edition, field, value)
+    if edition is not None:
+        return
+    session.add(TextEdition(
+        edition_code=manifest.edition_code,
+        name=f'Pending publication ({manifest.edition_code})',
+        reading_language='Undetermined',
+        source_language='Undetermined',
+        script='Undetermined',
+        relationship='general_reading',
+        expected_coverage={},
+        verification_status='staged',
+        source_checksum=None,
+    ))
 
 
 def _get_run(session: Session, run_id: UUID) -> ScriptureIngestRun:
@@ -204,7 +192,7 @@ def stage(
     engine, session_factory = _database(selected_database_url)
     try:
         with session_factory() as session, session.begin():
-            _upsert_edition(session, source_manifest, checksum)
+            _ensure_edition_foreign_key(session, source_manifest)
             session.flush()
             session.add(ScriptureIngestRun(
                 id=run_id,
@@ -291,9 +279,6 @@ def validate(
             run.warning_count = result.warning_count
             run.staged_count = len(staged_rows)
             run.status = 'verified' if result.publishable else 'validated'
-            edition = session.get(TextEdition, run.edition_code)
-            if edition is not None:
-                edition.verification_status = 'verified' if result.publishable else 'staged'
             output = {
                 'run_id': run.id,
                 'edition_code': run.edition_code,

@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS
+from app.library.ingest.manifest import SourceManifest
 from app.library.ingest.models import (
     ScriptureIngestRun,
     ScripturePublication,
@@ -245,10 +246,30 @@ def _snapshot_rows(
     return rows
 
 
-def _ensure_publishable(session: Session, run: ScriptureIngestRun) -> tuple[StagedScriptureVerse, ...]:
+def _manifest_for_run(run: ScriptureIngestRun) -> SourceManifest:
+    try:
+        manifest = SourceManifest.model_validate(run.manifest_snapshot)
+    except Exception as error:
+        raise PublicationBlocked(
+            f'Cannot publish run {run.id}: manifest snapshot is invalid: {error}'
+        ) from error
+    if manifest.edition_code != run.edition_code:
+        raise PublicationBlocked(
+            f'Cannot publish run {run.id}: manifest edition does not match the run.'
+        )
+    return manifest
+
+
+def _ensure_publishable(
+    session: Session, run: ScriptureIngestRun
+) -> tuple[tuple[StagedScriptureVerse, ...], SourceManifest]:
     if run.status != 'verified':
         raise PublicationBlocked(
             f'Cannot publish run {run.id}: status must be verified, not {run.status!r}.'
+        )
+    if run.error_count > 0:
+        raise PublicationBlocked(
+            f'Cannot publish run {run.id}: recorded error count is {run.error_count}.'
         )
     error_finding = session.scalar(
         select(ScriptureValidationFinding.id)
@@ -262,7 +283,34 @@ def _ensure_publishable(session: Session, run: ScriptureIngestRun) -> tuple[Stag
         raise PublicationBlocked(f'Cannot publish run {run.id}: it has error findings.')
     rows = _staged_rows(session, run.id)
     _validate_row_checksums(rows, label='staged')
-    return rows
+    return rows, _manifest_for_run(run)
+
+
+def _promote_manifest_metadata(
+    edition: TextEdition,
+    run: ScriptureIngestRun,
+    manifest: SourceManifest,
+) -> None:
+    """Promote reviewed run provenance only inside publication's transaction."""
+    edition.name = manifest.name
+    edition.reading_language = manifest.reading_language
+    edition.source_language = manifest.source_language
+    edition.script = manifest.script
+    edition.translator = manifest.translator
+    edition.publisher = manifest.publisher
+    edition.published_year = manifest.published_year
+    edition.license_spdx = manifest.license_spdx
+    edition.attribution = manifest.attribution
+    edition.provenance_url = str(manifest.provenance_url)
+    edition.source_tradition = manifest.source_tradition
+    edition.relationship = manifest.relationship
+    edition.versification = manifest.versification
+    edition.expected_coverage = {
+        work_id: coverage.model_dump(mode='json')
+        for work_id, coverage in manifest.expected_works.items()
+    }
+    edition.verification_status = 'verified'
+    edition.source_checksum = run.source_checksum
 
 
 def _insert_legacy_rows(
@@ -404,7 +452,6 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
             run = runs[run_id]
             if run.edition_code != edition.edition_code:
                 raise PublicationBlocked('Cannot publish a run for a different text edition.')
-            _require_legacy_schema(session)
             if active is not None and active.run_id == run.id:
                 return PublicationResult(
                     edition.edition_code,
@@ -413,7 +460,8 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                     False,
                     run.published_count,
                 )
-            rows = _ensure_publishable(session, run)
+            rows, manifest = _ensure_publishable(session, run)
+            _require_legacy_schema(session)
             if active is not None:
                 active_run = runs[active.run_id]
                 if active_run.edition_code != edition.edition_code:
@@ -434,6 +482,7 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                 # Make the partial-active uniqueness invariant explicit before the
                 # new active row is inserted on every supported dialect.
                 session.flush()
+            _promote_manifest_metadata(edition, run, manifest)
             _replace_legacy_rows(session, edition.edition_code, rows)
             _rebuild_coverage(session, edition, run, rows)
             publication = ScripturePublication(
@@ -519,8 +568,10 @@ def rollback_edition(session: Session, edition_code: str) -> RollbackResult:
             ):
                 raise PublicationBlocked('Publication history crosses text editions.')
             rows = _snapshot_rows(session, target_publication.id)
+            restored_manifest = _manifest_for_run(restored)
             active.active = False
             session.flush()
+            _promote_manifest_metadata(edition, restored, restored_manifest)
             _replace_legacy_rows(session, edition.edition_code, rows)
             _rebuild_coverage(session, edition, restored, rows)
             publication = ScripturePublication(

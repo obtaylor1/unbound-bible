@@ -40,12 +40,39 @@ def make_ingest_run(session, edition_code, text, status='verified', finding=None
         ))
         session.flush()
 
+    source_checksum = sha256(f'{edition_code}:{text}'.encode()).hexdigest()
+    manifest_snapshot = {
+        'edition_code': edition_code,
+        'name': f'{edition_code} test edition',
+        'reading_language': 'English',
+        'source_language': 'Hebrew/Greek',
+        'script': 'Latin',
+        'translator': None,
+        'publisher': None,
+        'published_year': None,
+        'license_spdx': 'LicenseRef-Public-Domain',
+        'attribution': 'Test fixture source.',
+        'provenance_url': 'https://example.org/test-source',
+        'source_tradition': 'Test tradition',
+        'relationship': 'general_reading',
+        'versification': 'Test',
+        'expected_works': {'genesis': {'chapters': 1, 'verse_counts': {'1': 1}}},
+        'source_files': [{
+            'path': 'genesis.usfm',
+            'sha256': source_checksum,
+            'source_url': 'https://example.org/genesis.usfm',
+        }],
+        'adapter': 'usfm',
+        'adapter_options': {},
+    }
     run = ScriptureIngestRun(
         id=uuid4(),
         edition_code=edition_code,
-        source_checksum=sha256(f'{edition_code}:{text}'.encode()).hexdigest(),
-        manifest_snapshot={'edition_code': edition_code},
+        source_checksum=source_checksum,
+        manifest_snapshot=manifest_snapshot,
         status=status,
+        error_count=1 if finding is not None and finding['severity'] == 'error' else 0,
+        warning_count=1 if finding is not None and finding['severity'] == 'warning' else 0,
     )
     session.add(run)
     session.flush()
