@@ -10,7 +10,7 @@ import unicodedata
 
 from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS
 from app.library.ingest.manifest import ExpectedCoverage
-from app.library.ingest.types import NormalizedVerse, contains_markup
+from app.library.ingest.types import NormalizedVerse, contains_markup, normalize_string
 
 
 _CANONICAL_WORKS = (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
@@ -170,13 +170,55 @@ def _normalize_warning(warning: object) -> str:
 
 
 def _is_unsafe_text(text: object) -> bool:
-    if type(text) is not str or not text.strip():
+    if type(text) is not str:
         return True
-    return contains_markup(text) or any(unicodedata.category(character) in {'Cc', 'Cs'} for character in text)
+    try:
+        normalized = normalize_string('text', text)
+    except ValueError:
+        return True
+    return (
+        not normalized
+        or normalized != text
+        or contains_markup(text)
+        or any(unicodedata.category(character) in {'Cc', 'Cs'} for character in text)
+    )
 
 
 def _is_placeholder(text: str) -> bool:
     return bool(_PLACEHOLDER.search(text) or _BRACKETED_DESCRIPTION.fullmatch(text.strip()))
+
+
+def _safe_position(row: NormalizedVerse) -> tuple[str, int, int] | None:
+    if type(row.work_id) is not str or row.work_id not in _KNOWN_WORK_IDS:
+        return None
+    if type(row.chapter) is not int or row.chapter <= 0:
+        return None
+    if type(row.verse) is not int or row.verse <= 0:
+        return None
+    return row.work_id, row.chapter, row.verse
+
+
+def _finding_location(row: NormalizedVerse) -> tuple[str | None, int | None, int | None]:
+    work_id = row.work_id if type(row.work_id) is str and row.work_id.strip() else None
+    chapter = row.chapter if work_id is not None and type(row.chapter) is int and row.chapter > 0 else None
+    verse = row.verse if chapter is not None and type(row.verse) is int and row.verse > 0 else None
+    return work_id, chapter, verse
+
+
+def _metadata_is_safe(row: NormalizedVerse) -> bool:
+    """Re-run construction invariants without touching checksum properties."""
+    try:
+        NormalizedVerse(
+            work_id=row.work_id,
+            source_book=row.source_book,
+            chapter=row.chapter,
+            verse=row.verse,
+            text=row.text,
+            source_locator=row.source_locator,
+        )
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def validate_edition(
@@ -198,19 +240,48 @@ def validate_edition(
     for code in sorted({_normalize_warning(warning) for warning in caller_warnings}):
         findings.append(ValidationFinding('warning', code, _WARNING_MESSAGES.get(code, f'Caller warning: {code}.')))
 
+    checked_rows: list[tuple[NormalizedVerse, tuple[str, int, int] | None, bool]] = []
+    for row in rows:
+        position = _safe_position(row)
+        if position is None:
+            findings.append(ValidationFinding(
+                'error', 'unsafe_row', 'Normalized verse identity or source scalars are unsafe.',
+                *_finding_location(row),
+            ))
+            checked_rows.append((row, None, False))
+            continue
+
+        if _is_unsafe_text(row.text):
+            findings.append(ValidationFinding(
+                'error', 'unsafe_text', 'Verse text is empty, non-normalized, or unsafe.',
+                *position,
+            ))
+            checked_rows.append((row, position, False))
+            continue
+
+        metadata_safe = _metadata_is_safe(row)
+        if not metadata_safe:
+            findings.append(ValidationFinding(
+                'error', 'unsafe_row', 'Normalized verse identity or source scalars are unsafe.',
+                *position,
+            ))
+        elif _is_placeholder(row.text):
+            findings.append(ValidationFinding(
+                'error', 'placeholder_text', 'Verse text is a source placeholder.', *position,
+            ))
+        checked_rows.append((row, position, metadata_safe))
+
     positions: dict[tuple[str, int, int], list[NormalizedVerse]] = defaultdict(list)
     observed: dict[str, dict[int, set[int]]] = defaultdict(lambda: defaultdict(set))
     text_positions: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
-    for row in rows:
-        position = (row.work_id, row.chapter, row.verse)
+    for row, position, checksum_safe in checked_rows:
+        if position is None:
+            continue
         positions[position].append(row)
-        observed[row.work_id][row.chapter].add(row.verse)
-        if type(row.text) is str:
+        work_id, chapter, verse = position
+        observed[work_id][chapter].add(verse)
+        if checksum_safe:
             text_positions[row.text_checksum].add(position)
-        if _is_unsafe_text(row.text):
-            findings.append(ValidationFinding('error', 'unsafe_text', 'Verse text is empty or unsafe.', *position))
-        elif _is_placeholder(row.text):
-            findings.append(ValidationFinding('error', 'placeholder_text', 'Verse text is a source placeholder.', *position))
 
     for position, same_position_rows in positions.items():
         if len(same_position_rows) > 1:

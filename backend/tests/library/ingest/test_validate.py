@@ -164,13 +164,39 @@ def test_invalid_caller_warning_types_are_rejected(warnings):
         validate_edition([verse(1, 1)], coverage(verse_counts={'1': 1}), warnings=warnings)
 
 
-def test_defensively_finds_empty_markup_and_unsafe_text_on_mutated_verse():
+@pytest.mark.parametrize('unsafe_text', [
+    '',
+    'unsafe\x00text',
+    'unsafe\ud800text',
+    '<script>unsafe</script>',
+    1,
+])
+def test_defensively_rejects_unsafe_text_before_checksumming(unsafe_text):
+    rows = [verse(1, 1), verse(1, 2)]
+    for row in rows:
+        object.__setattr__(row, 'text', unsafe_text)
+
+    result = validate_edition(rows, coverage(verse_counts={'1': 2}))
+
+    assert [finding.code for finding in result.errors] == ['unsafe_text', 'unsafe_text']
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize(('field', 'unsafe_value'), [
+    ('work_id', []),
+    ('source_book', '<unsafe>'),
+    ('chapter', '1'),
+    ('verse', []),
+    ('source_locator', 'unsafe\x00locator'),
+])
+def test_defensively_rejects_corrupt_row_scalars_before_grouping(field, unsafe_value):
     row = verse(1, 1)
-    object.__setattr__(row, 'text', '<script>unsafe</script>')
+    object.__setattr__(row, field, unsafe_value)
 
     result = validate_edition([row], coverage(verse_counts={'1': 1}))
 
-    assert {finding.code for finding in result.errors} == {'unsafe_text'}
+    assert 'unsafe_row' in {finding.code for finding in result.errors}
+    assert result.warnings == ()
 
 
 def test_whole_bracketed_book_or_chapter_description_is_placeholder():
