@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.application import create_application
+from app.library.canon import navigation_works
 from app.library.models import EditionCoverage, TextEdition
 
 
@@ -72,6 +74,64 @@ def test_ethiopian_book_order_uses_immutable_composite_work_order(test_settings)
     ]
     assert {book['entry_name'] for book in books[daniel_index:daniel_index + 4]} == {'Daniel'}
     assert {book['entry_order'] for book in books[daniel_index:daniel_index + 4]} == {32}
+
+
+def test_ethiopian_catalog_matches_the_complete_authoritative_navigation_order(test_settings):
+    response = _client(test_settings).get('/api/v1/books?canon=ETHIO81')
+
+    assert response.status_code == 200
+    assert [book['id'] for book in response.json()['books']] == [
+        work.id for work in navigation_works()
+    ]
+
+
+def test_every_ethiopian_navigation_work_has_the_complete_response_shape(test_settings):
+    response = _client(test_settings).get('/api/v1/books?canon=ETHIO81')
+
+    assert response.status_code == 200
+    books = response.json()['books']
+    required_keys = {
+        'id',
+        'name',
+        'testament',
+        'collection',
+        'entry_name',
+        'entry_order',
+        'canon_included',
+        'coverage',
+    }
+    assert len(books) == 95
+    for book in books:
+        assert set(book) == required_keys
+        assert isinstance(book['id'], str)
+        assert isinstance(book['name'], str)
+        assert book['testament'] in {'Old Testament', 'New Testament'}
+        assert isinstance(book['collection'], str)
+        assert isinstance(book['entry_name'], str)
+        assert isinstance(book['entry_order'], int) and not isinstance(book['entry_order'], bool)
+        assert book['canon_included'] is True
+        assert isinstance(book['coverage'], list)
+
+
+def test_ethiopian_catalog_uses_a_fixed_query_budget(test_settings):
+    application = create_application(test_settings)
+    statements = []
+
+    def record_statement(*_args):
+        statements.append(_args[2])
+
+    event.listen(application.state.database_engine, 'before_cursor_execute', record_statement)
+    try:
+        response = TestClient(application).get('/api/v1/books?canon=ETHIO81')
+    finally:
+        event.remove(application.state.database_engine, 'before_cursor_execute', record_statement)
+
+    assert not event.contains(
+        application.state.database_engine, 'before_cursor_execute', record_statement
+    )
+    assert response.status_code == 200
+    assert len(response.json()['books']) == 95
+    assert 1 <= len(statements) <= 4
 
 
 def test_catalog_includes_installed_coverage_with_truthful_metadata(test_settings):
