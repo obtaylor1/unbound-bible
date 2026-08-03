@@ -1,0 +1,236 @@
+"""Read-only canon and installed-edition library endpoints."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.auth.dependencies import get_session
+from app.library.canon import ETHIOPIAN_CANON, WORKS
+from app.library.models import (
+    CanonEntry,
+    CanonEntryWork,
+    EditionCoverage,
+    LibraryWork,
+    LibraryWorkAlias,
+    TextEdition,
+)
+from app.library.seed import CANON_CODE
+
+
+router = APIRouter(tags=['library'])
+
+_TESTAMENT_NAMES = {'OT': 'Old Testament', 'NT': 'New Testament'}
+_ETHIOPIAN_ENTRIES_BY_KEY = {
+    (entry.testament, entry.order): entry
+    for entry in ETHIOPIAN_CANON
+}
+_ETHIOPIAN_WORK_ORDER_BY_ENTRY_KEY = {
+    (entry.testament, entry.order): {work_id: index for index, work_id in enumerate(entry.work_ids)}
+    for entry in ETHIOPIAN_CANON
+}
+_WORKS_BY_ID = {work.id: work for work in WORKS}
+
+# The historic API's Protestant and Catholic membership, recorded here in
+# canonical reading order.  The library foundation persists ETHIO81 entries;
+# these lists deliberately do not infer membership from installed text rows.
+_PROTESTANT_WORK_IDS = (
+    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
+    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
+    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'esther', 'job', 'psalms',
+    'proverbs', 'ecclesiastes', 'song-of-solomon', 'isaiah', 'jeremiah',
+    'lamentations', 'ezekiel', 'daniel', 'hosea', 'joel', 'amos', 'obadiah',
+    'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah', 'haggai', 'zechariah',
+    'malachi', 'matthew', 'mark', 'luke', 'john', 'acts', 'romans',
+    '1-corinthians', '2-corinthians', 'galatians', 'ephesians', 'philippians',
+    'colossians', '1-thessalonians', '2-thessalonians', '1-timothy', '2-timothy',
+    'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter', '1-john',
+    '2-john', '3-john', 'jude', 'revelation',
+)
+_CATHOLIC_WORK_IDS = (
+    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
+    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
+    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'tobit', 'judith',
+    'esther', '1-maccabees', '2-maccabees', 'job', 'psalms', 'proverbs',
+    'ecclesiastes', 'song-of-solomon', 'wisdom-of-solomon', 'sirach', 'isaiah',
+    'jeremiah', 'lamentations', 'baruch', 'ezekiel', 'daniel', 'hosea', 'joel',
+    'amos', 'obadiah', 'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah',
+    'haggai', 'zechariah', 'malachi', 'matthew', 'mark', 'luke', 'john', 'acts',
+    'romans', '1-corinthians', '2-corinthians', 'galatians', 'ephesians',
+    'philippians', 'colossians', '1-thessalonians', '2-thessalonians', '1-timothy',
+    '2-timothy', 'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter',
+    '1-john', '2-john', '3-john', 'jude', 'revelation',
+)
+_STANDARD_EXTRA_WORKS = {
+    '1-maccabees': ('1 Maccabees', 'OT', 'History'),
+    '2-maccabees': ('2 Maccabees', 'OT', 'History'),
+}
+
+
+def _testament_name(value: str) -> str:
+    return _TESTAMENT_NAMES.get(value, value)
+
+
+def _coverage_by_work(session: Session, work_ids: Iterable[str]) -> dict[str, list[dict]]:
+    ids = tuple(work_ids)
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(EditionCoverage, TextEdition)
+        .join(TextEdition, TextEdition.edition_code == EditionCoverage.edition_code)
+        .where(EditionCoverage.work_id.in_(ids))
+        .order_by(EditionCoverage.work_id, TextEdition.edition_code)
+    ).all()
+    coverage: dict[str, list[dict]] = {}
+    for edition_coverage, edition in rows:
+        coverage.setdefault(edition_coverage.work_id, []).append({
+            'edition_code': edition.edition_code,
+            'edition_name': edition.name,
+            'reading_language': edition.reading_language,
+            'relationship': edition.relationship,
+            'verification_status': edition.verification_status,
+            'status': edition_coverage.status,
+            'chapter_count': edition_coverage.chapter_count,
+            'verse_count': edition_coverage.verse_count,
+            'note': edition_coverage.note,
+        })
+    return coverage
+
+
+def _normalize_canon(canon: str) -> str:
+    normalized = canon.strip().upper()
+    if normalized == 'ETH81':
+        return CANON_CODE
+    if normalized in {CANON_CODE, 'PROT66', 'CATH73'}:
+        return normalized
+    raise HTTPException(status_code=422, detail=f'Unknown canon: {canon}')
+
+
+def _ethiopian_books(session: Session) -> tuple[list[dict], int]:
+    rows = session.execute(
+        select(CanonEntry, CanonEntryWork, LibraryWork)
+        .join(CanonEntryWork, CanonEntryWork.canon_entry_id == CanonEntry.id)
+        .join(LibraryWork, LibraryWork.id == CanonEntryWork.work_id)
+        .where(CanonEntry.canon_code == CANON_CODE)
+    ).all()
+    canon_count = session.scalar(
+        select(func.count()).select_from(CanonEntry).where(CanonEntry.canon_code == CANON_CODE)
+    )
+    # Only actual normalized membership rows are rendered.  The immutable map
+    # supplies the otherwise unavailable work order within a composite entry.
+    ordered_rows = sorted(
+        (
+            (entry, entry_work, work)
+            for entry, entry_work, work in rows
+            if entry_work.work_id in _ETHIOPIAN_WORK_ORDER_BY_ENTRY_KEY.get(
+                (entry.testament, entry.canonical_order), {}
+            )
+        ),
+        key=lambda row: (
+            0 if row[0].testament == 'OT' else 1,
+            row[0].canonical_order,
+            _ETHIOPIAN_WORK_ORDER_BY_ENTRY_KEY[
+                (row[0].testament, row[0].canonical_order)
+            ][row[1].work_id],
+        ),
+    )
+    coverage = _coverage_by_work(session, (entry_work.work_id for _, entry_work, _ in ordered_rows))
+    books = []
+    for entry, entry_work, work in ordered_rows:
+        canonical_entry = _ETHIOPIAN_ENTRIES_BY_KEY[(entry.testament, entry.canonical_order)]
+        books.append({
+            'id': work.id,
+            'name': work.title,
+            'testament': _testament_name(entry.testament),
+            'collection': canonical_entry.section,
+            'entry_name': entry.title,
+            'entry_order': entry.canonical_order,
+            'canon_included': True,
+            'coverage': coverage.get(work.id, []),
+        })
+    return books, int(canon_count or 0)
+
+
+def _standard_metadata(work_id: str) -> tuple[str, str, str]:
+    work = _WORKS_BY_ID.get(work_id)
+    if work is not None:
+        return work.name, work.testament, work.collection
+    return _STANDARD_EXTRA_WORKS[work_id]
+
+
+def _standard_books(session: Session, canon_code: str) -> tuple[list[dict], int]:
+    work_ids = _PROTESTANT_WORK_IDS if canon_code == 'PROT66' else _CATHOLIC_WORK_IDS
+    stored_titles = dict(session.execute(
+        select(LibraryWork.id, LibraryWork.title).where(LibraryWork.id.in_(work_ids))
+    ).all())
+    coverage = _coverage_by_work(session, work_ids)
+    books = []
+    for order, work_id in enumerate(work_ids, 1):
+        fallback_name, testament, collection = _standard_metadata(work_id)
+        name = stored_titles.get(work_id, fallback_name)
+        books.append({
+            'id': work_id,
+            'name': name,
+            'testament': _testament_name(testament),
+            'collection': collection,
+            'entry_name': name,
+            'entry_order': order,
+            'canon_included': True,
+            'coverage': coverage.get(work_id, []),
+        })
+    return books, len(work_ids)
+
+
+@router.get('/books')
+def books(
+    canon: str = Query(default='PROT66'),
+    session: Session = Depends(get_session),
+) -> dict:
+    canon_code = _normalize_canon(canon)
+    if canon_code == CANON_CODE:
+        catalog, canon_count = _ethiopian_books(session)
+    else:
+        catalog, canon_count = _standard_books(session, canon_code)
+    return {
+        'canon_filter': canon_code,
+        'canon_count': canon_count,
+        'navigation_count': len(catalog),
+        'books': catalog,
+    }
+
+
+@router.get('/library/works/{work_id}')
+def library_work(work_id: str, session: Session = Depends(get_session)) -> dict:
+    work = session.get(LibraryWork, work_id)
+    if work is None:
+        raise HTTPException(status_code=404, detail='Library work not found')
+    aliases = session.scalars(
+        select(LibraryWorkAlias.alias)
+        .where(LibraryWorkAlias.work_id == work_id)
+        .order_by(LibraryWorkAlias.alias)
+    ).all()
+    entries = session.execute(
+        select(CanonEntry)
+        .join(CanonEntryWork, CanonEntryWork.canon_entry_id == CanonEntry.id)
+        .where(CanonEntryWork.work_id == work_id)
+        .order_by(CanonEntry.canon_code, CanonEntry.testament, CanonEntry.canonical_order)
+    ).scalars().all()
+    coverage = _coverage_by_work(session, (work_id,)).get(work_id, [])
+    return {
+        'id': work.id,
+        'name': work.title,
+        'aliases': aliases,
+        'canon_entries': [{
+            'canon_code': entry.canon_code,
+            'testament': _testament_name(entry.testament),
+            'collection': _ETHIOPIAN_ENTRIES_BY_KEY.get(
+                (entry.testament, entry.canonical_order), None
+            ).section if entry.canon_code == CANON_CODE else None,
+            'entry_name': entry.title,
+            'entry_order': entry.canonical_order,
+        } for entry in entries],
+        'coverage': coverage,
+    }
