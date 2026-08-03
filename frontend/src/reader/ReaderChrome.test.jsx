@@ -10,6 +10,7 @@ import ReaderHeader from './ReaderHeader'
 
 const readerTokensCss = readFileSync('src/reader/readerTokens.css', 'utf8')
 const MOBILE_READER_MEDIA = '(max-width: 767px)'
+const INTERMEDIATE_READER_MEDIA = '(max-width: 1180px)'
 
 const readerStyle = document.createElement('style')
 readerStyle.textContent = readerTokensCss
@@ -154,6 +155,8 @@ function renderToolbar(props = {}) {
     canGoNext: true,
     onPrevious: vi.fn(),
     onNext: vi.fn(),
+    onOpenBooks: vi.fn(),
+    onOpenStudyTools: vi.fn(),
     ...props,
   }
 
@@ -383,6 +386,35 @@ describe('ReaderHeader', () => {
 })
 
 describe('PassageToolbar', () => {
+  it('opens reader destinations from the passage toolbar', () => {
+    const callbacks = renderToolbar()
+    const controls = screen.getByRole('region', { name: 'Passage controls' })
+    const actions = within(controls).getByRole('group', { name: 'Reader actions' })
+
+    fireEvent.click(within(actions).getByRole('button', { name: 'Choose a book' }))
+    fireEvent.click(within(actions).getByRole('button', { name: 'Open study tools' }))
+
+    expect(callbacks.onOpenBooks).toHaveBeenCalledOnce()
+    expect(callbacks.onOpenStudyTools).toHaveBeenCalledOnce()
+  })
+
+  it('keeps toolbar groups horizontally scrollable at intermediate widths', () => {
+    const toolbar = cssDeclarations('.passage-toolbar', INTERMEDIATE_READER_MEDIA)
+    const chapterControls = cssDeclarations(
+      '.passage-toolbar__chapter-controls',
+      INTERMEDIATE_READER_MEDIA,
+    )
+    const settings = cssDeclarations(
+      '.passage-toolbar__settings',
+      INTERMEDIATE_READER_MEDIA,
+    )
+
+    expect(toolbar.display).toBe('flex')
+    expect(toolbar['overflow-x']).toBe('auto')
+    expect(chapterControls.flex).toBe('0 0 auto')
+    expect(settings.flex).toBe('0 0 auto')
+  })
+
   it('announces the reference and changes translation by code', () => {
     const callbacks = renderToolbar()
     const controls = screen.getByRole('region', { name: 'Passage controls' })

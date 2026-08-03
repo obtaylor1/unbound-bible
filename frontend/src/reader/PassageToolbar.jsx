@@ -43,6 +43,8 @@ export default function PassageToolbar({
   onPrevious,
   onNext,
   canGoNext = true,
+  onOpenBooks,
+  onOpenStudyTools,
 }) {
   const translationId = useId()
   const { theme, fontSize, setTheme, setFontSize } = useReaderPreferences()
@@ -101,6 +103,15 @@ export default function PassageToolbar({
       </div>
 
       <div className="passage-toolbar__settings">
+        <div
+          className="passage-toolbar__reader-actions"
+          role="group"
+          aria-label="Reader actions"
+        >
+          <button className="passage-toolbar__reader-action" type="button" onClick={onOpenBooks}>Choose a book</button>
+          <button className="passage-toolbar__reader-action" type="button" onClick={onOpenStudyTools}>Open study tools</button>
+        </div>
+
         <label className="passage-toolbar__translation" htmlFor={translationId}>
           <span>Change translation</span>
           <select
