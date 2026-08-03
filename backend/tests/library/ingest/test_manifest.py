@@ -1,4 +1,5 @@
 import copy
+from datetime import date
 
 import pytest
 from pydantic import ValidationError
@@ -90,6 +91,13 @@ def test_manifest_rejects_coerced_published_year_values(published_year):
         SourceManifest.model_validate(manifest_with(published_year=published_year))
 
 
+def test_manifest_rejects_future_published_year():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(published_year=date.today().year + 1)
+        )
+
+
 def test_manifest_rejects_invalid_provenance_and_extra_fields():
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_with(provenance_url='not a URL'))
@@ -120,6 +128,25 @@ def test_manifest_rejects_duplicate_normalized_work_ids():
             'Genesis': {'chapters': 50},
             ' genesis ': {'chapters': 50},
         }))
+
+
+def test_manifest_rejects_absurd_scripture_coverage_bounds():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(expected_works={
+            'psalms': {'chapters': 201},
+        }))
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(expected_works={
+            'psalms': {'chapters': 151, 'verse_counts': {'119': 1001}},
+        }))
+
+
+def test_manifest_accepts_generous_ethiopian_scripture_coverage_bounds():
+    manifest = SourceManifest.model_validate(manifest_with(expected_works={
+        'psalms': {'chapters': 151, 'verse_counts': {'119': 176, '151': 7}},
+    }))
+
+    assert manifest.expected_works['psalms'].chapters == 151
 
 
 @pytest.mark.parametrize(
@@ -160,6 +187,48 @@ def test_manifest_rejects_invalid_or_duplicate_source_files(source_files):
         SourceManifest.model_validate(manifest_with(source_files=source_files))
 
 
+@pytest.mark.parametrize(
+    'path',
+    (
+        '/etc/passwd',
+        '.',
+        '..',
+        './kjv.txt',
+        '../kjv.txt',
+        'sources/../kjv.txt',
+        'sources\\kjv.txt',
+        'C:/secrets.txt',
+        'sources//kjv.txt',
+        'sources/',
+        'sources/\x00kjv.txt',
+        'sources/line\nbreak.txt',
+    ),
+)
+def test_manifest_rejects_unsafe_source_paths(path):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(source_files=[{
+            'path': path,
+            'sha256': 'a' * 64,
+        }]))
+
+
+def test_manifest_accepts_nested_relative_posix_source_path():
+    manifest = SourceManifest.model_validate(manifest_with(source_files=[{
+        'path': 'sources/kjv/eng-kjv.usfm',
+        'sha256': 'a' * 64,
+    }]))
+
+    assert manifest.source_files[0].path == 'sources/kjv/eng-kjv.usfm'
+
+
+def test_manifest_rejects_casefolded_duplicate_source_paths():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(source_files=[
+            {'path': 'Sources/KJV.txt', 'sha256': 'a' * 64},
+            {'path': 'sources/kjv.txt', 'sha256': 'b' * 64},
+        ]))
+
+
 def test_manifest_normalizes_checksum_to_lowercase():
     manifest = SourceManifest.model_validate(manifest_with(source_files=[{
         'path': 'kjv.txt', 'sha256': 'AB' * 32,
@@ -177,6 +246,42 @@ def test_manifest_rejects_invalid_source_file_url():
         }]))
 
 
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize(
+    'url',
+    (
+        'https://user@example.org/kjv.txt',
+        'https://user:password@example.org/kjv.txt',
+    ),
+)
+def test_manifest_urls_reject_embedded_credentials(field, url):
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize(
+    'query_name',
+    ('token', 'key', 'signature', 'auth', 'credential', 'X-API-Key'),
+)
+def test_manifest_urls_reject_secret_query_parameters(field, query_name):
+    url = f'https://example.org/kjv.txt?{query_name}=do-not-commit'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
 @pytest.mark.parametrize('adapter', ('usfm text', 'usfm/text', '.usfm', 'adapter!'))
 def test_manifest_rejects_invalid_adapter_identifiers(adapter):
     with pytest.raises(ValidationError):
@@ -187,15 +292,20 @@ def test_manifest_rejects_invalid_adapter_identifiers(adapter):
     'secret_key',
     (
         'secret',
+        'secret_key',
         'CLIENT SECRET',
+        'X-API-Key',
         'api-key',
         'apikey',
         'token',
+        'token_value',
         'access-token',
         'password',
         'passwd',
         'Authorization',
+        'authorization_header',
         'auth',
+        'basic_auth',
         'credential',
         'credentials',
         'private key',
@@ -215,6 +325,14 @@ def test_manifest_rejects_secret_options_nested_in_dicts_and_lists():
 
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_with(adapter_options=options))
+
+
+def test_manifest_allows_harmless_token_and_authorization_configuration():
+    options = {'max_tokens': 1000, 'requires_authorization': False}
+
+    manifest = SourceManifest.model_validate(manifest_with(adapter_options=options))
+
+    assert manifest.adapter_options == options
 
 
 @pytest.mark.parametrize('options', (None, [], 'encoding=utf-8'))
@@ -242,3 +360,58 @@ def test_manifest_defaults_adapter_options_and_round_trips_model_dump():
 
     assert manifest.adapter_options == {}
     assert SourceManifest.model_validate(manifest.model_dump(mode='json')).model_dump(mode='json') == manifest.model_dump(mode='json')
+
+
+def test_manifest_enforces_edition_code_database_length_boundary():
+    assert len(SourceManifest.model_validate(
+        manifest_with(edition_code='e' * 100)
+    ).edition_code) == 100
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(edition_code='e' * 101))
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    (
+        ('name', 'n' * 201),
+        ('reading_language', 'l' * 65),
+        ('source_language', 'l' * 65),
+        ('script', 's' * 65),
+        ('translator', 't' * 201),
+        ('publisher', 'p' * 201),
+        ('source_tradition', 't' * 201),
+        ('versification', 'v' * 101),
+        ('adapter', 'a' * 101),
+    ),
+)
+def test_manifest_rejects_metadata_over_database_or_conservative_bounds(field, value):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(**{field: value}))
+
+
+def test_manifest_rejects_work_ids_over_database_length():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(expected_works={
+            'w' * 101: {'chapters': 1},
+        }))
+
+
+def test_manifest_rejects_source_paths_over_conservative_length():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(source_files=[{
+            'path': 'p' * 513,
+            'sha256': 'a' * 64,
+        }]))
+
+
+def test_manifest_enforces_serialized_url_length_boundary():
+    prefix = 'https://example.org/'
+    exact_url = prefix + ('a' * (2048 - len(prefix)))
+    overlong_url = exact_url + 'a'
+
+    manifest = SourceManifest.model_validate(manifest_with(provenance_url=exact_url))
+    assert len(str(manifest.provenance_url)) == 2048
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(provenance_url=overlong_url))

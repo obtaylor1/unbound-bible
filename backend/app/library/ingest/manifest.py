@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from datetime import date
 from math import isfinite
 from typing import Annotated, Any, Literal
+from urllib.parse import parse_qsl
 
 from pydantic import (
     BaseModel,
@@ -19,10 +22,40 @@ from pydantic import (
 )
 
 
-NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+EditionCode = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+EditionName = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+LanguageOrScript = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+Contributor = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+Attribution = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)
+]
+SourceTradition = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+Versification = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+WorkId = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+SourcePath = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
+]
+AdapterId = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
-PositiveInteger = Annotated[StrictInt, Field(gt=0)]
-PublishedYear = Annotated[StrictInt, Field(ge=1450, le=2500)]
+ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
+VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
+PublishedYear = Annotated[StrictInt, Field(ge=1450, le=date.today().year)]
 ChapterKey = Annotated[StrictStr, StringConstraints(pattern=r'^[1-9][0-9]*$')]
 
 _LICENSES = Literal[
@@ -33,34 +66,26 @@ _LICENSES = Literal[
 ]
 _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_reading']
 _ADAPTER_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
-_SECRET_OPTION_NAMES = {
+_CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
+_KEY_TOKEN = re.compile(r'[a-z0-9]+')
+_SECRET_TOKEN_PAIRS = {
+    ('api', 'key'),
+    ('secret', 'key'),
+    ('client', 'secret'),
+    ('token', 'value'),
+    ('access', 'token'),
+    ('refresh', 'token'),
+    ('private', 'key'),
+    ('access', 'key'),
+}
+_SECRET_VALUE_TOKENS = {
     'secret',
-    'clientsecret',
-    'apikey',
-    'token',
-    'accesstoken',
     'password',
     'passwd',
-    'authorization',
-    'auth',
     'credential',
     'credentials',
-    'privatekey',
-    'accesskey',
     'bearer',
 }
-_SECRET_OPTION_SUFFIXES = (
-    'secret',
-    'token',
-    'password',
-    'passwd',
-    'authorization',
-    'credential',
-    'credentials',
-    'privatekey',
-    'accesskey',
-    'bearer',
-)
 
 
 class ExpectedCoverage(BaseModel):
@@ -68,8 +93,8 @@ class ExpectedCoverage(BaseModel):
 
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    chapters: PositiveInteger
-    verse_counts: dict[ChapterKey, PositiveInteger] = Field(default_factory=dict)
+    chapters: ChapterCount
+    verse_counts: dict[ChapterKey, VerseCount] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def verse_counts_are_within_declared_chapters(self) -> ExpectedCoverage:
@@ -83,14 +108,40 @@ class SourceFile(BaseModel):
 
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    path: NonBlankString
+    path: SourcePath
     sha256: Checksum
     source_url: HttpUrl | None = None
+
+    @field_validator('path')
+    @classmethod
+    def path_is_relative_posix_source_path(cls, value: str) -> str:
+        normalized = unicodedata.normalize('NFC', value)
+        segments = normalized.split('/')
+        if normalized.startswith('/') or '\\' in normalized:
+            raise ValueError('source path must be a relative POSIX path.')
+        if re.fullmatch(r'[A-Za-z]:', segments[0]):
+            raise ValueError('source path must not contain a drive prefix.')
+        if any(not segment or segment in {'.', '..'} for segment in segments):
+            raise ValueError('source path must not contain empty, dot, or traversal segments.')
+        if any(
+            unicodedata.category(character).startswith('C')
+            for segment in segments
+            for character in segment
+        ):
+            raise ValueError('source path must not contain control characters.')
+        return normalized
 
     @field_validator('sha256', mode='before')
     @classmethod
     def normalize_checksum(cls, value: Any) -> Any:
         return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator('source_url')
+    @classmethod
+    def source_url_is_commit_safe(cls, value: HttpUrl | None) -> HttpUrl | None:
+        if value is not None:
+            _validate_commit_safe_url(value)
+        return value
 
 
 class SourceManifest(BaseModel):
@@ -98,24 +149,30 @@ class SourceManifest(BaseModel):
 
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    edition_code: NonBlankString
-    name: NonBlankString
-    reading_language: NonBlankString
-    source_language: NonBlankString
-    script: NonBlankString
-    translator: NonBlankString | None
-    publisher: NonBlankString | None
+    edition_code: EditionCode
+    name: EditionName
+    reading_language: LanguageOrScript
+    source_language: LanguageOrScript
+    script: LanguageOrScript
+    translator: Contributor | None
+    publisher: Contributor | None
     published_year: PublishedYear | None
     license_spdx: _LICENSES
-    attribution: NonBlankString
+    attribution: Attribution
     provenance_url: HttpUrl
-    source_tradition: NonBlankString
+    source_tradition: SourceTradition
     relationship: _RELATIONSHIPS
-    versification: NonBlankString
-    expected_works: dict[NonBlankString, ExpectedCoverage]
+    versification: Versification
+    expected_works: dict[WorkId, ExpectedCoverage]
     source_files: list[SourceFile]
-    adapter: NonBlankString
+    adapter: AdapterId
     adapter_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('provenance_url')
+    @classmethod
+    def provenance_url_is_commit_safe(cls, value: HttpUrl) -> HttpUrl:
+        _validate_commit_safe_url(value)
+        return value
 
     @field_validator('adapter')
     @classmethod
@@ -177,7 +234,7 @@ def _raise_for_non_json_or_secret_option(value: Any) -> None:
         for key, nested_value in value.items():
             if not isinstance(key, str):
                 raise ValueError('adapter_options dictionary keys must be strings.')
-            if _is_secret_key(key):
+            if _is_secret_key(key, nested_value):
                 raise ValueError('adapter_options may not include secret fields.')
             _raise_for_non_json_or_secret_option(nested_value)
         return
@@ -188,9 +245,42 @@ def _raise_for_non_json_or_secret_option(value: Any) -> None:
     raise ValueError('adapter_options must contain only JSON-compatible values.')
 
 
-def _is_secret_key(key: str) -> bool:
-    normalized = re.sub(r'[^a-z0-9]', '', key.casefold())
+def _key_tokens(key: str) -> tuple[str, ...]:
+    expanded = _CAMEL_CASE_BOUNDARY.sub(' ', key)
+    return tuple(_KEY_TOKEN.findall(expanded.casefold()))
+
+
+def _is_secret_key(key: str, value: Any) -> bool:
+    tokens = _key_tokens(key)
+    if not tokens:
+        return False
+    if (
+        isinstance(value, bool)
+        and tokens in {('requires', 'auth'), ('requires', 'authorization')}
+    ):
+        return False
+    if tokens in {('apikey',), ('token',)}:
+        return True
+    if any(token in {'auth', 'authorization'} for token in tokens):
+        return True
+    if any(token in _SECRET_VALUE_TOKENS for token in tokens):
+        return True
+    return any(pair in _SECRET_TOKEN_PAIRS for pair in zip(tokens, tokens[1:]))
+
+
+def _is_secret_query_parameter(name: str) -> bool:
+    tokens = _key_tokens(name)
     return (
-        normalized in _SECRET_OPTION_NAMES
-        or normalized.endswith(_SECRET_OPTION_SUFFIXES)
+        _is_secret_key(name, None)
+        or any(token in {'key', 'sig', 'signature'} for token in tokens)
     )
+
+
+def _validate_commit_safe_url(url: HttpUrl) -> None:
+    if len(str(url)) > 2048:
+        raise ValueError('URL must not exceed 2048 serialized characters.')
+    if url.username is not None or url.password is not None:
+        raise ValueError('URL must not include embedded credentials.')
+    for query_name, _ in parse_qsl(url.query or '', keep_blank_values=True):
+        if _is_secret_query_parameter(query_name):
+            raise ValueError('URL must not include secret-like query parameters.')
