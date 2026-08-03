@@ -1,0 +1,441 @@
+"""Safe, local-only operator commands for the verified scripture pipeline.
+
+Source acquisition and parsing adapters are installed separately.  This module
+coordinates already-reviewed adapters, validation, and atomic publication; it
+never downloads source material and never guesses a database target.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+from typing import Annotated, NoReturn
+from uuid import UUID, uuid4
+
+import typer
+from sqlalchemy import delete, func, select
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import Settings
+from app.database import create_database_engine, create_session_factory
+from app.library.ingest.manifest import SourceManifest
+from app.library.ingest.models import (
+    ScriptureIngestRun,
+    ScriptureValidationFinding,
+    StagedScriptureVerse,
+)
+from app.library.ingest.publish import publish_run, rollback_edition
+from app.library.ingest.types import NormalizedVerse
+from app.library.ingest.validate import validate_edition
+from app.library.models import EditionCoverage, TextEdition
+from app.library.seed import seed_ethiopian_canon
+
+
+StageAdapter = Callable[[SourceManifest, Path], Sequence[NormalizedVerse]]
+ADAPTERS: dict[str, StageAdapter] = {}
+
+app = typer.Typer(
+    no_args_is_help=True,
+    help='Safely stage, validate, publish, and inspect verified scripture sources.',
+)
+
+DatabaseOption = Annotated[
+    str | None,
+    typer.Option(
+        '--database-url',
+        help='Explicit migrated database URL. Falls back only to an explicitly set DATABASE_URL.',
+    ),
+]
+
+
+def _fail(message: str) -> NoReturn:
+    typer.echo(f'Error: {message}', err=True)
+    raise typer.Exit(code=1)
+
+
+def _database_url(value: str | None) -> str:
+    selected = value or os.environ.get('DATABASE_URL')
+    if selected is None or not selected.strip():
+        _fail(
+            'Provide --database-url or explicitly set DATABASE_URL; '
+            'the ingestion CLI has no implicit database default.'
+        )
+    return selected.strip()
+
+
+def _database(database_url: str) -> tuple[Engine, sessionmaker[Session]]:
+    # Engine construction needs only the selected URL.  Keep unrelated runtime
+    # environment validation from changing an operator command's DB semantics.
+    engine = create_database_engine(Settings(
+        environment='development', database_url=database_url
+    ))
+    return engine, create_session_factory(engine)
+
+
+def _emit(
+    *,
+    run_id: UUID | str | None = None,
+    edition_code: str | None = None,
+    checksum: str | None = None,
+    staged_count: int = 0,
+    published_count: int = 0,
+    errors: int = 0,
+    warnings: int = 0,
+    next_action: str,
+    **extra: object,
+) -> None:
+    payload: dict[str, object] = {
+        'run_id': str(run_id) if run_id is not None else None,
+        'edition_code': edition_code,
+        'checksum': checksum,
+        'staged_count': staged_count,
+        'published_count': published_count,
+        'errors': errors,
+        'warnings': warnings,
+        'next_action': next_action,
+    }
+    payload.update(extra)
+    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _source_checksum(manifest: SourceManifest) -> str:
+    artifacts = sorted(
+        (source.path, source.sha256) for source in manifest.source_files
+    )
+    serialized = json.dumps(artifacts, ensure_ascii=False, separators=(',', ':'))
+    return sha256(serialized.encode('utf-8')).hexdigest()
+
+
+def _load_manifest(path: Path) -> SourceManifest:
+    try:
+        return SourceManifest.model_validate_json(path.read_text(encoding='utf-8'))
+    except Exception as error:
+        _fail(f'Unable to load manifest {path}: {error}')
+
+
+def _upsert_edition(session: Session, manifest: SourceManifest, checksum: str) -> None:
+    edition = session.get(TextEdition, manifest.edition_code)
+    values = {
+        'name': manifest.name,
+        'reading_language': manifest.reading_language,
+        'source_language': manifest.source_language,
+        'script': manifest.script,
+        'translator': manifest.translator,
+        'publisher': manifest.publisher,
+        'published_year': manifest.published_year,
+        'license_spdx': manifest.license_spdx,
+        'attribution': manifest.attribution,
+        'provenance_url': str(manifest.provenance_url),
+        'source_tradition': manifest.source_tradition,
+        'relationship': manifest.relationship,
+        'versification': manifest.versification,
+        'expected_coverage': {
+            work_id: coverage.model_dump(mode='json')
+            for work_id, coverage in manifest.expected_works.items()
+        },
+        'verification_status': 'staged',
+        'source_checksum': checksum,
+    }
+    if edition is None:
+        session.add(TextEdition(edition_code=manifest.edition_code, **values))
+    else:
+        for field, value in values.items():
+            setattr(edition, field, value)
+
+
+def _get_run(session: Session, run_id: UUID) -> ScriptureIngestRun:
+    run = session.get(ScriptureIngestRun, run_id)
+    if run is None:
+        raise LookupError(f'Scripture ingest run {run_id} was not found.')
+    return run
+
+
+@app.command('seed-canon')
+def seed_canon(database_url: DatabaseOption = None) -> None:
+    """Seed the immutable Ethiopian 81-book catalog into a migrated database."""
+    engine, session_factory = _database(_database_url(database_url))
+    try:
+        with session_factory() as session:
+            result = seed_ethiopian_canon(session)
+        _emit(
+            edition_code='ETHIO81',
+            staged_count=0,
+            next_action='stage',
+            canon_entries=result.entry_count,
+            navigation_works=result.navigation_work_count,
+        )
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+@app.command()
+def stage(
+    manifest: Annotated[Path, typer.Option('--manifest', exists=True, dir_okay=False)],
+    database_url: DatabaseOption = None,
+) -> None:
+    """Stage normalized rows from an installed, reviewed local adapter."""
+    selected_database_url = _database_url(database_url)
+    source_manifest = _load_manifest(manifest)
+    adapter = ADAPTERS.get(source_manifest.adapter)
+    if adapter is None:
+        _fail(
+            f'Adapter {source_manifest.adapter!r} is not installed. '
+            'Install the reviewed Phase 3 adapter; remote acquisition is a separate step.'
+        )
+    try:
+        rows = tuple(adapter(source_manifest, manifest.parent))
+    except Exception as error:
+        _fail(f'Adapter {source_manifest.adapter!r} failed: {error}')
+    if not rows:
+        _fail(f'Adapter {source_manifest.adapter!r} returned no scripture rows.')
+    if not all(isinstance(row, NormalizedVerse) for row in rows):
+        _fail(f'Adapter {source_manifest.adapter!r} returned a non-normalized row.')
+    if any(row.source_locator is None for row in rows):
+        _fail(f'Adapter {source_manifest.adapter!r} returned a row without a source locator.')
+
+    checksum = _source_checksum(source_manifest)
+    run_id = uuid4()
+    engine, session_factory = _database(selected_database_url)
+    try:
+        with session_factory() as session, session.begin():
+            _upsert_edition(session, source_manifest, checksum)
+            session.flush()
+            session.add(ScriptureIngestRun(
+                id=run_id,
+                edition_code=source_manifest.edition_code,
+                source_checksum=checksum,
+                manifest_snapshot=source_manifest.model_dump(mode='json'),
+                status='staged',
+                staged_count=len(rows),
+            ))
+            for row in rows:
+                session.add(StagedScriptureVerse(
+                    run_id=run_id,
+                    work_id=row.work_id,
+                    source_book=row.source_book,
+                    chapter=row.chapter,
+                    verse=row.verse,
+                    normalized_text=row.text,
+                    source_locator=row.source_locator,
+                    row_checksum=row.row_checksum,
+                ))
+        _emit(
+            run_id=run_id,
+            edition_code=source_manifest.edition_code,
+            checksum=checksum,
+            staged_count=len(rows),
+            next_action='validate',
+        )
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+@app.command()
+def validate(
+    run_id: Annotated[UUID, typer.Option('--run-id')],
+    database_url: DatabaseOption = None,
+) -> None:
+    """Validate one staged run and persist deterministic findings."""
+    engine, session_factory = _database(_database_url(database_url))
+    try:
+        with session_factory() as session, session.begin():
+            run = _get_run(session, run_id)
+            if run.status in {'published', 'rolled_back'}:
+                raise RuntimeError(f'Run {run.id} is already {run.status}.')
+            manifest = SourceManifest.model_validate(run.manifest_snapshot)
+            staged_rows = tuple(session.scalars(
+                select(StagedScriptureVerse)
+                .where(StagedScriptureVerse.run_id == run.id)
+                .order_by(
+                    StagedScriptureVerse.work_id,
+                    StagedScriptureVerse.chapter,
+                    StagedScriptureVerse.verse,
+                )
+            ))
+            rows = tuple(NormalizedVerse(
+                work_id=row.work_id,
+                source_book=row.source_book,
+                chapter=row.chapter,
+                verse=row.verse,
+                text=row.normalized_text,
+                source_locator=row.source_locator,
+            ) for row in staged_rows)
+            relationship_warnings = (
+                ('related_recension',) if manifest.relationship == 'related_recension' else ()
+            )
+            result = validate_edition(
+                rows, manifest.expected_works, warnings=relationship_warnings
+            )
+            session.execute(delete(ScriptureValidationFinding).where(
+                ScriptureValidationFinding.run_id == run.id
+            ))
+            for finding in result.findings:
+                session.add(ScriptureValidationFinding(
+                    run_id=run.id,
+                    severity=finding.severity,
+                    code=finding.code,
+                    work_id=finding.work_id,
+                    chapter=finding.chapter,
+                    verse=finding.verse,
+                    message=finding.message,
+                ))
+            run.error_count = result.error_count
+            run.warning_count = result.warning_count
+            run.staged_count = len(staged_rows)
+            run.status = 'verified' if result.publishable else 'validated'
+            edition = session.get(TextEdition, run.edition_code)
+            if edition is not None:
+                edition.verification_status = 'verified' if result.publishable else 'staged'
+            output = {
+                'run_id': run.id,
+                'edition_code': run.edition_code,
+                'checksum': run.source_checksum,
+                'staged_count': len(staged_rows),
+                'errors': result.error_count,
+                'warnings': result.warning_count,
+            }
+        _emit(
+            **output,
+            next_action=(
+                'publish --confirm'
+                if output['errors'] == 0
+                else 'fix source and stage a new run'
+            ),
+        )
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+@app.command()
+def publish(
+    run_id: Annotated[UUID, typer.Option('--run-id')],
+    confirm: Annotated[bool, typer.Option('--confirm', help='Confirm atomic publication.')] = False,
+    database_url: DatabaseOption = None,
+) -> None:
+    """Atomically publish one verified, error-free staged run."""
+    if not confirm:
+        _fail('Publication requires the explicit --confirm flag.')
+    engine, session_factory = _database(_database_url(database_url))
+    try:
+        with session_factory() as session:
+            result = publish_run(session, run_id)
+            run = _get_run(session, result.run_id)
+            output = {
+                'run_id': result.run_id,
+                'edition_code': result.edition_code,
+                'checksum': run.source_checksum,
+                'staged_count': run.staged_count,
+                'published_count': result.published_count,
+                'errors': run.error_count,
+                'warnings': run.warning_count,
+                'changed': result.changed,
+                'publication_version': result.publication_version,
+            }
+        _emit(**output, next_action='coverage-report')
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+@app.command()
+def rollback(
+    edition: Annotated[str, typer.Option('--edition')],
+    database_url: DatabaseOption = None,
+) -> None:
+    """Atomically restore an edition's immediate distinct predecessor."""
+    engine, session_factory = _database(_database_url(database_url))
+    try:
+        with session_factory() as session:
+            result = rollback_edition(session, edition)
+            run = _get_run(session, result.restored_run_id)
+            output = {
+                'run_id': result.restored_run_id,
+                'edition_code': result.edition_code,
+                'checksum': run.source_checksum,
+                'staged_count': run.staged_count,
+                'published_count': result.published_count,
+                'errors': run.error_count,
+                'warnings': run.warning_count,
+                'publication_version': result.publication_version,
+                'displaced_run_id': str(result.displaced_run_id),
+            }
+        _emit(**output, next_action='coverage-report')
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+@app.command('coverage-report')
+def coverage_report(
+    run_id: Annotated[UUID | None, typer.Option('--run-id')] = None,
+    edition: Annotated[str | None, typer.Option('--edition')] = None,
+    database_url: DatabaseOption = None,
+) -> None:
+    """Report persisted run counts and edition coverage without mutating data."""
+    engine, session_factory = _database(_database_url(database_url))
+    try:
+        with session_factory() as session:
+            run: ScriptureIngestRun | None = None
+            if run_id is not None:
+                run = _get_run(session, run_id)
+                if edition is not None and edition != run.edition_code:
+                    raise RuntimeError('--run-id and --edition refer to different editions.')
+                edition = run.edition_code
+            coverage = []
+            if edition is not None:
+                coverage = [
+                    {
+                        'work_id': row.work_id,
+                        'status': row.status,
+                        'chapter_count': row.chapter_count,
+                        'verse_count': row.verse_count,
+                    }
+                    for row in session.scalars(
+                        select(EditionCoverage)
+                        .where(EditionCoverage.edition_code == edition)
+                        .order_by(EditionCoverage.work_id)
+                    )
+                ]
+            if run is None and edition is not None:
+                run = session.scalar(
+                    select(ScriptureIngestRun)
+                    .where(ScriptureIngestRun.edition_code == edition)
+                    .order_by(ScriptureIngestRun.created_at.desc(), ScriptureIngestRun.id.desc())
+                    .limit(1)
+                )
+            if run is None and edition is None:
+                run_count = session.scalar(select(func.count()).select_from(ScriptureIngestRun))
+                _emit(next_action='stage', runs=run_count, coverage=[])
+                return
+            _emit(
+                run_id=run.id if run else None,
+                edition_code=edition,
+                checksum=run.source_checksum if run else None,
+                staged_count=run.staged_count if run else 0,
+                published_count=run.published_count if run else 0,
+                errors=run.error_count if run else 0,
+                warnings=run.warning_count if run else 0,
+                next_action='review coverage',
+                status=run.status if run else None,
+                coverage=coverage,
+            )
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        engine.dispose()
+
+
+if __name__ == '__main__':
+    app()
