@@ -45,6 +45,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 import tiktoken
 from app.api.router import api_router as versioned_api_router
+from app.application_state import wire_application_state
 from app.config import get_settings
 
 # Create database tables
@@ -63,6 +64,7 @@ app = FastAPI(
 
 # Add rate limiting middleware
 app.state.limiter = limiter
+wire_application_state(app, settings, engine)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS to allow frontend communication

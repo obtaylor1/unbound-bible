@@ -5,7 +5,8 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 
-def test_unified_identity_migration_upgrades_empty_database(tmp_path):
+def test_unified_identity_migration_upgrades_empty_database(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATABASE_URL', '   ')
     database_url = f"sqlite:///{tmp_path / 'migration.db'}"
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
@@ -25,7 +26,8 @@ def test_unified_identity_migration_upgrades_empty_database(tmp_path):
     assert "ux_revoked_tokens_jti" in revoked_indexes
 
 
-def test_unified_identity_migration_is_reversible(tmp_path):
+def test_unified_identity_migration_is_reversible(tmp_path, monkeypatch):
+    monkeypatch.delenv('DATABASE_URL', raising=False)
     database_url = f"sqlite:///{tmp_path / 'migration.db'}"
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
@@ -37,3 +39,26 @@ def test_unified_identity_migration_is_reversible(tmp_path):
 
     tables = set(inspect(create_engine(database_url)).get_table_names())
     assert not ({"users", "auth_sessions", "revoked_tokens"} & tables)
+
+
+def test_alembic_database_url_environment_overrides_configured_fallback(tmp_path, monkeypatch):
+    intended_path = tmp_path / 'environment%catalog.db'
+    fallback_path = tmp_path / 'configured-fallback.db'
+    backend_root = Path(__file__).resolve().parents[2]
+    config = Config(str(backend_root / 'alembic.ini'))
+    config.set_main_option('script_location', str(backend_root / 'alembic'))
+    config.set_main_option('sqlalchemy.url', f'sqlite:///{fallback_path}')
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{intended_path}')
+
+    command.upgrade(config, 'head')
+
+    assert intended_path.exists()
+    migrated_tables = set(inspect(create_engine(f'sqlite:///{intended_path}')).get_table_names())
+    assert {
+        'users',
+        'auth_sessions',
+        'library_works',
+        'canon_entries',
+        'edition_coverage',
+    } <= migrated_tables
+    assert not fallback_path.exists()

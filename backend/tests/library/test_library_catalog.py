@@ -285,7 +285,8 @@ def test_deleting_a_work_cascades_to_dependent_rows(test_settings):
         ).all() == []
 
 
-def test_library_migration_round_trips_on_fresh_sqlite_database(tmp_path):
+def test_library_migration_round_trips_on_fresh_sqlite_database(tmp_path, monkeypatch):
+    monkeypatch.delenv('DATABASE_URL', raising=False)
     database_path = tmp_path / 'library-migration.db'
     config = Config(str(BACKEND_ROOT / 'alembic.ini'))
     config.set_main_option('sqlalchemy.url', f'sqlite:///{database_path}')
