@@ -678,7 +678,7 @@ describe('ScriptureReaderPage', () => {
     expect(pickerSignals[0].aborted).toBe(true)
   })
 
-  it('is lazy-integrated in App without the legacy workspace or nested main landmarks', async () => {
+  it('is lazy-integrated in App with primary navigation and no nested main landmarks', async () => {
     render(
       <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
         <App />
@@ -686,6 +686,11 @@ describe('ScriptureReaderPage', () => {
     )
 
     expect(await screen.findByTestId('scripture-reader')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible()
+    expect(screen.getAllByRole('banner')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
+    expect(document.querySelector('.reader-header')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Skip to main content' })).toHaveLength(1)
     expect(screen.getAllByRole('main')).toHaveLength(1)
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
   })

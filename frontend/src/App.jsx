@@ -193,6 +193,9 @@ function App() {
   if (currentPage === 'apocrypha') {
     return (
       <div className="app">
+        <header>
+          <Navigation currentPage={currentPage} onPageChange={handlePageChange} />
+        </header>
         <Suspense fallback={<ReaderLoadingFallback />}>
           {renderCurrentPage()}
         </Suspense>

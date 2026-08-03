@@ -13,7 +13,6 @@ import { pageFromKnownHash } from '../routing/pageRoutes'
 import BookPicker from './BookPicker'
 import PassageToolbar from './PassageToolbar'
 import ReaderBottomNavigation from './ReaderBottomNavigation'
-import ReaderHeader from './ReaderHeader'
 import { useReaderPreferences } from './ReaderPreferences'
 import ReaderStatus from './ReaderStatus'
 import ScripturePane from './ScripturePane'
@@ -405,11 +404,6 @@ export default function ScriptureReaderPage({
       data-testid="scripture-reader"
     >
       <SkipLink />
-      <ReaderHeader
-        onHome={() => changePage('home')}
-        onOpenBooks={openBooks}
-        onOpenStudyTools={openStudyTools}
-      />
       <PassageToolbar
         reference={`${route.book} ${route.chapter}`}
         translation={route.translation}
@@ -419,6 +413,8 @@ export default function ScriptureReaderPage({
         canGoNext={canGoNext}
         onPrevious={() => navigate({ chapter: currentChapters[chapterIndex - 1], verse: null })}
         onNext={() => navigate({ chapter: currentChapters[chapterIndex + 1], verse: null })}
+        onOpenBooks={openBooks}
+        onOpenStudyTools={openStudyTools}
       />
       {currentChaptersStatus === 'error' && (
         <section
