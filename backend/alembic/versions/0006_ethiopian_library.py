@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '0006_ethiopian_library_foundation'
+revision = '0006_ethiopian_library'
 down_revision = '0005_community_migration'
 branch_labels = None
 depends_on = None

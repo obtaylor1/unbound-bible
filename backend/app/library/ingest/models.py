@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -33,6 +34,7 @@ class ScriptureIngestRun(Base):
         CheckConstraint('error_count >= 0', name='ck_scripture_ingest_runs_error_count_nonnegative'),
         CheckConstraint('warning_count >= 0', name='ck_scripture_ingest_runs_warning_count_nonnegative'),
         CheckConstraint('published_count >= 0', name='ck_scripture_ingest_runs_published_count_nonnegative'),
+        UniqueConstraint('id', 'edition_code', name='uq_scripture_ingest_runs_id_edition'),
         Index('ix_scripture_ingest_runs_edition_status', 'edition_code', 'status'),
     )
 
@@ -116,6 +118,18 @@ class ScripturePublication(Base):
     __table_args__ = (
         UniqueConstraint('edition_code', 'publication_version', name='uq_scripture_publications_edition_version'),
         CheckConstraint('publication_version > 0', name='ck_scripture_publications_version_positive'),
+        ForeignKeyConstraint(
+            ['run_id', 'edition_code'],
+            ['scripture_ingest_runs.id', 'scripture_ingest_runs.edition_code'],
+            name='fk_scripture_publications_run_edition',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['previous_run_id', 'edition_code'],
+            ['scripture_ingest_runs.id', 'scripture_ingest_runs.edition_code'],
+            name='fk_scripture_publications_previous_run_edition',
+            ondelete='RESTRICT',
+        ),
         Index(
             'uq_scripture_publications_active_edition',
             'edition_code',
@@ -129,12 +143,8 @@ class ScripturePublication(Base):
     edition_code: Mapped[str] = mapped_column(
         ForeignKey('text_editions.edition_code', ondelete='CASCADE'), nullable=False
     )
-    run_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey('scripture_ingest_runs.id', ondelete='CASCADE'), nullable=False
-    )
-    previous_run_id: Mapped[UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey('scripture_ingest_runs.id', ondelete='SET NULL'), nullable=True
-    )
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    previous_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     publication_version: Mapped[int] = mapped_column(Integer, nullable=False)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     active: Mapped[bool] = mapped_column(

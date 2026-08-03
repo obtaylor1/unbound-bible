@@ -291,7 +291,7 @@ def test_library_migration_round_trips_on_fresh_sqlite_database(tmp_path, monkey
     config = Config(str(BACKEND_ROOT / 'alembic.ini'))
     config.set_main_option('sqlalchemy.url', f'sqlite:///{database_path}')
 
-    command.upgrade(config, '0006_ethiopian_library_foundation')
+    command.upgrade(config, '0006_ethiopian_library')
     assert LIBRARY_TABLES <= migration_table_names(database_path)
 
     command.downgrade(config, '0005_community_migration')

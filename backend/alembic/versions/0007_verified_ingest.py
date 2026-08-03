@@ -1,11 +1,11 @@
 """Add verified scripture ingestion audit tables."""
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
-revision = '0007_verified_scripture_ingestion'
-down_revision = '0006_ethiopian_library_foundation'
+revision = '0007_verified_ingest'
+down_revision = '0006_ethiopian_library'
 branch_labels = None
 depends_on = None
 
@@ -14,22 +14,42 @@ LEGACY_TABLE = 'biblical_texts'
 LEGACY_INDEX = 'uq_biblical_texts_translation_book_chapter_verse'
 
 
+def _legacy_identity_index() -> sa.Index:
+    legacy_table = sa.Table(
+        LEGACY_TABLE,
+        sa.MetaData(),
+        sa.Column('translation', sa.String()),
+        sa.Column('book', sa.String()),
+        sa.Column('chapter', sa.Integer()),
+        sa.Column('verse', sa.Integer()),
+    )
+    return sa.Index(
+        LEGACY_INDEX,
+        sa.func.coalesce(legacy_table.c.translation, ''),
+        legacy_table.c.book,
+        legacy_table.c.chapter,
+        legacy_table.c.verse,
+        unique=True,
+    )
+
+
 def _preflight_legacy_biblical_texts() -> bool:
     bind = op.get_bind()
     if LEGACY_TABLE not in sa.inspect(bind).get_table_names():
         return False
 
     duplicates = bind.execute(sa.text("""
-        SELECT translation, book, chapter, verse, COUNT(*) AS duplicate_count
+        SELECT COALESCE(translation, '') AS translation_identity,
+               book, chapter, verse, COUNT(*) AS duplicate_count
         FROM biblical_texts
-        GROUP BY translation, book, chapter, verse
+        GROUP BY COALESCE(translation, ''), book, chapter, verse
         HAVING COUNT(*) > 1
-        ORDER BY translation, book, chapter, verse
+        ORDER BY COALESCE(translation, ''), book, chapter, verse
         LIMIT 10
     """)).mappings().all()
     if duplicates:
         sample = '; '.join(
-            f"({row['translation']!r}, {row['book']!r}, {row['chapter']}, {row['verse']}): "
+            f"({row['translation_identity']!r}, {row['book']!r}, {row['chapter']}, {row['verse']}): "
             f"{row['duplicate_count']}"
             for row in duplicates
         )
@@ -40,9 +60,28 @@ def _preflight_legacy_biblical_texts() -> bool:
     return True
 
 
+def _legacy_index_exists(bind) -> bool:
+    if bind.dialect.name == 'sqlite':
+        return bool(bind.scalar(sa.text(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :index_name"
+        ), {'index_name': LEGACY_INDEX}))
+    if bind.dialect.name == 'postgresql':
+        return bool(bind.scalar(sa.text("""
+            SELECT 1
+            FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND tablename = :table_name
+              AND indexname = :index_name
+        """), {'table_name': LEGACY_TABLE, 'index_name': LEGACY_INDEX}))
+    return LEGACY_INDEX in {
+        index['name'] for index in sa.inspect(bind).get_indexes(LEGACY_TABLE)
+    }
+
+
 def upgrade() -> None:
     # Preflight before creating any new tables so duplicate legacy data leaves this migration untouched.
-    legacy_table_present = _preflight_legacy_biblical_texts()
+    offline = context.is_offline_mode()
+    legacy_table_present = False if offline else _preflight_legacy_biblical_texts()
 
     op.create_table(
         'scripture_ingest_runs',
@@ -68,6 +107,7 @@ def upgrade() -> None:
         sa.CheckConstraint('published_count >= 0', name='ck_scripture_ingest_runs_published_count_nonnegative'),
         sa.ForeignKeyConstraint(['edition_code'], ['text_editions.edition_code'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('id', 'edition_code', name='uq_scripture_ingest_runs_id_edition'),
     )
     op.create_index('ix_scripture_ingest_runs_edition_status', 'scripture_ingest_runs', ['edition_code', 'status'])
 
@@ -128,8 +168,18 @@ def upgrade() -> None:
         sa.Column('active', sa.Boolean(create_constraint=True), nullable=False, server_default='1'),
         sa.CheckConstraint('publication_version > 0', name='ck_scripture_publications_version_positive'),
         sa.ForeignKeyConstraint(['edition_code'], ['text_editions.edition_code'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['run_id'], ['scripture_ingest_runs.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['previous_run_id'], ['scripture_ingest_runs.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(
+            ['run_id', 'edition_code'],
+            ['scripture_ingest_runs.id', 'scripture_ingest_runs.edition_code'],
+            name='fk_scripture_publications_run_edition',
+            ondelete='CASCADE',
+        ),
+        sa.ForeignKeyConstraint(
+            ['previous_run_id', 'edition_code'],
+            ['scripture_ingest_runs.id', 'scripture_ingest_runs.edition_code'],
+            name='fk_scripture_publications_previous_run_edition',
+            ondelete='RESTRICT',
+        ),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('edition_code', 'publication_version', name='uq_scripture_publications_edition_version'),
     )
@@ -143,21 +193,31 @@ def upgrade() -> None:
     )
 
     if legacy_table_present:
+        legacy_index = _legacy_identity_index()
         op.create_index(
-            LEGACY_INDEX,
+            legacy_index.name,
             LEGACY_TABLE,
-            ['translation', 'book', 'chapter', 'verse'],
+            legacy_index.expressions,
             unique=True,
         )
+    elif offline:
+        op.execute(sa.text(
+            '/* legacy biblical_texts identity index omitted in offline mode; '
+            'duplicate preflight not run */'
+        ))
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    if LEGACY_TABLE in inspector.get_table_names() and LEGACY_INDEX in {
-        index['name'] for index in inspector.get_indexes(LEGACY_TABLE)
-    }:
-        op.drop_index(LEGACY_INDEX, table_name=LEGACY_TABLE)
+    if context.is_offline_mode():
+        op.execute(sa.text(
+            '/* legacy biblical_texts identity index omitted in offline mode; '
+            'duplicate preflight not run */'
+        ))
+    else:
+        bind = op.get_bind()
+        inspector = sa.inspect(bind)
+        if LEGACY_TABLE in inspector.get_table_names() and _legacy_index_exists(bind):
+            op.drop_index(LEGACY_INDEX, table_name=LEGACY_TABLE)
 
     op.drop_index('uq_scripture_publications_active_edition', table_name='scripture_publications')
     op.drop_table('scripture_publications')

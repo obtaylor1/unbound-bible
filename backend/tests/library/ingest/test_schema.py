@@ -1,4 +1,5 @@
 import importlib.util
+import io
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -6,8 +7,11 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, Column, Integer, String, delete, inspect, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.schema import CreateIndex
 
 from app.application import create_application
 from app.database import Base
@@ -20,7 +24,7 @@ MODELS_AVAILABLE = importlib.util.find_spec('app.library.ingest.models') is not 
 pytestmark = pytest.mark.skipif(not MODELS_AVAILABLE, reason='verified ingestion models are not implemented yet')
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
-REVISION = '0007_verified_scripture_ingestion'
+REVISION = '0007_verified_ingest'
 INGEST_TABLES = {
     'scripture_ingest_runs',
     'staged_scripture_verses',
@@ -79,6 +83,9 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
 
     uniques = {item['name'] for item in inspector.get_unique_constraints('staged_scripture_verses')}
     assert 'uq_staged_scripture_verses_run_work_chapter_verse' in uniques
+    assert 'uq_scripture_ingest_runs_id_edition' in {
+        item['name'] for item in inspector.get_unique_constraints('scripture_ingest_runs')
+    }
     assert 'uq_scripture_publications_edition_version' in {
         item['name'] for item in inspector.get_unique_constraints('scripture_publications')
     }
@@ -95,6 +102,18 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
     assert {item['referred_table'] for item in inspector.get_foreign_keys('scripture_publications')} == {
         'text_editions', 'scripture_ingest_runs'
     }
+    publication_foreign_keys = {
+        item['name']: (
+            item['constrained_columns'], item['referred_columns'], item['options'].get('ondelete')
+        )
+        for item in inspector.get_foreign_keys('scripture_publications')
+    }
+    assert publication_foreign_keys['fk_scripture_publications_run_edition'] == (
+        ['run_id', 'edition_code'], ['id', 'edition_code'], 'CASCADE'
+    )
+    assert publication_foreign_keys['fk_scripture_publications_previous_run_edition'] == (
+        ['previous_run_id', 'edition_code'], ['id', 'edition_code'], 'RESTRICT'
+    )
 
 
 def test_database_rejects_invalid_workflow_severity_orphans_and_positions(ingest_session):
@@ -146,10 +165,30 @@ def test_deleting_an_ingest_run_cascades_staged_verses_and_findings(ingest_sessi
     assert ingest_session.scalar(select(ScriptureValidationFinding.id).where(ScriptureValidationFinding.run_id == run.id)) is None
 
 
-def _alembic_config(database_path):
-    config = Config(str(BACKEND_ROOT / 'alembic.ini'))
+@pytest.mark.parametrize('link', ('current', 'previous'))
+def test_publications_reject_cross_edition_run_links(ingest_session, link):
+    from app.library.ingest.models import ScripturePublication
+
+    current = make_ingest_run(ingest_session, 'CURRENT-EDITION', 'Current text')
+    other = make_ingest_run(ingest_session, 'OTHER-EDITION', 'Other text')
+    values = {
+        'edition_code': current.edition_code,
+        'run_id': other.id if link == 'current' else current.id,
+        'previous_run_id': other.id if link == 'previous' else None,
+        'publication_version': 1,
+        'active': False,
+    }
+
+    with ingest_session.begin_nested():
+        ingest_session.add(ScripturePublication(**values))
+        with pytest.raises(IntegrityError):
+            ingest_session.flush()
+
+
+def _alembic_config(database_path=None, *, database_url=None, output_buffer=None):
+    config = Config(str(BACKEND_ROOT / 'alembic.ini'), output_buffer=output_buffer)
     config.set_main_option('script_location', str(BACKEND_ROOT / 'alembic'))
-    config.set_main_option('sqlalchemy.url', f'sqlite:///{database_path}')
+    config.set_main_option('sqlalchemy.url', database_url or f'sqlite:///{database_path}')
     return config
 
 
@@ -157,7 +196,7 @@ def _create_legacy_biblical_texts(engine):
     table = Table(
         'biblical_texts', MetaData(),
         Column('id', Integer, primary_key=True),
-        Column('translation', String(100), nullable=False),
+        Column('translation', String(100), nullable=True),
         Column('book', String(100), nullable=False),
         Column('chapter', Integer, nullable=False),
         Column('verse', Integer, nullable=False),
@@ -166,34 +205,107 @@ def _create_legacy_biblical_texts(engine):
     return table
 
 
+def test_all_alembic_revision_identifiers_fit_the_version_table(tmp_path):
+    scripts = ScriptDirectory.from_config(_alembic_config(tmp_path / 'revision-length.db'))
+
+    assert {
+        revision.revision: len(revision.revision)
+        for revision in scripts.walk_revisions()
+        if len(revision.revision) > 32
+    } == {}
+
+
+@pytest.mark.parametrize('database_url', ('sqlite://', 'postgresql://offline/ingest'))
+def test_offline_upgrade_and_downgrade_compile_audit_schema(database_url, monkeypatch):
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+    upgrade_sql = io.StringIO()
+    upgrade_config = _alembic_config(database_url=database_url, output_buffer=upgrade_sql)
+    try:
+        command.upgrade(upgrade_config, REVISION, sql=True)
+    except Exception as error:
+        pytest.fail(f'offline upgrade compilation failed: {error}')
+
+    compiled_upgrade = ' '.join(upgrade_sql.getvalue().lower().split())
+    assert 'create table scripture_ingest_runs' in compiled_upgrade
+    assert 'create table scripture_publications' in compiled_upgrade
+    assert 'foreign key(run_id, edition_code)' in compiled_upgrade
+    assert 'foreign key(previous_run_id, edition_code)' in compiled_upgrade
+    assert 'create unique index uq_scripture_publications_active_edition' in compiled_upgrade
+    assert 'where active is' in compiled_upgrade
+    assert 'legacy biblical_texts identity index omitted in offline mode' in compiled_upgrade
+    assert 'duplicate preflight not run' in compiled_upgrade
+
+    downgrade_sql = io.StringIO()
+    downgrade_config = _alembic_config(database_url=database_url, output_buffer=downgrade_sql)
+    try:
+        command.downgrade(
+            downgrade_config,
+            f'{REVISION}:0006_ethiopian_library',
+            sql=True,
+        )
+    except Exception as error:
+        pytest.fail(f'offline downgrade compilation failed: {error}')
+
+    compiled_downgrade = ' '.join(downgrade_sql.getvalue().lower().split())
+    assert 'drop table scripture_publications' in compiled_downgrade
+    assert 'drop table scripture_ingest_runs' in compiled_downgrade
+    assert 'legacy biblical_texts identity index omitted in offline mode' in compiled_downgrade
+    assert 'duplicate preflight not run' in compiled_downgrade
+
+
+def test_legacy_functional_unique_index_compiles_for_sqlite_and_postgresql():
+    migration_path = BACKEND_ROOT / 'alembic' / 'versions' / '0007_verified_ingest.py'
+    spec = importlib.util.spec_from_file_location('verified_ingest_migration', migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    index_factory = getattr(migration, '_legacy_identity_index', None)
+
+    assert callable(index_factory)
+    for dialect in (sqlite.dialect(), postgresql.dialect()):
+        ddl = ' '.join(str(CreateIndex(index_factory()).compile(dialect=dialect)).lower().split())
+        assert 'create unique index uq_biblical_texts_translation_book_chapter_verse' in ddl
+        assert "coalesce(translation, '')" in ddl
+        assert '(book, chapter, verse)' in ddl or ', book, chapter, verse)' in ddl
+
+
 def test_migration_succeeds_without_the_legacy_biblical_texts_table(tmp_path):
     config = _alembic_config(tmp_path / 'absent.db')
 
     command.upgrade(config, REVISION)
     engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
     assert INGEST_TABLES <= set(inspect(engine).get_table_names())
-    command.downgrade(config, '0006_ethiopian_library_foundation')
+    command.downgrade(config, '0006_ethiopian_library')
     command.upgrade(config, REVISION)
 
 
 def test_migration_adds_the_named_legacy_unique_index_when_rows_are_clean(tmp_path):
     config = _alembic_config(tmp_path / 'clean.db')
-    command.upgrade(config, '0006_ethiopian_library_foundation')
+    command.upgrade(config, '0006_ethiopian_library')
     engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
     _create_legacy_biblical_texts(engine)
 
     command.upgrade(config, REVISION)
 
-    legacy_indexes = {index['name']: index for index in inspect(engine).get_indexes('biblical_texts')}
-    assert legacy_indexes['uq_biblical_texts_translation_book_chapter_verse']['unique']
-    assert legacy_indexes['uq_biblical_texts_translation_book_chapter_verse']['column_names'] == [
-        'translation', 'book', 'chapter', 'verse'
-    ]
+    with engine.connect() as connection:
+        index_sql = connection.scalar(__import__('sqlalchemy').text(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = "
+            "'uq_biblical_texts_translation_book_chapter_verse'"
+        ))
+    normalized_index_sql = ' '.join(index_sql.lower().split())
+    assert 'create unique index uq_biblical_texts_translation_book_chapter_verse' in normalized_index_sql
+    assert "coalesce(translation, '')" in normalized_index_sql
+
+    command.downgrade(config, '0006_ethiopian_library')
+    with engine.connect() as connection:
+        assert connection.scalar(__import__('sqlalchemy').text(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = "
+            "'uq_biblical_texts_translation_book_chapter_verse'"
+        )) == 0
 
 
 def test_migration_rejects_duplicate_legacy_verses_without_deleting_rows(tmp_path):
     config = _alembic_config(tmp_path / 'duplicates.db')
-    command.upgrade(config, '0006_ethiopian_library_foundation')
+    command.upgrade(config, '0006_ethiopian_library')
     engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
     legacy = _create_legacy_biblical_texts(engine)
     with engine.begin() as connection:
@@ -209,6 +321,38 @@ def test_migration_rejects_duplicate_legacy_verses_without_deleting_rows(tmp_pat
         assert connection.scalar(select(__import__('sqlalchemy').func.count()).select_from(legacy)) == 2
 
 
+def test_legacy_index_rejects_duplicate_null_translation_after_migration(tmp_path):
+    config = _alembic_config(tmp_path / 'null-identity.db')
+    command.upgrade(config, '0006_ethiopian_library')
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    legacy = _create_legacy_biblical_texts(engine)
+    verse = {'translation': None, 'book': 'Genesis', 'chapter': 1, 'verse': 1}
+    with engine.begin() as connection:
+        connection.execute(legacy.insert(), verse)
+
+    command.upgrade(config, REVISION)
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(legacy.insert(), verse)
+
+
+def test_migration_rejects_duplicate_null_translation_without_deleting_rows(tmp_path):
+    config = _alembic_config(tmp_path / 'duplicate-null-identity.db')
+    command.upgrade(config, '0006_ethiopian_library')
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    legacy = _create_legacy_biblical_texts(engine)
+    verse = {'translation': None, 'book': 'Genesis', 'chapter': 1, 'verse': 1}
+    with engine.begin() as connection:
+        connection.execute(legacy.insert(), [verse, verse])
+
+    with pytest.raises(RuntimeError, match=r"''.*Genesis.*1.*1.*2"):
+        command.upgrade(config, REVISION)
+
+    with engine.connect() as connection:
+        assert connection.scalar(select(__import__('sqlalchemy').func.count()).select_from(legacy)) == 2
+
+
 def test_migration_matches_model_schema(test_settings, tmp_path):
     application = create_application(test_settings)
     model_inspector = inspect(application.state.database_engine)
@@ -217,12 +361,65 @@ def test_migration_matches_model_schema(test_settings, tmp_path):
     migrated_inspector = inspect(__import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url')))
 
     for table in INGEST_TABLES:
-        assert {column['name'] for column in migrated_inspector.get_columns(table)} == {
-            column['name'] for column in model_inspector.get_columns(table)
-        }
+        assert _column_signatures(migrated_inspector, table) == _column_signatures(
+            model_inspector, table
+        )
         assert {item['name'] for item in migrated_inspector.get_check_constraints(table)} == {
             item['name'] for item in model_inspector.get_check_constraints(table)
         }
-        assert {item['name'] for item in migrated_inspector.get_indexes(table)} == {
-            item['name'] for item in model_inspector.get_indexes(table)
-        }
+        assert _unique_signatures(migrated_inspector, table) == _unique_signatures(
+            model_inspector, table
+        )
+        assert _foreign_key_signatures(migrated_inspector, table) == _foreign_key_signatures(
+            model_inspector, table
+        )
+        assert _index_signatures(migrated_inspector, table) == _index_signatures(
+            model_inspector, table
+        )
+
+
+def _column_signatures(inspector, table):
+    return {
+        column['name']: (
+            str(column['type']).lower(),
+            column['nullable'],
+            None if column.get('default') is None else str(column['default']).lower(),
+        )
+        for column in inspector.get_columns(table)
+    }
+
+
+def _unique_signatures(inspector, table):
+    return {
+        (item['name'], tuple(item['column_names']))
+        for item in inspector.get_unique_constraints(table)
+    }
+
+
+def _foreign_key_signatures(inspector, table):
+    return {
+        (
+            item['name'],
+            tuple(item['constrained_columns']),
+            item['referred_table'],
+            tuple(item['referred_columns']),
+            item['options'].get('ondelete'),
+        )
+        for item in inspector.get_foreign_keys(table)
+    }
+
+
+def _index_signatures(inspector, table):
+    signatures = set()
+    for item in inspector.get_indexes(table):
+        dialect_options = item.get('dialect_options', {})
+        predicate = dialect_options.get('sqlite_where')
+        if predicate is None:
+            predicate = dialect_options.get('postgresql_where')
+        signatures.add((
+            item['name'],
+            tuple(item['column_names']),
+            bool(item['unique']),
+            None if predicate is None else ' '.join(str(predicate).lower().split()),
+        ))
+    return signatures
