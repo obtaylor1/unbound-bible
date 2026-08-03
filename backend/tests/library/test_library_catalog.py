@@ -9,7 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from app.application import create_application
 from app.config import Settings
 from app.database import Base, create_database_engine
-from app.library.canon import ALIASES, ETHIOPIAN_CANON, WORKS, alias_target
+from app.library.canon import (
+    ALIASES,
+    ETHIOPIAN_CANON,
+    SUPPLEMENTAL_LIBRARY_WORKS,
+    WORKS,
+    alias_target,
+)
 from app.library.models import CanonEntry, CanonEntryWork, LibraryWork, LibraryWorkAlias
 from app.library.seed import seed_ethiopian_canon
 
@@ -96,11 +102,16 @@ def test_seed_ethiopian_canon_is_idempotent_and_persists_navigation_metadata(tes
         assert session.scalar(
             select(LibraryWorkAlias.work_id).where(LibraryWorkAlias.alias == 'book of josephus')
         ) == alias_target('Book of Josephus') == 'josippon'
-        assert set(session.scalars(select(LibraryWork.id))) >= {work.id for work in WORKS}
-        assert set(ALIASES.values()) - {work.id for work in WORKS}
+        seeded_work_ids = {work.id for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)}
+        persisted_work_ids = set(session.scalars(select(LibraryWork.id)))
+        assert persisted_work_ids >= seeded_work_ids
+        assert session.scalar(
+            select(LibraryWorkAlias.work_id).where(LibraryWorkAlias.alias == 'i maccabees')
+        ) == '1-maccabees'
+        assert set(ALIASES.values()) - seeded_work_ids
         assert not (
-            set(session.scalars(select(LibraryWork.id)))
-            & (set(ALIASES.values()) - {work.id for work in WORKS})
+            persisted_work_ids
+            & (set(ALIASES.values()) - seeded_work_ids)
         )
 
 

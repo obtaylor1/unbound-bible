@@ -249,6 +249,78 @@ WORKS = tuple(
 _WORKS_BY_ID = {work.id: work for work in WORKS}
 
 
+# The ordered Protestant canon is the common standard-canon baseline.  The
+# Catholic canon preserves that order and inserts its seven additional works at
+# their canonical reading positions.
+PROTESTANT_WORK_IDS = (
+    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
+    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
+    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'esther', 'job', 'psalms',
+    'proverbs', 'ecclesiastes', 'song-of-solomon', 'isaiah', 'jeremiah',
+    'lamentations', 'ezekiel', 'daniel', 'hosea', 'joel', 'amos', 'obadiah',
+    'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah', 'haggai', 'zechariah',
+    'malachi', 'matthew', 'mark', 'luke', 'john', 'acts', 'romans',
+    '1-corinthians', '2-corinthians', 'galatians', 'ephesians', 'philippians',
+    'colossians', '1-thessalonians', '2-thessalonians', '1-timothy', '2-timothy',
+    'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter', '1-john',
+    '2-john', '3-john', 'jude', 'revelation',
+)
+
+
+def _insert_after(
+    work_ids: tuple[str, ...],
+    anchor: str,
+    additions: tuple[str, ...],
+) -> tuple[str, ...]:
+    position = work_ids.index(anchor) + 1
+    return work_ids[:position] + additions + work_ids[position:]
+
+
+def _insert_before(
+    work_ids: tuple[str, ...],
+    anchor: str,
+    additions: tuple[str, ...],
+) -> tuple[str, ...]:
+    position = work_ids.index(anchor)
+    return work_ids[:position] + additions + work_ids[position:]
+
+
+CATHOLIC_WORK_IDS = _insert_before(
+    PROTESTANT_WORK_IDS, 'esther', ('tobit', 'judith')
+)
+CATHOLIC_WORK_IDS = _insert_after(
+    CATHOLIC_WORK_IDS, 'esther', ('1-maccabees', '2-maccabees')
+)
+CATHOLIC_WORK_IDS = _insert_after(
+    CATHOLIC_WORK_IDS, 'song-of-solomon', ('wisdom-of-solomon', 'sirach')
+)
+CATHOLIC_WORK_IDS = _insert_after(CATHOLIC_WORK_IDS, 'lamentations', ('baruch',))
+
+
+# These are legitimate library works for the Catholic catalog, but they are not
+# Ethiopian canon navigation works and must never be added to ``WORKS``.
+SUPPLEMENTAL_LIBRARY_WORKS = (
+    Work('1-maccabees', '1 Maccabees', 'OT', 'History', ('I Maccabees',)),
+    Work('2-maccabees', '2 Maccabees', 'OT', 'History', ('II Maccabees',)),
+)
+
+
+def _validate_standard_canons() -> None:
+    if len(PROTESTANT_WORK_IDS) != 66 or len(set(PROTESTANT_WORK_IDS)) != 66:
+        raise ValueError('The Protestant canon must contain 66 unique works.')
+    if len(CATHOLIC_WORK_IDS) != 73 or len(set(CATHOLIC_WORK_IDS)) != 73:
+        raise ValueError('The Catholic canon must contain 73 unique works.')
+    available_work_ids = {
+        work.id for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
+    }
+    missing = set(CATHOLIC_WORK_IDS) - available_work_ids
+    if missing:
+        raise ValueError(f'Standard canon works lack library metadata: {sorted(missing)}')
+
+
+_validate_standard_canons()
+
+
 def _normalized_alias(value: str) -> str:
     return ' '.join(value.split()).casefold()
 
@@ -256,7 +328,7 @@ def _normalized_alias(value: str) -> str:
 def _build_aliases() -> dict[str, str]:
     aliases: dict[str, str] = {}
 
-    for work in WORKS:
+    for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS):
         for name in (work.name, *work.aliases):
             key = _normalized_alias(name)
             existing = aliases.setdefault(key, work.id)
@@ -266,10 +338,6 @@ def _build_aliases() -> dict[str, str]:
     # These historic/current UI spellings remain distinct lookup targets even
     # though Greek Maccabees and Prayer of Manasseh are not counted EOTC entries.
     aliases.update({
-        '1 maccabees': '1-maccabees',
-        'i maccabees': '1-maccabees',
-        '2 maccabees': '2-maccabees',
-        'ii maccabees': '2-maccabees',
         '3 maccabees': '3-maccabees',
         'iii maccabees': '3-maccabees',
         '4 maccabees': '4-maccabees',

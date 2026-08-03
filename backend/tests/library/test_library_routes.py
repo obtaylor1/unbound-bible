@@ -3,7 +3,36 @@ from sqlalchemy import event
 
 from app.application import create_application
 from app.library.canon import navigation_works
-from app.library.models import EditionCoverage, TextEdition
+from app.library.models import EditionCoverage, LibraryWork, TextEdition
+
+
+PROTESTANT_WORK_IDS = (
+    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
+    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
+    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'esther', 'job', 'psalms',
+    'proverbs', 'ecclesiastes', 'song-of-solomon', 'isaiah', 'jeremiah',
+    'lamentations', 'ezekiel', 'daniel', 'hosea', 'joel', 'amos', 'obadiah',
+    'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah', 'haggai', 'zechariah',
+    'malachi', 'matthew', 'mark', 'luke', 'john', 'acts', 'romans',
+    '1-corinthians', '2-corinthians', 'galatians', 'ephesians', 'philippians',
+    'colossians', '1-thessalonians', '2-thessalonians', '1-timothy', '2-timothy',
+    'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter', '1-john',
+    '2-john', '3-john', 'jude', 'revelation',
+)
+CATHOLIC_WORK_IDS = (
+    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
+    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
+    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'tobit', 'judith',
+    'esther', '1-maccabees', '2-maccabees', 'job', 'psalms', 'proverbs',
+    'ecclesiastes', 'song-of-solomon', 'wisdom-of-solomon', 'sirach', 'isaiah',
+    'jeremiah', 'lamentations', 'baruch', 'ezekiel', 'daniel', 'hosea', 'joel',
+    'amos', 'obadiah', 'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah',
+    'haggai', 'zechariah', 'malachi', 'matthew', 'mark', 'luke', 'john', 'acts',
+    'romans', '1-corinthians', '2-corinthians', 'galatians', 'ephesians',
+    'philippians', 'colossians', '1-thessalonians', '2-thessalonians', '1-timothy',
+    '2-timothy', 'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter',
+    '1-john', '2-john', '3-john', 'jude', 'revelation',
+)
 
 
 def _client(test_settings) -> TestClient:
@@ -219,6 +248,78 @@ def test_protestant_and_catholic_catalogs_use_their_own_membership(test_settings
     assert 'jubilees' not in {book['id'] for book in protestant.json()['books']}
     assert 'jubilees' not in {book['id'] for book in catholic.json()['books']}
     assert {'1-maccabees', '2-maccabees'} <= {book['id'] for book in catholic.json()['books']}
+
+
+def test_standard_catalogs_have_complete_unique_canonical_order(test_settings):
+    client = _client(test_settings)
+
+    protestant_ids = [
+        book['id'] for book in client.get('/api/v1/books?canon=PROT66').json()['books']
+    ]
+    catholic_ids = [
+        book['id'] for book in client.get('/api/v1/books?canon=CATH73').json()['books']
+    ]
+
+    assert protestant_ids == list(PROTESTANT_WORK_IDS)
+    assert catholic_ids == list(CATHOLIC_WORK_IDS)
+    assert len(protestant_ids) == len(set(protestant_ids)) == 66
+    assert len(catholic_ids) == len(set(catholic_ids)) == 73
+
+
+def test_every_standard_catalog_id_resolves_to_a_library_work_detail(test_settings):
+    client = _client(test_settings)
+
+    for work_id in dict.fromkeys((*PROTESTANT_WORK_IDS, *CATHOLIC_WORK_IDS)):
+        response = client.get(f'/api/v1/library/works/{work_id}')
+        assert response.status_code == 200, work_id
+        assert response.json()['id'] == work_id
+
+
+def test_maccabees_aliases_and_installed_coverage_are_available(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        assert session.get(LibraryWork, '1-maccabees') is not None
+        assert session.get(LibraryWork, '2-maccabees') is not None
+        session.add(TextEdition(
+            edition_code='CATHOLIC-TEST',
+            name='Catholic Test Edition',
+            reading_language='English',
+            source_language='Greek',
+            script='Latin',
+            relationship='general_reading',
+            expected_coverage={'works': ['1-maccabees', '2-maccabees']},
+            verification_status='verified',
+        ))
+        session.flush()
+        session.add_all((
+            EditionCoverage(
+                edition_code='CATHOLIC-TEST',
+                work_id='1-maccabees',
+                status='verified_english',
+                chapter_count=16,
+                verse_count=922,
+                note='Catholic catalog regression fixture',
+            ),
+            EditionCoverage(
+                edition_code='CATHOLIC-TEST',
+                work_id='2-maccabees',
+                status='verified_english',
+                chapter_count=15,
+                verse_count=556,
+                note='Catholic catalog regression fixture',
+            ),
+        ))
+        session.commit()
+
+    client = TestClient(application)
+    first = client.get('/api/v1/library/works/1-maccabees')
+    second = client.get('/api/v1/library/works/2-maccabees')
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()['aliases'] == ['1 maccabees', 'i maccabees']
+    assert second.json()['aliases'] == ['2 maccabees', 'ii maccabees']
+    assert first.json()['coverage'][0]['edition_code'] == 'CATHOLIC-TEST'
+    assert second.json()['coverage'][0]['edition_code'] == 'CATHOLIC-TEST'
 
 
 def test_books_reject_unknown_canon_and_responses_are_stable(test_settings):

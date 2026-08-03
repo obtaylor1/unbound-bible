@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.database import create_database_engine, create_session_factory
-from app.library.canon import ALIASES, ETHIOPIAN_CANON, WORKS, validate_canon
+from app.library.canon import (
+    ALIASES,
+    ETHIOPIAN_CANON,
+    SUPPLEMENTAL_LIBRARY_WORKS,
+    WORKS,
+    validate_canon,
+)
 from app.library.models import CanonEntry, CanonEntryWork, LibraryWork, LibraryWorkAlias
 
 
@@ -35,7 +41,9 @@ class EthiopianCanonSeedResult:
 
 
 def _sync_navigation(session: Session) -> None:
-    works_by_id = {work.id: work for work in WORKS}
+    works_by_id = {
+        work.id: work for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
+    }
     existing_works = {
         work.id: work
         for work in session.scalars(select(LibraryWork).where(LibraryWork.id.in_(works_by_id)))

@@ -9,7 +9,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_session
-from app.library.canon import ETHIOPIAN_CANON, WORKS
+from app.library.canon import (
+    CATHOLIC_WORK_IDS,
+    ETHIOPIAN_CANON,
+    PROTESTANT_WORK_IDS,
+    SUPPLEMENTAL_LIBRARY_WORKS,
+    WORKS,
+)
 from app.library.models import (
     CanonEntry,
     CanonEntryWork,
@@ -32,41 +38,8 @@ _ETHIOPIAN_WORK_ORDER_BY_ENTRY_KEY = {
     (entry.testament, entry.order): {work_id: index for index, work_id in enumerate(entry.work_ids)}
     for entry in ETHIOPIAN_CANON
 }
-_WORKS_BY_ID = {work.id: work for work in WORKS}
-
-# The historic API's Protestant and Catholic membership, recorded here in
-# canonical reading order.  The library foundation persists ETHIO81 entries;
-# these lists deliberately do not infer membership from installed text rows.
-_PROTESTANT_WORK_IDS = (
-    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
-    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
-    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'esther', 'job', 'psalms',
-    'proverbs', 'ecclesiastes', 'song-of-solomon', 'isaiah', 'jeremiah',
-    'lamentations', 'ezekiel', 'daniel', 'hosea', 'joel', 'amos', 'obadiah',
-    'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah', 'haggai', 'zechariah',
-    'malachi', 'matthew', 'mark', 'luke', 'john', 'acts', 'romans',
-    '1-corinthians', '2-corinthians', 'galatians', 'ephesians', 'philippians',
-    'colossians', '1-thessalonians', '2-thessalonians', '1-timothy', '2-timothy',
-    'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter', '1-john',
-    '2-john', '3-john', 'jude', 'revelation',
-)
-_CATHOLIC_WORK_IDS = (
-    'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
-    'joshua', 'judges', 'ruth', '1-samuel', '2-samuel', '1-kings', '2-kings',
-    '1-chronicles', '2-chronicles', 'ezra', 'nehemiah', 'tobit', 'judith',
-    'esther', '1-maccabees', '2-maccabees', 'job', 'psalms', 'proverbs',
-    'ecclesiastes', 'song-of-solomon', 'wisdom-of-solomon', 'sirach', 'isaiah',
-    'jeremiah', 'lamentations', 'baruch', 'ezekiel', 'daniel', 'hosea', 'joel',
-    'amos', 'obadiah', 'jonah', 'micah', 'nahum', 'habakkuk', 'zephaniah',
-    'haggai', 'zechariah', 'malachi', 'matthew', 'mark', 'luke', 'john', 'acts',
-    'romans', '1-corinthians', '2-corinthians', 'galatians', 'ephesians',
-    'philippians', 'colossians', '1-thessalonians', '2-thessalonians', '1-timothy',
-    '2-timothy', 'titus', 'philemon', 'hebrews', 'james', '1-peter', '2-peter',
-    '1-john', '2-john', '3-john', 'jude', 'revelation',
-)
-_STANDARD_EXTRA_WORKS = {
-    '1-maccabees': ('1 Maccabees', 'OT', 'History'),
-    '2-maccabees': ('2 Maccabees', 'OT', 'History'),
+_WORKS_BY_ID = {
+    work.id: work for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
 }
 
 
@@ -155,14 +128,12 @@ def _ethiopian_books(session: Session) -> tuple[list[dict], int]:
 
 
 def _standard_metadata(work_id: str) -> tuple[str, str, str]:
-    work = _WORKS_BY_ID.get(work_id)
-    if work is not None:
-        return work.name, work.testament, work.collection
-    return _STANDARD_EXTRA_WORKS[work_id]
+    work = _WORKS_BY_ID[work_id]
+    return work.name, work.testament, work.collection
 
 
 def _standard_books(session: Session, canon_code: str) -> tuple[list[dict], int]:
-    work_ids = _PROTESTANT_WORK_IDS if canon_code == 'PROT66' else _CATHOLIC_WORK_IDS
+    work_ids = PROTESTANT_WORK_IDS if canon_code == 'PROT66' else CATHOLIC_WORK_IDS
     stored_titles = dict(session.execute(
         select(LibraryWork.id, LibraryWork.title).where(LibraryWork.id.in_(work_ids))
     ).all())
