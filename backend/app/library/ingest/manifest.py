@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from math import isfinite
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -10,6 +11,8 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictInt,
+    StrictStr,
     StringConstraints,
     field_validator,
     model_validator,
@@ -18,8 +21,9 @@ from pydantic import (
 
 NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
-PositiveInteger = Annotated[int, Field(gt=0)]
-PublishedYear = Annotated[int, Field(ge=1450, le=2500)]
+PositiveInteger = Annotated[StrictInt, Field(gt=0)]
+PublishedYear = Annotated[StrictInt, Field(ge=1450, le=2500)]
+ChapterKey = Annotated[StrictStr, StringConstraints(pattern=r'^[1-9][0-9]*$')]
 
 _LICENSES = Literal[
     'LicenseRef-Public-Domain',
@@ -29,19 +33,47 @@ _LICENSES = Literal[
 ]
 _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_reading']
 _ADAPTER_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
+_SECRET_OPTION_NAMES = {
+    'secret',
+    'clientsecret',
+    'apikey',
+    'token',
+    'accesstoken',
+    'password',
+    'passwd',
+    'authorization',
+    'auth',
+    'credential',
+    'credentials',
+    'privatekey',
+    'accesskey',
+    'bearer',
+}
+_SECRET_OPTION_SUFFIXES = (
+    'secret',
+    'token',
+    'password',
+    'passwd',
+    'authorization',
+    'credential',
+    'credentials',
+    'privatekey',
+    'accesskey',
+    'bearer',
+)
 
 
 class ExpectedCoverage(BaseModel):
     """The coverage the source is expected to provide for one canonical work."""
 
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='forbid', strict=True)
 
     chapters: PositiveInteger
-    verse_counts: dict[PositiveInteger, PositiveInteger] = Field(default_factory=dict)
+    verse_counts: dict[ChapterKey, PositiveInteger] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def verse_counts_are_within_declared_chapters(self) -> ExpectedCoverage:
-        if any(chapter > self.chapters for chapter in self.verse_counts):
+        if any(int(chapter) > self.chapters for chapter in self.verse_counts):
             raise ValueError('verse_counts may not include chapters beyond chapters.')
         return self
 
@@ -49,7 +81,7 @@ class ExpectedCoverage(BaseModel):
 class SourceFile(BaseModel):
     """An immutable source artifact used by an ingest adapter."""
 
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='forbid', strict=True)
 
     path: NonBlankString
     sha256: Checksum
@@ -64,7 +96,7 @@ class SourceFile(BaseModel):
 class SourceManifest(BaseModel):
     """Licensed provenance and expected coverage for a scripture edition."""
 
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra='forbid', strict=True)
 
     edition_code: NonBlankString
     name: NonBlankString
@@ -135,7 +167,11 @@ class SourceManifest(BaseModel):
 
 
 def _raise_for_non_json_or_secret_option(value: Any) -> None:
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError('adapter_options numbers must be finite.')
         return
     if isinstance(value, dict):
         for key, nested_value in value.items():
@@ -150,6 +186,11 @@ def _raise_for_non_json_or_secret_option(value: Any) -> None:
             _raise_for_non_json_or_secret_option(item)
         return
     raise ValueError('adapter_options must contain only JSON-compatible values.')
+
+
 def _is_secret_key(key: str) -> bool:
     normalized = re.sub(r'[^a-z0-9]', '', key.casefold())
-    return normalized == 'apikey' or normalized.endswith('token') or normalized.endswith('password')
+    return (
+        normalized in _SECRET_OPTION_NAMES
+        or normalized.endswith(_SECRET_OPTION_SUFFIXES)
+    )

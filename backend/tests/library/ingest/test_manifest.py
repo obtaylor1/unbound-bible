@@ -22,7 +22,7 @@ VALID = {
     'relationship': 'general_reading',
     'versification': 'KJV',
     'expected_works': {
-        'genesis': {'chapters': 50, 'verse_counts': {1: 31, 50: 26}},
+        'genesis': {'chapters': 50, 'verse_counts': {'1': 31, '50': 26}},
     },
     'source_files': [{
         'path': 'kjv.txt',
@@ -78,6 +78,18 @@ def test_manifest_rejects_unreasonable_published_year(year):
         SourceManifest.model_validate(manifest_with(published_year=year))
 
 
+def test_manifest_allows_explicitly_unknown_published_year():
+    assert SourceManifest.model_validate(
+        manifest_with(published_year=None)
+    ).published_year is None
+
+
+@pytest.mark.parametrize('published_year', (True, '1769', 1769.0))
+def test_manifest_rejects_coerced_published_year_values(published_year):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(published_year=published_year))
+
+
 def test_manifest_rejects_invalid_provenance_and_extra_fields():
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_with(provenance_url='not a URL'))
@@ -91,9 +103,9 @@ def test_manifest_rejects_invalid_provenance_and_extra_fields():
         {},
         {'': {'chapters': 1}},
         {'genesis': {'chapters': 0}},
-        {'genesis': {'chapters': 1, 'verse_counts': {0: 1}}},
-        {'genesis': {'chapters': 1, 'verse_counts': {2: 1}}},
-        {'genesis': {'chapters': 1, 'verse_counts': {1: 0}}},
+        {'genesis': {'chapters': 1, 'verse_counts': {'0': 1}}},
+        {'genesis': {'chapters': 1, 'verse_counts': {'2': 1}}},
+        {'genesis': {'chapters': 1, 'verse_counts': {'1': 0}}},
         {'genesis': {'chapters': 1, 'unknown': True}},
     ),
 )
@@ -108,6 +120,25 @@ def test_manifest_rejects_duplicate_normalized_work_ids():
             'Genesis': {'chapters': 50},
             ' genesis ': {'chapters': 50},
         }))
+
+
+@pytest.mark.parametrize(
+    'coverage',
+    (
+        {'chapters': True},
+        {'chapters': '50'},
+        {'chapters': 50.0},
+        {'chapters': 1, 'verse_counts': {1: 31}},
+        {'chapters': 1, 'verse_counts': {'1': True}},
+        {'chapters': 1, 'verse_counts': {'1': '31'}},
+        {'chapters': 1, 'verse_counts': {'1': 31.0}},
+    ),
+)
+def test_manifest_rejects_coverage_type_coercion(coverage):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(expected_works={'genesis': coverage})
+        )
 
 
 @pytest.mark.parametrize(
@@ -137,10 +168,70 @@ def test_manifest_normalizes_checksum_to_lowercase():
     assert manifest.source_files[0].sha256 == 'ab' * 32
 
 
-@pytest.mark.parametrize('options', ({'api_key': 'secret'}, {'nested': {'token': 'secret'}}, {'PASSWORD': 'secret'}))
-def test_manifest_rejects_secret_adapter_options(options):
+def test_manifest_rejects_invalid_source_file_url():
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(source_files=[{
+            'path': 'kjv.txt',
+            'sha256': 'a' * 64,
+            'source_url': 'not a URL',
+        }]))
+
+
+@pytest.mark.parametrize('adapter', ('usfm text', 'usfm/text', '.usfm', 'adapter!'))
+def test_manifest_rejects_invalid_adapter_identifiers(adapter):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(adapter=adapter))
+
+
+@pytest.mark.parametrize(
+    'secret_key',
+    (
+        'secret',
+        'CLIENT SECRET',
+        'api-key',
+        'apikey',
+        'token',
+        'access-token',
+        'password',
+        'passwd',
+        'Authorization',
+        'auth',
+        'credential',
+        'credentials',
+        'private key',
+        'access-key',
+        'bearer',
+    ),
+)
+def test_manifest_rejects_obvious_secret_adapter_options(secret_key):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter_options={secret_key: 'do-not-commit'})
+        )
+
+
+def test_manifest_rejects_secret_options_nested_in_dicts_and_lists():
+    options = {'formats': [{'settings': {'Client-Secret': 'do-not-commit'}}]}
+
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_with(adapter_options=options))
+
+
+@pytest.mark.parametrize('options', (None, [], 'encoding=utf-8'))
+def test_manifest_rejects_non_dictionary_adapter_options(options):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(adapter_options=options))
+
+
+@pytest.mark.parametrize(
+    'non_json_value',
+    ({'utf-8'}, ('utf-8',), object(), float('nan'), float('inf')),
+)
+def test_manifest_rejects_non_json_adapter_option_values(non_json_value):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter_options={'encoding': non_json_value})
+        )
 
 
 def test_manifest_defaults_adapter_options_and_round_trips_model_dump():
