@@ -7,7 +7,7 @@ from hashlib import sha256
 import json
 import unicodedata
 
-from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS
+from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS, alias_target
 
 
 _KNOWN_WORK_IDS = frozenset(work.id for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS))
@@ -35,6 +35,19 @@ def normalize_string(name: str, value: object) -> str:
     source = _require_string(name, value)
     _reject_surrogates(name, source)
     return ' '.join(unicodedata.normalize('NFC', source).split())
+
+
+def resolve_source_work_id(source_book: str) -> str:
+    """Resolve an approved source label or exact canonical work identifier."""
+    if source_book in _KNOWN_WORK_IDS:
+        return source_book
+    resolved = alias_target(source_book)
+    if resolved in _KNOWN_WORK_IDS:
+        return resolved
+    raise ValueError(
+        f'Unknown source book: {source_book!r}; '
+        'source_book must resolve to a known canonical work.'
+    )
 
 
 def _is_xml_name_start(character: str) -> bool:
@@ -140,6 +153,10 @@ class NormalizedVerse:
             raise ValueError('chapter and verse must be positive integers.')
 
         _validate_normalized_string('source_book', self.source_book)
+        if resolve_source_work_id(self.source_book) != self.work_id:
+            raise ValueError(
+                'source_book must resolve to the same canonical work as work_id.'
+            )
         _validate_normalized_string('text', self.text)
         if self.source_locator is not None:
             _validate_normalized_string('source_locator', self.source_locator)

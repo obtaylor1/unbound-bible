@@ -2,20 +2,7 @@
 
 from __future__ import annotations
 
-from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS, alias_target
-from app.library.ingest.types import NormalizedVerse, normalize_string
-
-
-_CANONICAL_WORK_IDS = frozenset(work.id for work in (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS))
-
-
-def _resolve_work_id(source_book: str) -> str:
-    if source_book in _CANONICAL_WORK_IDS:
-        return source_book
-    resolved = alias_target(source_book)
-    if resolved in _CANONICAL_WORK_IDS:
-        return resolved
-    raise ValueError(f'Unknown source book: {source_book!r}.')
+from app.library.ingest.types import NormalizedVerse, normalize_string, resolve_source_work_id
 
 
 def _normalize_locator(source_locator: object | None) -> str | None:
@@ -33,7 +20,7 @@ def normalize_verse(
 ) -> NormalizedVerse:
     """Validate and normalize one source row without interpreting its scripture text."""
     cleaned_source_book = normalize_string('source_book', source_book)
-    work_id = _resolve_work_id(cleaned_source_book)
+    work_id = resolve_source_work_id(cleaned_source_book)
 
     return NormalizedVerse(
         work_id=work_id,

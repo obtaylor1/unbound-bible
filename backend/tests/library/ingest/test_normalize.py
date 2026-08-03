@@ -292,3 +292,26 @@ def test_successfully_created_direct_verse_has_total_checksum_properties():
 
     assert len(verse.text_checksum) == 64
     assert len(verse.row_checksum) == 64
+
+
+@pytest.mark.parametrize(('work_id', 'source_book'), [
+    ('song-of-solomon', 'song-of-solomon'),
+    ('1-meqabyan', '1-meqabyan'),
+    ('1-maccabees', '1-maccabees'),
+])
+def test_direct_construction_accepts_exact_canonical_work_id_labels(work_id, source_book):
+    verse = _direct_verse(work_id=work_id, source_book=source_book)
+
+    assert verse.work_id == work_id
+    assert verse.source_book == source_book
+
+
+def test_direct_construction_rejects_source_book_resolving_to_a_different_work():
+    with pytest.raises(ValueError, match='source_book.*resolve.*work_id'):
+        _direct_verse(work_id='genesis', source_book='Exodus')
+
+
+@pytest.mark.parametrize('source_book', ['Totally Unknown', 'GEN'])
+def test_direct_construction_rejects_unresolved_adapter_book_labels(source_book):
+    with pytest.raises(ValueError, match='source_book.*known canonical work'):
+        _direct_verse(work_id='genesis', source_book=source_book)
