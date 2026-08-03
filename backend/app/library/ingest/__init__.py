@@ -1,0 +1,1 @@
+"""Verified scripture ingestion primitives."""
