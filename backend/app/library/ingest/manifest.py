@@ -68,49 +68,44 @@ _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_readin
 _ADAPTER_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 _CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
 _KEY_TOKEN = re.compile(r'[a-z0-9]+')
-_SAFE_CONFIGURATION_NAMES = {
-    'authmethod',
-    'credentialsmode',
-    'requiresauth',
-    'requiresauthorization',
-    'maxtokens',
+_CONFIGURATION_SUFFIXES = (
+    'mode',
+    'method',
+    'type',
+    'scheme',
+    'source',
+    'required',
+    'enabled',
+)
+_SAFE_SENTINELS = {
+    'none',
+    'omit',
+    'environment',
+    'default',
+    'anonymous',
+    'public',
+    'true',
+    'false',
 }
-_SECRET_COMPACT_NAMES = {
-    'clientsecret',
-    'accesstoken',
-    'refreshtoken',
-    'privatekey',
-    'secretkey',
-    'xapikey',
-    'apikey',
-    'tokenvalue',
+_SECRET_PRIMITIVES = {
+    'secret',
+    'password',
+    'passwd',
     'token',
     'authorization',
     'auth',
     'bearer',
+    'key',
     'credential',
     'credentials',
-    'password',
-    'passwd',
+    'signature',
+    'cookie',
 }
-_SECRET_TOKEN_PAIRS = {
-    ('api', 'key'),
-    ('secret', 'key'),
-    ('client', 'secret'),
-    ('token', 'value'),
-    ('access', 'token'),
-    ('refresh', 'token'),
-    ('private', 'key'),
-    ('access', 'key'),
-}
-_SECRET_VALUE_TOKENS = {
-    'secret',
-    'password',
-    'passwd',
-    'credential',
-    'credentials',
-    'bearer',
-}
+_KEY_PREFIXES = {'api', 'access', 'private', 'secret', 'encryption', 'signing', 'session'}
+_TOKEN_PREFIXES = {'access', 'refresh', 'session', 'bearer', 'client'}
+_PASSWORD_PREFIXES = {'client', 'user', 'db'}
+_VALUE_PREFIXES = _SECRET_PRIMITIVES - {'key'}
+_AUTH_COMPOUNDS = {'basicauth', 'authheader', 'authorizationheader'}
 
 
 class ExpectedCoverage(BaseModel):
@@ -259,7 +254,7 @@ def _raise_for_non_json_or_secret_option(value: Any) -> None:
         for key, nested_value in value.items():
             if not isinstance(key, str):
                 raise ValueError('adapter_options dictionary keys must be strings.')
-            if _is_secret_key(key):
+            if _is_secret_key(key, nested_value):
                 raise ValueError('adapter_options may not include secret fields.')
             _raise_for_non_json_or_secret_option(nested_value)
         return
@@ -275,28 +270,70 @@ def _key_tokens(key: str) -> tuple[str, ...]:
     return tuple(_KEY_TOKEN.findall(expanded.casefold()))
 
 
-def _is_secret_key(key: str) -> bool:
+def _compact_key(key: str) -> str:
+    return ''.join(_KEY_TOKEN.findall(key.casefold()))
+
+
+def _is_safe_sentinel(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return True
+    return isinstance(value, str) and value.strip().casefold() in _SAFE_SENTINELS
+
+
+def _is_numeric_configuration(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return isfinite(value)
+    return isinstance(value, str) and value.strip().isdigit()
+
+
+def _is_safe_configuration(compact_name: str, value: Any) -> bool:
+    if compact_name == 'maxtokens':
+        return _is_numeric_configuration(value)
+    if compact_name.startswith('requires'):
+        return _is_safe_sentinel(value)
+    return (
+        compact_name.endswith(_CONFIGURATION_SUFFIXES)
+        and _is_safe_sentinel(value)
+    )
+
+
+def _is_sensitive_compact_name(compact_name: str) -> bool:
+    if compact_name in _SECRET_PRIMITIVES:
+        return True
+    if compact_name.endswith('apikey'):
+        return True
+    if any(compact_name == f'{prefix}key' for prefix in _KEY_PREFIXES):
+        return True
+    if any(compact_name == f'{prefix}token' for prefix in _TOKEN_PREFIXES):
+        return True
+    if compact_name == 'clientsecret':
+        return True
+    if any(compact_name == f'{prefix}password' for prefix in _PASSWORD_PREFIXES):
+        return True
+    if any(compact_name == f'{prefix}value' for prefix in _VALUE_PREFIXES):
+        return True
+    return compact_name in _AUTH_COMPOUNDS | {'sessioncookie'}
+
+
+def _is_secret_key(key: str, value: Any) -> bool:
     tokens = _key_tokens(key)
     if not tokens:
         return False
-    compact_name = ''.join(tokens)
-    if compact_name in _SAFE_CONFIGURATION_NAMES:
+    compact_name = _compact_key(key)
+    if _is_safe_configuration(compact_name, value):
         return False
-    if compact_name in _SECRET_COMPACT_NAMES:
+    if compact_name == 'maxtokens':
         return True
-    if any(token in {'auth', 'authorization'} for token in tokens):
+    if _is_sensitive_compact_name(compact_name):
         return True
-    if any(token in _SECRET_VALUE_TOKENS for token in tokens):
+    if any(token in _SECRET_PRIMITIVES for token in tokens):
         return True
-    return any(pair in _SECRET_TOKEN_PAIRS for pair in zip(tokens, tokens[1:]))
-
-
-def _is_secret_query_parameter(name: str) -> bool:
-    tokens = _key_tokens(name)
-    return (
-        _is_secret_key(name)
-        or any(token in {'key', 'sig', 'signature'} for token in tokens)
-    )
+    for suffix in _CONFIGURATION_SUFFIXES:
+        if compact_name.endswith(suffix):
+            return _is_sensitive_compact_name(compact_name[:-len(suffix)])
+    return False
 
 
 def _validate_commit_safe_url(url: HttpUrl) -> None:
@@ -304,11 +341,11 @@ def _validate_commit_safe_url(url: HttpUrl) -> None:
         raise ValueError('URL must not exceed 2048 serialized characters.')
     if url.username is not None or url.password is not None:
         raise ValueError('URL must not include embedded credentials.')
-    for query_name, _ in parse_qsl(url.query or '', keep_blank_values=True):
-        if _is_secret_query_parameter(query_name):
+    for query_name, query_value in parse_qsl(url.query or '', keep_blank_values=True):
+        if _is_secret_key(query_name, query_value):
             raise ValueError('URL must not include secret-like query parameters.')
     fragment = url.fragment or ''
     if '=' in fragment:
-        for fragment_name, _ in parse_qsl(fragment, keep_blank_values=True):
-            if _is_secret_query_parameter(fragment_name):
+        for fragment_name, fragment_value in parse_qsl(fragment, keep_blank_values=True):
+            if _is_secret_key(fragment_name, fragment_value):
                 raise ValueError('URL fragment must not include secret-like parameters.')

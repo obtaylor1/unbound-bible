@@ -361,6 +361,103 @@ def test_manifest_urls_allow_normal_anchor_fragments(field):
     assert manifest is not None
 
 
+SENSITIVE_PARAMETER_NAMES = (
+    'accesskey',
+    'bearertoken',
+    'clientpassword',
+    'sessiontoken',
+    'basicauth',
+    'authorizationheader',
+    'encryption_key',
+    'signing-key',
+    'userPassword',
+    'db_password',
+    'auth_header',
+    'signature',
+    'cookie',
+    'sessioncookie',
+)
+
+
+SAFE_CONFIGURATION_PARAMETERS = (
+    ('auth_type', 'none'),
+    ('authorization_scheme', 'none'),
+    ('credential_source', 'environment'),
+    ('auth_method', 'none'),
+    ('credentials_mode', 'omit'),
+    ('authorization_required', False),
+    ('cookie_enabled', False),
+    ('encryption_key_source', 'environment'),
+    ('max_tokens', 1000),
+)
+
+
+UNSAFE_CONFIGURATION_PARAMETERS = (
+    ('auth_type', 'basic'),
+    ('authorization_scheme', 'bearer-value'),
+    ('credential_source', 'actual-credential'),
+    ('auth_method', 'password'),
+    ('credentials_mode', 'embedded'),
+    ('authorization_required', 'actual-authorization'),
+    ('cookie_enabled', 'session-cookie-value'),
+    ('encryption_key_source', 'hardcoded-key'),
+)
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize('surface', ('query', 'fragment'))
+@pytest.mark.parametrize('parameter_name', SENSITIVE_PARAMETER_NAMES)
+def test_manifest_url_surfaces_reject_generalized_secret_names(
+    field, surface, parameter_name
+):
+    separator = '?' if surface == 'query' else '#'
+    url = f'https://example.org/kjv.txt{separator}{parameter_name}=do-not-commit'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize('surface', ('query', 'fragment'))
+@pytest.mark.parametrize(('name', 'parameter_value'), SAFE_CONFIGURATION_PARAMETERS)
+def test_manifest_url_surfaces_allow_safe_configuration_values(
+    field, surface, name, parameter_value
+):
+    serialized_value = str(parameter_value).lower()
+    separator = '?' if surface == 'query' else '#'
+    url = f'https://example.org/kjv.txt{separator}{name}={serialized_value}'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    assert SourceManifest.model_validate(value) is not None
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize('surface', ('query', 'fragment'))
+@pytest.mark.parametrize(('name', 'parameter_value'), UNSAFE_CONFIGURATION_PARAMETERS)
+def test_manifest_url_surfaces_reject_unsafe_configuration_values(
+    field, surface, name, parameter_value
+):
+    separator = '?' if surface == 'query' else '#'
+    url = f'https://example.org/kjv.txt{separator}{name}={parameter_value}'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
 @pytest.mark.parametrize('adapter', ('usfm text', 'usfm/text', '.usfm', 'adapter!'))
 def test_manifest_rejects_invalid_adapter_identifiers(adapter):
     with pytest.raises(ValidationError):
@@ -415,6 +512,31 @@ def test_manifest_rejects_compact_secret_adapter_options(secret_key):
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(
             manifest_with(adapter_options={secret_key: 'do-not-commit'})
+        )
+
+
+@pytest.mark.parametrize('secret_key', SENSITIVE_PARAMETER_NAMES)
+def test_manifest_rejects_generalized_secret_adapter_options(secret_key):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter_options={secret_key: 'do-not-commit'})
+        )
+
+
+@pytest.mark.parametrize(('name', 'value'), SAFE_CONFIGURATION_PARAMETERS)
+def test_manifest_allows_safe_declarative_adapter_options(name, value):
+    manifest = SourceManifest.model_validate(
+        manifest_with(adapter_options={name: value})
+    )
+
+    assert manifest.adapter_options[name] == value
+
+
+@pytest.mark.parametrize(('name', 'value'), UNSAFE_CONFIGURATION_PARAMETERS)
+def test_manifest_rejects_unsafe_declarative_adapter_options(name, value):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter_options={name: value})
         )
 
 
