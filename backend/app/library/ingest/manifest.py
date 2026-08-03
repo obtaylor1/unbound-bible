@@ -68,6 +68,31 @@ _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_readin
 _ADAPTER_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 _CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
 _KEY_TOKEN = re.compile(r'[a-z0-9]+')
+_SAFE_CONFIGURATION_NAMES = {
+    'authmethod',
+    'credentialsmode',
+    'requiresauth',
+    'requiresauthorization',
+    'maxtokens',
+}
+_SECRET_COMPACT_NAMES = {
+    'clientsecret',
+    'accesstoken',
+    'refreshtoken',
+    'privatekey',
+    'secretkey',
+    'xapikey',
+    'apikey',
+    'tokenvalue',
+    'token',
+    'authorization',
+    'auth',
+    'bearer',
+    'credential',
+    'credentials',
+    'password',
+    'passwd',
+}
 _SECRET_TOKEN_PAIRS = {
     ('api', 'key'),
     ('secret', 'key'),
@@ -119,7 +144,7 @@ class SourceFile(BaseModel):
         segments = normalized.split('/')
         if normalized.startswith('/') or '\\' in normalized:
             raise ValueError('source path must be a relative POSIX path.')
-        if re.fullmatch(r'[A-Za-z]:', segments[0]):
+        if re.match(r'^[A-Za-z]:', normalized):
             raise ValueError('source path must not contain a drive prefix.')
         if any(not segment or segment in {'.', '..'} for segment in segments):
             raise ValueError('source path must not contain empty, dot, or traversal segments.')
@@ -234,7 +259,7 @@ def _raise_for_non_json_or_secret_option(value: Any) -> None:
         for key, nested_value in value.items():
             if not isinstance(key, str):
                 raise ValueError('adapter_options dictionary keys must be strings.')
-            if _is_secret_key(key, nested_value):
+            if _is_secret_key(key):
                 raise ValueError('adapter_options may not include secret fields.')
             _raise_for_non_json_or_secret_option(nested_value)
         return
@@ -250,16 +275,14 @@ def _key_tokens(key: str) -> tuple[str, ...]:
     return tuple(_KEY_TOKEN.findall(expanded.casefold()))
 
 
-def _is_secret_key(key: str, value: Any) -> bool:
+def _is_secret_key(key: str) -> bool:
     tokens = _key_tokens(key)
     if not tokens:
         return False
-    if (
-        isinstance(value, bool)
-        and tokens in {('requires', 'auth'), ('requires', 'authorization')}
-    ):
+    compact_name = ''.join(tokens)
+    if compact_name in _SAFE_CONFIGURATION_NAMES:
         return False
-    if tokens in {('apikey',), ('token',)}:
+    if compact_name in _SECRET_COMPACT_NAMES:
         return True
     if any(token in {'auth', 'authorization'} for token in tokens):
         return True
@@ -271,7 +294,7 @@ def _is_secret_key(key: str, value: Any) -> bool:
 def _is_secret_query_parameter(name: str) -> bool:
     tokens = _key_tokens(name)
     return (
-        _is_secret_key(name, None)
+        _is_secret_key(name)
         or any(token in {'key', 'sig', 'signature'} for token in tokens)
     )
 
@@ -284,3 +307,8 @@ def _validate_commit_safe_url(url: HttpUrl) -> None:
     for query_name, _ in parse_qsl(url.query or '', keep_blank_values=True):
         if _is_secret_query_parameter(query_name):
             raise ValueError('URL must not include secret-like query parameters.')
+    fragment = url.fragment or ''
+    if '=' in fragment:
+        for fragment_name, _ in parse_qsl(fragment, keep_blank_values=True):
+            if _is_secret_query_parameter(fragment_name):
+                raise ValueError('URL fragment must not include secret-like parameters.')

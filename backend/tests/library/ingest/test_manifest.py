@@ -198,6 +198,9 @@ def test_manifest_rejects_invalid_or_duplicate_source_files(source_files):
         'sources/../kjv.txt',
         'sources\\kjv.txt',
         'C:/secrets.txt',
+        'C:secrets.txt',
+        'z:folder/file.txt',
+        'D:.',
         'sources//kjv.txt',
         'sources/',
         'sources/\x00kjv.txt',
@@ -282,6 +285,82 @@ def test_manifest_urls_reject_secret_query_parameters(field, query_name):
         SourceManifest.model_validate(value)
 
 
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize(
+    'query_name',
+    (
+        'clientsecret',
+        'accesstoken',
+        'refreshtoken',
+        'privatekey',
+        'secretkey',
+        'xapikey',
+        'apikey',
+        'tokenvalue',
+        'authorization',
+        'bearer',
+        'credentials',
+        'passwd',
+    ),
+)
+def test_manifest_urls_reject_compact_secret_query_parameters(field, query_name):
+    url = f'https://example.org/kjv.txt?{query_name}=do-not-commit'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+def test_manifest_urls_allow_harmless_configuration_query_parameters(field):
+    url = (
+        'https://example.org/kjv.txt?auth_method=none&credentials_mode=omit'
+        '&requires_authorization=false&max_tokens=1000'
+    )
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    manifest = SourceManifest.model_validate(value)
+    assert manifest is not None
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+@pytest.mark.parametrize(
+    'fragment',
+    ('access_token=do-not-commit', 'section=full&token=do-not-commit'),
+)
+def test_manifest_urls_reject_secret_query_style_fragments(field, fragment):
+    url = f'https://example.org/kjv.txt#{fragment}'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(value)
+
+
+@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
+def test_manifest_urls_allow_normal_anchor_fragments(field):
+    url = 'https://example.org/kjv.txt#section-2'
+    value = manifest_with()
+    if field == 'provenance_url':
+        value[field] = url
+    else:
+        value['source_files'][0][field] = url
+
+    manifest = SourceManifest.model_validate(value)
+    assert manifest is not None
+
+
 @pytest.mark.parametrize('adapter', ('usfm text', 'usfm/text', '.usfm', 'adapter!'))
 def test_manifest_rejects_invalid_adapter_identifiers(adapter):
     with pytest.raises(ValidationError):
@@ -320,6 +399,25 @@ def test_manifest_rejects_obvious_secret_adapter_options(secret_key):
         )
 
 
+@pytest.mark.parametrize(
+    'secret_key',
+    (
+        'clientsecret',
+        'accesstoken',
+        'refreshtoken',
+        'privatekey',
+        'secretkey',
+        'xapikey',
+        'tokenvalue',
+    ),
+)
+def test_manifest_rejects_compact_secret_adapter_options(secret_key):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter_options={secret_key: 'do-not-commit'})
+        )
+
+
 def test_manifest_rejects_secret_options_nested_in_dicts_and_lists():
     options = {'formats': [{'settings': {'Client-Secret': 'do-not-commit'}}]}
 
@@ -328,7 +426,12 @@ def test_manifest_rejects_secret_options_nested_in_dicts_and_lists():
 
 
 def test_manifest_allows_harmless_token_and_authorization_configuration():
-    options = {'max_tokens': 1000, 'requires_authorization': False}
+    options = {
+        'auth_method': 'none',
+        'credentials_mode': 'omit',
+        'requires_authorization': False,
+        'max_tokens': 1000,
+    }
 
     manifest = SourceManifest.model_validate(manifest_with(adapter_options=options))
 
