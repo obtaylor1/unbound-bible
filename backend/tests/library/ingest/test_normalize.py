@@ -2,7 +2,22 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from app.library.ingest import types as ingest_types
 from app.library.ingest.normalize import normalize_verse
+from app.library.ingest.types import NormalizedVerse
+
+
+def _direct_verse(**overrides):
+    values = {
+        'work_id': 'genesis',
+        'source_book': 'Genesis',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'In the beginning',
+        'source_locator': None,
+    }
+    values.update(overrides)
+    return NormalizedVerse(**values)
 
 
 def test_normalizes_song_of_songs_without_rewriting_scripture_punctuation():
@@ -67,9 +82,14 @@ def test_normalizes_combining_characters_and_unicode_whitespace():
 
 
 def test_preserves_legitimate_comparison_ampersand_and_non_tag_angle_text():
-    verse = normalize_verse('Genesis', 1, 1, 'For 2 < 3, <1> is not a tag, and A & B remain.')
+    verse = normalize_verse(
+        'Genesis', 1, 1,
+        'For 2 < 3, 2 < x > 1, <1> is not a tag, <x is unfinished, and A & B remain.',
+    )
 
-    assert verse.text == 'For 2 < 3, <1> is not a tag, and A & B remain.'
+    assert verse.text == (
+        'For 2 < 3, 2 < x > 1, <1> is not a tag, <x is unfinished, and A & B remain.'
+    )
 
 
 @pytest.mark.parametrize('markup', [
@@ -109,6 +129,47 @@ def test_rejects_xml_tags_with_all_valid_name_start_forms_in_locator(markup):
         normalize_verse('Genesis', 1, 1, 'In the beginning', markup)
 
 
+@pytest.mark.parametrize('markup', [
+    '<img/src=x>',
+    '<input/disabled>',
+    '<br/ >',
+    '<π/attribute>',
+    '<ns:verse/weird attribute contents>',
+])
+def test_rejects_tag_starts_with_a_later_closing_angle_regardless_of_contents(markup):
+    with pytest.raises(ValueError, match='markup'):
+        normalize_verse('Genesis', 1, 1, markup)
+
+
+@pytest.mark.parametrize('markup', [
+    '<!-- unfinished',
+    '<!DECLARATION unfinished',
+    '<![CDATA[unfinished',
+    '<!DOCTYPE scripture',
+    '<?xml version="1.0"',
+])
+def test_rejects_unterminated_markup_declaration_openers(markup):
+    with pytest.raises(ValueError, match='markup'):
+        normalize_verse('Genesis', 1, 1, markup)
+
+
+def test_markup_scanner_has_one_bounded_name_start_check_per_candidate(monkeypatch):
+    candidate_count = 20_000
+    safe_text = '<x' * candidate_count
+    calls = 0
+    original = ingest_types._is_xml_name_start
+
+    def counting_name_start(character):
+        nonlocal calls
+        calls += 1
+        return original(character)
+
+    monkeypatch.setattr(ingest_types, '_is_xml_name_start', counting_name_start)
+
+    assert ingest_types.contains_markup(safe_text) is False
+    assert calls == candidate_count
+
+
 @pytest.mark.parametrize('text', ['', '  \u00a0\n\u2009  '])
 def test_rejects_empty_normalized_text(text):
     with pytest.raises(ValueError, match='text must not be empty'):
@@ -131,6 +192,21 @@ def test_rejects_invalid_source_locator(locator):
         normalize_verse('Genesis', 1, 1, 'In the beginning', locator)
 
 
+@pytest.mark.parametrize('field', ['source_book', 'text', 'source_locator'])
+def test_rejects_lone_unicode_surrogates_before_returning_a_verse(field):
+    values = {
+        'source_book': 'Genesis',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'In the beginning',
+        'source_locator': None,
+    }
+    values[field] = 'unsafe\ud800value'
+
+    with pytest.raises(ValueError, match=f'{field}.*surrogate'):
+        normalize_verse(**values)
+
+
 def test_checksums_are_deterministic_and_sensitive_to_staged_values():
     original = normalize_verse('Genesis', 1, 1, 'In the beginning', 'gen.usfm:1:1')
     same = normalize_verse('Genesis', 1, 1, 'In the beginning', 'gen.usfm:1:1')
@@ -147,6 +223,14 @@ def test_checksums_are_deterministic_and_sensitive_to_staged_values():
     assert len(original.row_checksum) == len(original.text_checksum) == 64
 
 
+def test_row_checksum_includes_source_label_while_text_checksum_is_text_only():
+    canonical_name = normalize_verse('Genesis', 1, 1, 'In the beginning')
+    canonical_id = normalize_verse('genesis', 1, 1, 'In the beginning')
+
+    assert canonical_name.text_checksum == canonical_id.text_checksum
+    assert canonical_name.row_checksum != canonical_id.row_checksum
+
+
 def test_row_checksum_uses_unambiguous_field_serialization():
     first = normalize_verse('Genesis', 1, 1, 'alpha:beta', 'gamma')
     second = normalize_verse('Genesis', 1, 1, 'alpha', 'beta:gamma')
@@ -161,3 +245,50 @@ def test_normalized_verse_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         verse.text = 'Changed'
+
+
+@pytest.mark.parametrize(('overrides', 'message'), [
+    ({'work_id': 'unknown-work'}, 'known canonical work'),
+    ({'source_book': 1}, 'source_book must be a string'),
+    ({'source_book': ''}, 'source_book must not be empty'),
+    ({'source_book': 'Genesis\ud800'}, 'source_book.*surrogate'),
+    ({'chapter': True}, 'positive integers'),
+    ({'chapter': 0}, 'positive integers'),
+    ({'verse': '1'}, 'positive integers'),
+    ({'text': 1}, 'text must be a string'),
+    ({'text': ''}, 'text must not be empty'),
+    ({'text': '<img/src=x>'}, 'text.*markup'),
+    ({'text': 'unsafe\x00text'}, 'text.*control'),
+    ({'text': 'unsafe\ud800text'}, 'text.*surrogate'),
+    ({'source_locator': 1}, 'source_locator must be a string'),
+    ({'source_locator': ''}, 'source_locator must not be empty'),
+    ({'source_locator': '<_source>'}, 'source_locator.*markup'),
+    ({'source_locator': 'unsafe\x00locator'}, 'source_locator.*control'),
+    ({'source_locator': 'unsafe\ud800locator'}, 'source_locator.*surrogate'),
+])
+def test_direct_construction_rejects_invalid_staging_rows(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        _direct_verse(**overrides)
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('source_book', ' Genesis '),
+    ('text', 'cafe\u0301'),
+    ('text', 'two  spaces'),
+    ('source_locator', ' source\nline '),
+])
+def test_direct_construction_requires_already_normalized_strings(field, value):
+    with pytest.raises(ValueError, match=f'{field}.*normalized'):
+        _direct_verse(**{field: value})
+
+
+def test_successfully_created_direct_verse_has_total_checksum_properties():
+    verse = _direct_verse(
+        work_id='1-maccabees',
+        source_book='1 Maccabees',
+        text='A safe supplementary verse — ሰላም',
+        source_locator='source:𐀀',
+    )
+
+    assert len(verse.text_checksum) == 64
+    assert len(verse.row_checksum) == 64
