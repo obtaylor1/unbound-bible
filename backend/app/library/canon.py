@@ -139,6 +139,9 @@ def validate_canon(canon: tuple[CanonEntry, ...] = ETHIOPIAN_CANON) -> None:
 
     if len(canon) != 81:
         raise ValueError('The Ethiopian canon must contain 81 counted entries.')
+    expected_sequence = ('OT',) * 46 + ('NT',) * 35
+    if tuple(entry.testament for entry in canon) != expected_sequence:
+        raise ValueError('The canon must place all OT entries before all NT entries.')
     for testament, expected_count in expected_counts.items():
         entries = entries_by_testament[testament]
         if len(entries) != expected_count:
@@ -149,6 +152,12 @@ def validate_canon(canon: tuple[CanonEntry, ...] = ETHIOPIAN_CANON) -> None:
         raise ValueError('Canon entry codes must be unique.')
     if any(not entry.work_ids for entry in canon):
         raise ValueError('Every canon entry must include at least one work.')
+    work_owner: dict[str, str] = {}
+    for entry in canon:
+        for work_id in entry.work_ids:
+            existing_owner = work_owner.setdefault(work_id, entry.code)
+            if existing_owner != entry.code:
+                raise ValueError('Every work must belong to exactly one counted entry.')
 
 
 validate_canon()
@@ -197,10 +206,14 @@ _WORK_ALIASES = {
     'wisdom-of-solomon': ('Metsihafe Tibeb',),
     'song-of-solomon': ('Song of Songs', 'Canticles'),
     'sirach': ('Joshua son of Sirac', 'Joshua son of Sirach'),
-    'josippon': ('Josephas son of Bengorion', 'Josephus son of Bengorion'),
+    'josippon': ('Josephas son of Bengorion', 'Josephus son of Bengorion', 'Book of Josephus'),
     'gitsew': ('Gitsew',),
-    'metsihafe-kidan-1': ('I Book of Dominos', 'Book of Dominos I', 'Book of the Covenant I'),
-    'metsihafe-kidan-2': ('II Book of Dominos', 'Book of Dominos II', 'Book of the Covenant II'),
+    'metsihafe-kidan-1': (
+        'I Book of Dominos', '1st Book of Dominos', 'Book of Dominos I', 'Book of the Covenant I',
+    ),
+    'metsihafe-kidan-2': (
+        'II Book of Dominos', '2nd Book of Dominos', 'Book of Dominos II', 'Book of the Covenant II',
+    ),
     'qalementos': ('Book of Clement', 'Book of Qäləmentos', 'Clement 2'),
     'didesqelya': ('Didascalia', 'Didaskalia'),
 }
