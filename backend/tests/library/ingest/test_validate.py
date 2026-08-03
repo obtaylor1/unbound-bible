@@ -2,6 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS
 from app.library.ingest.normalize import normalize_verse
 from app.library.ingest.validate import (
     ValidationFinding,
@@ -222,6 +223,10 @@ def test_whole_bracketed_book_or_chapter_description_is_placeholder():
     '[Awaiting full Ge\'ez source text ...]',
     '[Chapter text unavailable from source]',
     '[Not yet added]',
+    'Awaiting full Ge\'ez source text',
+    'Text unavailable for this chapter',
+    'No text available for this book',
+    'Currently awaiting source verification',
 ])
 def test_full_row_operational_placeholders_are_rejected(placeholder):
     result = validate_edition(
@@ -258,3 +263,36 @@ def test_missing_verses_without_declared_counts_include_start_and_interior_gaps(
     assert [(finding.code, finding.verse) for finding in result.errors] == [
         ('missing_verse', 1), ('missing_verse', 3)
     ]
+
+
+def test_contiguous_missing_verses_are_reported_as_ranges():
+    result = validate_edition(
+        [verse(1, 3), verse(1, 7)], coverage(verse_counts={'1': 10})
+    )
+
+    assert [(finding.verse, finding.message) for finding in result.errors] == [
+        (1, 'Expected verses 1–2 are not present.'),
+        (4, 'Expected verses 4–6 are not present.'),
+        (8, 'Expected verses 8–10 are not present.'),
+    ]
+
+
+def test_maximum_manifest_coverage_has_findings_bounded_by_chapters_and_gaps():
+    works = (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
+    expected = {
+        work.id: {
+            'chapters': 200,
+            'verse_counts': {str(chapter): 1000 for chapter in range(1, 201)},
+        }
+        for work in works
+    }
+    rows = [normalize_verse(work.id, 1, 1000, f'{work.id} source text') for work in works]
+
+    result = validate_edition(rows, expected)
+
+    assert len(works) == 97
+    assert result.error_count == len(works) * 200
+    assert sum(finding.code == 'missing_verse' for finding in result.errors) == len(works)
+    first_gap = next(finding for finding in result.errors if finding.code == 'missing_verse')
+    assert first_gap.verse == 1
+    assert first_gap.message == 'Expected verses 1–999 are not present.'

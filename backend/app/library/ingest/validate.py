@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 import re
 import unicodedata
@@ -23,6 +23,16 @@ _WARNING_CODE = re.compile(r'^[a-z][a-z0-9_ -]{0,63}$')
 _PLACEHOLDER_ROW = re.compile(
     r'^(?:(?:awaiting|tbd|placeholder|sample placeholder|text unavailable|'
     r'no text available|not yet added|to be added)[\s.!?…—-]*|lorem ipsum\b.*)$',
+    re.IGNORECASE,
+)
+_OPERATIONAL_AWAITING_ROW = re.compile(
+    r'^(?=.*\bawaiting\b)(?=.*\b(?:source|text|translation|verification|upload|import)\b).+$',
+    re.IGNORECASE,
+)
+_UNAVAILABLE_TEXT_ROW = re.compile(
+    r'^(?:text unavailable|no text available)'
+    r'(?:\s+(?:for|from|in)\s+(?:(?:this|the)\s+)?(?:book|chapter|source))?'
+    r'[\s.!?…—-]*$',
     re.IGNORECASE,
 )
 _BRACKETED_DESCRIPTION = re.compile(
@@ -195,8 +205,31 @@ def _is_unsafe_text(text: object) -> bool:
 def _is_placeholder(text: str) -> bool:
     return bool(
         _PLACEHOLDER_ROW.fullmatch(text)
+        or _OPERATIONAL_AWAITING_ROW.fullmatch(text)
+        or _UNAVAILABLE_TEXT_ROW.fullmatch(text)
         or _BRACKETED_DESCRIPTION.fullmatch(text)
     )
+
+
+def _missing_verse_ranges(
+    observed_verses: set[int], maximum: int
+) -> Iterator[tuple[int, int]]:
+    """Yield contiguous missing ranges without expanding the expected domain."""
+    previous = 0
+    for observed in sorted(observed_verses):
+        if observed > maximum:
+            break
+        if observed > previous + 1:
+            yield previous + 1, observed - 1
+        previous = observed
+    if previous < maximum:
+        yield previous + 1, maximum
+
+
+def _missing_verse_message(start: int, end: int) -> str:
+    if start == end:
+        return f'Expected verse {start} is not present.'
+    return f'Expected verses {start}–{end} are not present.'
 
 
 def _positive_position(row: NormalizedVerse) -> tuple[str, int, int] | None:
@@ -329,9 +362,11 @@ def validate_edition(
                 continue
             expected_verse_count = coverage.verse_counts.get(chapter)
             maximum = expected_verse_count if expected_verse_count is not None else max(verses_in_chapter)
-            for verse in range(1, maximum + 1):
-                if verse not in verses_in_chapter:
-                    findings.append(ValidationFinding('error', 'missing_verse', 'Expected verse is not present.', work_id, chapter, verse))
+            for start, end in _missing_verse_ranges(verses_in_chapter, maximum):
+                findings.append(ValidationFinding(
+                    'error', 'missing_verse', _missing_verse_message(start, end),
+                    work_id, chapter, start,
+                ))
 
     for work_id, chapters in observed.items():
         coverage = expected.get(work_id)
