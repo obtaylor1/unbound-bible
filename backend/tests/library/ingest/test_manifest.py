@@ -354,6 +354,50 @@ def test_manifest_schema_does_not_require_adapter_options():
     assert 'adapter_options' not in SourceManifest.model_json_schema()['required']
 
 
+def test_manifest_schema_correlates_adapters_with_option_definitions():
+    schema = SourceManifest.model_json_schema()
+    expected_definitions = {
+        'usfm': 'UsfmAdapterOptions',
+        'ertale': 'ErtaleAdapterOptions',
+        'wikisource': 'WikisourceAdapterOptions',
+    }
+
+    correlations = {
+        branch['if']['properties']['adapter']['const']:
+            branch['then']['properties']['adapter_options']
+        for branch in schema['allOf']
+    }
+
+    assert correlations == {
+        adapter: schema['$defs'][definition]
+        for adapter, definition in expected_definitions.items()
+    }
+
+
+def test_manifest_schema_validator_enforces_adapter_option_correlation():
+    jsonschema = pytest.importorskip('jsonschema')
+    validator = jsonschema.Draft202012Validator(SourceManifest.model_json_schema())
+    matching_options = {
+        'usfm': {'strip_notes': True},
+        'ertale': {'book_map': {'GEN': 'genesis'}},
+        'wikisource': {'page_map': {'Genesis 1': 'genesis'}},
+    }
+
+    for adapter, adapter_options in matching_options.items():
+        matching = manifest_with(adapter=adapter, adapter_options=adapter_options)
+        assert not list(validator.iter_errors(matching))
+
+        omitted = manifest_with(adapter=adapter)
+        omitted.pop('adapter_options')
+        assert not list(validator.iter_errors(omitted))
+
+    mismatched = manifest_with(
+        adapter='usfm',
+        adapter_options={'page_map': {'Genesis 1': 'genesis'}},
+    )
+    assert list(validator.iter_errors(mismatched))
+
+
 @pytest.mark.parametrize(
     ('adapter', 'options', 'mapping_name'),
     (

@@ -218,12 +218,30 @@ _ADAPTER_OPTIONS_MODELS: dict[AdapterId, type[BaseModel]] = {
     'ertale': ErtaleAdapterOptions,
     'wikisource': WikisourceAdapterOptions,
 }
+_ADAPTER_SCHEMA_CORRELATIONS = [
+    {
+        'if': {
+            'properties': {'adapter': {'const': adapter}},
+            'required': ['adapter'],
+        },
+        'then': {
+            'properties': {
+                'adapter_options': options_model.model_json_schema(),
+            },
+        },
+    }
+    for adapter, options_model in _ADAPTER_OPTIONS_MODELS.items()
+]
 
 
 class SourceManifest(BaseModel):
     """Licensed provenance and expected coverage for a scripture edition."""
 
-    model_config = ConfigDict(extra='forbid', strict=True)
+    model_config = ConfigDict(
+        extra='forbid',
+        strict=True,
+        json_schema_extra={'allOf': _ADAPTER_SCHEMA_CORRELATIONS},
+    )
 
     edition_code: EditionCode
     name: EditionName
