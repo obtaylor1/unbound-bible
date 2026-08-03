@@ -32,6 +32,7 @@ INGEST_TABLES = {
     'staged_scripture_verses',
     'scripture_validation_findings',
     'scripture_publications',
+    'scripture_publication_verses',
 }
 
 
@@ -59,6 +60,10 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
     assert {column['name'] for column in inspector.get_columns('scripture_publications')} == {
         'id', 'edition_code', 'run_id', 'previous_run_id', 'publication_version', 'published_at', 'active',
     }
+    assert {column['name'] for column in inspector.get_columns('scripture_publication_verses')} == {
+        'id', 'publication_id', 'work_id', 'source_book', 'chapter', 'verse',
+        'normalized_text', 'source_locator', 'row_checksum',
+    }
 
     checks = {
         table: {item['name'] for item in inspector.get_check_constraints(table)}
@@ -82,6 +87,11 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
         'ck_scripture_validation_findings_verse_positive',
     }
     assert checks['scripture_publications'] >= {'ck_scripture_publications_version_positive'}
+    assert checks['scripture_publication_verses'] >= {
+        'ck_scripture_publication_verses_chapter_positive',
+        'ck_scripture_publication_verses_verse_positive',
+        'ck_scripture_publication_verses_row_checksum_length',
+    }
 
     uniques = {item['name'] for item in inspector.get_unique_constraints('staged_scripture_verses')}
     assert 'uq_staged_scripture_verses_run_work_chapter_verse' in uniques
@@ -91,6 +101,9 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
     assert 'uq_scripture_publications_edition_version' in {
         item['name'] for item in inspector.get_unique_constraints('scripture_publications')
     }
+    assert 'uq_scripture_publication_verses_publication_work_chapter_verse' in {
+        item['name'] for item in inspector.get_unique_constraints('scripture_publication_verses')
+    }
     assert {item['name'] for item in inspector.get_indexes('staged_scripture_verses')} >= {
         'ix_staged_scripture_verses_run_id', 'ix_staged_scripture_verses_work_id',
         'ix_staged_scripture_verses_row_checksum',
@@ -98,12 +111,21 @@ def test_ingestion_schema_has_exact_columns_named_constraints_foreign_keys_and_i
     assert 'uq_scripture_publications_active_edition' in {
         item['name'] for item in inspector.get_indexes('scripture_publications')
     }
+    assert {item['name'] for item in inspector.get_indexes('scripture_publication_verses')} >= {
+        'ix_scripture_publication_verses_publication_id',
+        'ix_scripture_publication_verses_work_id',
+        'ix_scripture_publication_verses_row_checksum',
+    }
     assert {item['referred_table'] for item in inspector.get_foreign_keys('staged_scripture_verses')} == {
         'scripture_ingest_runs', 'library_works'
     }
     assert {item['referred_table'] for item in inspector.get_foreign_keys('scripture_publications')} == {
         'text_editions', 'scripture_ingest_runs'
     }
+    assert {
+        item['referred_table']
+        for item in inspector.get_foreign_keys('scripture_publication_verses')
+    } == {'scripture_publications', 'library_works'}
     publication_foreign_keys = {
         item['name']: (
             item['constrained_columns'], item['referred_columns'], item['options'].get('ondelete')

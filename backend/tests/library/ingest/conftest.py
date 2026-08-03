@@ -25,6 +25,7 @@ def make_ingest_run(session, edition_code, text, status='verified', finding=None
         ScriptureValidationFinding,
         StagedScriptureVerse,
     )
+    from app.library.ingest.types import row_checksum
 
     if session.get(TextEdition, edition_code) is None:
         session.add(TextEdition(
@@ -56,7 +57,9 @@ def make_ingest_run(session, edition_code, text, status='verified', finding=None
         verse=1,
         normalized_text=text,
         source_locator='genesis.usfm:1:1',
-        row_checksum=sha256(f'genesis:1:1:{text}'.encode()).hexdigest(),
+        row_checksum=row_checksum(
+            'genesis', 'Genesis', 1, 1, text, 'genesis.usfm:1:1'
+        ),
     ))
     if finding is not None:
         session.add(ScriptureValidationFinding(run_id=run.id, **finding))

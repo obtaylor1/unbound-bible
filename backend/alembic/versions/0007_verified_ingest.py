@@ -202,6 +202,53 @@ def upgrade() -> None:
         postgresql_where=sa.column('active').is_(True),
     )
 
+    op.create_table(
+        'scripture_publication_verses',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('publication_id', sa.Integer(), nullable=False),
+        sa.Column('work_id', sa.String(length=100), nullable=False),
+        sa.Column('source_book', sa.String(length=100), nullable=False),
+        sa.Column('chapter', sa.Integer(), nullable=False),
+        sa.Column('verse', sa.Integer(), nullable=False),
+        sa.Column('normalized_text', sa.Text(), nullable=False),
+        sa.Column('source_locator', sa.String(length=2048), nullable=False),
+        sa.Column('row_checksum', sa.String(length=64), nullable=False),
+        sa.CheckConstraint(
+            'chapter > 0', name='ck_scripture_publication_verses_chapter_positive'
+        ),
+        sa.CheckConstraint(
+            'verse > 0', name='ck_scripture_publication_verses_verse_positive'
+        ),
+        sa.CheckConstraint(
+            'length(row_checksum) = 64',
+            name='ck_scripture_publication_verses_row_checksum_length',
+        ),
+        sa.ForeignKeyConstraint(
+            ['publication_id'], ['scripture_publications.id'], ondelete='CASCADE'
+        ),
+        sa.ForeignKeyConstraint(['work_id'], ['library_works.id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint(
+            'publication_id', 'work_id', 'chapter', 'verse',
+            name='uq_scripture_publication_verses_publication_work_chapter_verse',
+        ),
+    )
+    op.create_index(
+        'ix_scripture_publication_verses_publication_id',
+        'scripture_publication_verses',
+        ['publication_id'],
+    )
+    op.create_index(
+        'ix_scripture_publication_verses_work_id',
+        'scripture_publication_verses',
+        ['work_id'],
+    )
+    op.create_index(
+        'ix_scripture_publication_verses_row_checksum',
+        'scripture_publication_verses',
+        ['row_checksum'],
+    )
+
     if legacy_table_present:
         legacy_index = _legacy_identity_index()
         op.create_index(
@@ -219,6 +266,19 @@ def downgrade() -> None:
     if LEGACY_TABLE in inspector.get_table_names() and _legacy_index_exists(bind):
         op.drop_index(LEGACY_INDEX, table_name=LEGACY_TABLE)
 
+    op.drop_index(
+        'ix_scripture_publication_verses_row_checksum',
+        table_name='scripture_publication_verses',
+    )
+    op.drop_index(
+        'ix_scripture_publication_verses_work_id',
+        table_name='scripture_publication_verses',
+    )
+    op.drop_index(
+        'ix_scripture_publication_verses_publication_id',
+        table_name='scripture_publication_verses',
+    )
+    op.drop_table('scripture_publication_verses')
     op.drop_index('uq_scripture_publications_active_edition', table_name='scripture_publications')
     op.drop_table('scripture_publications')
     op.drop_index('ix_scripture_validation_findings_work_position', table_name='scripture_validation_findings')

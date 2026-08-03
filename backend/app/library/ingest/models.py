@@ -150,3 +150,36 @@ class ScripturePublication(Base):
     active: Mapped[bool] = mapped_column(
         Boolean(create_constraint=True), nullable=False, default=True, server_default='1'
     )
+
+
+class ScripturePublicationVerse(Base):
+    __tablename__ = 'scripture_publication_verses'
+    __table_args__ = (
+        UniqueConstraint(
+            'publication_id', 'work_id', 'chapter', 'verse',
+            name='uq_scripture_publication_verses_publication_work_chapter_verse',
+        ),
+        CheckConstraint('chapter > 0', name='ck_scripture_publication_verses_chapter_positive'),
+        CheckConstraint('verse > 0', name='ck_scripture_publication_verses_verse_positive'),
+        CheckConstraint(
+            'length(row_checksum) = 64',
+            name='ck_scripture_publication_verses_row_checksum_length',
+        ),
+        Index('ix_scripture_publication_verses_publication_id', 'publication_id'),
+        Index('ix_scripture_publication_verses_work_id', 'work_id'),
+        Index('ix_scripture_publication_verses_row_checksum', 'row_checksum'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    publication_id: Mapped[int] = mapped_column(
+        ForeignKey('scripture_publications.id', ondelete='CASCADE'), nullable=False
+    )
+    work_id: Mapped[str] = mapped_column(
+        ForeignKey('library_works.id', ondelete='CASCADE'), nullable=False
+    )
+    source_book: Mapped[str] = mapped_column(String(100), nullable=False)
+    chapter: Mapped[int] = mapped_column(Integer, nullable=False)
+    verse: Mapped[int] = mapped_column(Integer, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_locator: Mapped[str] = mapped_column(String(2048), nullable=False)
+    row_checksum: Mapped[str] = mapped_column(String(64), nullable=False)

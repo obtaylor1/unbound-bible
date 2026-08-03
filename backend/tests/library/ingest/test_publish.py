@@ -1,10 +1,16 @@
 from dataclasses import FrozenInstanceError
+import sqlite3
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError
 
-from app.library.ingest.models import ScripturePublication, StagedScriptureVerse
+from app.library.ingest.models import (
+    ScripturePublication,
+    ScripturePublicationVerse,
+    StagedScriptureVerse,
+)
 from app.library.models import EditionCoverage, TextEdition
 
 
@@ -73,6 +79,15 @@ def test_publish_replaces_only_target_edition_with_canonical_books_and_coverage(
         StagedScriptureVerse.run_id == run.id
     ))
     staged.source_book = 'Arbitrary source label'
+    from app.library.ingest.types import row_checksum
+    staged.row_checksum = row_checksum(
+        staged.work_id,
+        staged.source_book,
+        staged.chapter,
+        staged.verse,
+        staged.normalized_text,
+        staged.source_locator,
+    )
     ingest_session.flush()
     set_edition(ingest_session, 'target', relationship='exact_ethiopian', reading_language='English')
 
@@ -120,6 +135,22 @@ def test_publish_is_checksum_idempotent_without_mutating_requested_run(ingest_se
     assert ingest_session.scalars(select(ScripturePublication).where(
         ScripturePublication.edition_code == 'target'
     )).all() == [active_publication(ingest_session, 'target')]
+
+
+def test_exact_active_run_retry_is_a_noop_after_run_is_published(ingest_session):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Published once')
+    first = publish_run(ingest_session, run.id)
+
+    retry = publish_run(ingest_session, run.id)
+
+    assert retry == type(first)('target', run.id, 1, False, 1)
+    assert len(ingest_session.scalars(select(ScripturePublication).where(
+        ScripturePublication.edition_code == 'target'
+    )).all()) == 1
 
 
 @pytest.mark.parametrize('status,finding,remove_staged_rows', [
@@ -289,6 +320,61 @@ def test_publish_failure_after_delete_rolls_back_all_target_state(ingest_session
     )) == before_coverage
 
 
+def test_publish_copies_a_checksum_verified_immutable_snapshot(ingest_session):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Snapshot text')
+
+    publish_run(ingest_session, run.id)
+
+    publication = active_publication(ingest_session, 'target')
+    snapshot = ingest_session.scalar(select(ScripturePublicationVerse).where(
+        ScripturePublicationVerse.publication_id == publication.id
+    ))
+    staged = ingest_session.scalar(select(StagedScriptureVerse).where(
+        StagedScriptureVerse.run_id == run.id
+    ))
+    assert (
+        snapshot.work_id,
+        snapshot.source_book,
+        snapshot.chapter,
+        snapshot.verse,
+        snapshot.normalized_text,
+        snapshot.source_locator,
+        snapshot.row_checksum,
+    ) == (
+        staged.work_id,
+        staged.source_book,
+        staged.chapter,
+        staged.verse,
+        staged.normalized_text,
+        staged.source_locator,
+        staged.row_checksum,
+    )
+
+
+def test_publish_blocks_staged_checksum_mismatch_before_mutation(ingest_session):
+    from app.library.ingest.publish import PublicationBlocked, publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Corrupt staging')
+    staged = ingest_session.scalar(select(StagedScriptureVerse).where(
+        StagedScriptureVerse.run_id == run.id
+    ))
+    staged.row_checksum = '0' * 64
+    ingest_session.flush()
+
+    with pytest.raises(PublicationBlocked, match='checksum'):
+        publish_run(ingest_session, run.id)
+
+    assert legacy_rows(ingest_session, 'target') == []
+    assert active_publication(ingest_session, 'target') is None
+    assert run.status == 'verified'
+
+
 def test_publish_refuses_missing_legacy_schema_before_state_changes(ingest_session):
     from app.library.ingest.publish import PublicationBlocked, publish_run
     from .conftest import make_ingest_run
@@ -334,6 +420,140 @@ def test_rollback_restores_immediately_previous_rows_and_refuses_to_oscillate(in
     assert active_publication(ingest_session, 'target').run_id == old.id
 
 
+def test_rollback_uses_snapshot_after_old_staging_is_mutated_and_deleted(ingest_session):
+    from app.library.ingest.publish import publish_run, rollback_edition
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    old = make_ingest_run(ingest_session, 'target', 'Immutable old text')
+    publish_run(ingest_session, old.id)
+    old_staged = ingest_session.scalar(select(StagedScriptureVerse).where(
+        StagedScriptureVerse.run_id == old.id
+    ))
+    old_staged.normalized_text = 'Tampered staging text'
+    ingest_session.flush()
+    ingest_session.execute(delete(StagedScriptureVerse).where(
+        StagedScriptureVerse.run_id == old.id
+    ))
+    new = make_ingest_run(ingest_session, 'target', 'New text')
+    publish_run(ingest_session, new.id)
+
+    rollback_edition(ingest_session, 'target')
+
+    assert legacy_rows(ingest_session, 'target') == [
+        ('Genesis', 1, 1, 'Immutable old text', 'target')
+    ]
+
+
+def test_corrupt_snapshot_blocks_rollback_without_changes(ingest_session):
+    from app.library.ingest.publish import PublicationBlocked, publish_run, rollback_edition
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    old = make_ingest_run(ingest_session, 'target', 'Old text')
+    publish_run(ingest_session, old.id)
+    old_publication = active_publication(ingest_session, 'target')
+    snapshot = ingest_session.scalar(select(ScripturePublicationVerse).where(
+        ScripturePublicationVerse.publication_id == old_publication.id
+    ))
+    snapshot.row_checksum = '0' * 64
+    ingest_session.flush()
+    new = make_ingest_run(ingest_session, 'target', 'Current text')
+    publish_run(ingest_session, new.id)
+    current = active_publication(ingest_session, 'target')
+    rows_before = legacy_rows(ingest_session, 'target')
+
+    with pytest.raises(PublicationBlocked, match='snapshot.*checksum'):
+        rollback_edition(ingest_session, 'target')
+
+    assert legacy_rows(ingest_session, 'target') == rows_before
+    assert active_publication(ingest_session, 'target').id == current.id
+    assert new.status == 'published'
+
+
+def test_rollback_walks_five_version_lineage_without_oscillation(ingest_session):
+    from app.library.ingest.publish import RollbackUnavailable, publish_run, rollback_edition
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    runs = [make_ingest_run(ingest_session, 'target', text_value) for text_value in ('A', 'B', 'C')]
+    for run in runs:
+        publish_run(ingest_session, run.id)
+
+    rollback_edition(ingest_session, 'target')
+    rollback_edition(ingest_session, 'target')
+
+    history = ingest_session.scalars(select(ScripturePublication).where(
+        ScripturePublication.edition_code == 'target'
+    ).order_by(ScripturePublication.publication_version)).all()
+    assert [publication.run_id for publication in history] == [
+        runs[0].id, runs[1].id, runs[2].id, runs[1].id, runs[0].id
+    ]
+    assert [publication.previous_run_id for publication in history] == [
+        None, runs[0].id, runs[1].id, runs[0].id, None
+    ]
+    assert [publication.active for publication in history] == [False, False, False, False, True]
+    assert [run.status for run in runs] == ['published', 'rolled_back', 'rolled_back']
+    assert all(ingest_session.scalar(select(ScripturePublicationVerse.id).where(
+        ScripturePublicationVerse.publication_id == publication.id
+    )) is not None for publication in history)
+    with pytest.raises(RollbackUnavailable):
+        rollback_edition(ingest_session, 'target')
+
+
+def test_service_owned_transaction_persists_after_reopen(test_settings):
+    from app.application import create_application
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    application = create_application(test_settings)
+    factory = application.state.session_factory
+    with factory() as setup:
+        create_legacy_texts(setup)
+        run = make_ingest_run(setup, 'target', 'Durable text')
+        setup.commit()
+        run_id = run.id
+    with factory() as service_session:
+        assert not service_session.in_transaction()
+        publish_run(service_session, run_id)
+        assert not service_session.in_transaction()
+    with factory() as reopened:
+        assert legacy_rows(reopened, 'target') == [
+            ('Genesis', 1, 1, 'Durable text', 'target')
+        ]
+        assert active_publication(reopened, 'target').run_id == run_id
+        assert reopened.scalar(select(EditionCoverage.id).where(
+            EditionCoverage.edition_code == 'target'
+        )) is not None
+
+
+def test_caller_rollback_removes_successful_savepoint_publication(test_settings):
+    from app.application import create_application
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    application = create_application(test_settings)
+    factory = application.state.session_factory
+    with factory() as setup:
+        create_legacy_texts(setup)
+        run = make_ingest_run(setup, 'target', 'Caller-owned text')
+        setup.commit()
+        run_id = run.id
+    with factory() as caller:
+        transaction = caller.begin()
+        publish_run(caller, run_id)
+        assert legacy_rows(caller, 'target') == [
+            ('Genesis', 1, 1, 'Caller-owned text', 'target')
+        ]
+        transaction.rollback()
+    with factory() as reopened:
+        assert legacy_rows(reopened, 'target') == []
+        assert active_publication(reopened, 'target') is None
+        assert reopened.scalar(select(EditionCoverage.id).where(
+            EditionCoverage.edition_code == 'target'
+        )) is None
+
+
 def test_publish_run_not_found_and_rollback_is_scoped_to_its_edition(ingest_session):
     from app.library.ingest.publish import PublicationNotFound, publish_run, rollback_edition
     from .conftest import make_ingest_run
@@ -347,3 +567,115 @@ def test_publish_run_not_found_and_rollback_is_scoped_to_its_edition(ingest_sess
     with pytest.raises(PublicationNotFound):
         rollback_edition(ingest_session, 'target')
     assert active_publication(ingest_session, 'other').run_id == other.id
+
+
+def test_publish_and_rollback_lock_edition_history_then_runs_in_uuid_order(
+    ingest_session, monkeypatch
+):
+    import app.library.ingest.publish as publisher
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    first = make_ingest_run(ingest_session, 'target', 'First')
+    publisher.publish_run(ingest_session, first.id)
+    second = make_ingest_run(ingest_session, 'target', 'Second')
+
+    original_edition = publisher._lock_edition
+    original_history = publisher._lock_publication_history
+    original_runs = publisher._lock_runs
+    calls = []
+
+    def lock_edition(session, edition_code):
+        calls.append('edition')
+        return original_edition(session, edition_code)
+
+    def lock_history(session, edition_code):
+        calls.append('history')
+        return original_history(session, edition_code)
+
+    def lock_runs(session, run_ids):
+        locked = original_runs(session, run_ids)
+        calls.append(('runs', tuple(locked)))
+        return locked
+
+    monkeypatch.setattr(publisher, '_lock_edition', lock_edition)
+    monkeypatch.setattr(publisher, '_lock_publication_history', lock_history)
+    monkeypatch.setattr(publisher, '_lock_runs', lock_runs)
+
+    publisher.publish_run(ingest_session, second.id)
+    assert calls == [
+        'edition',
+        'history',
+        ('runs', tuple(sorted((first.id, second.id), key=lambda value: value.hex))),
+    ]
+
+    third = make_ingest_run(ingest_session, 'target', 'Third')
+    calls.clear()
+    publisher.publish_run(ingest_session, third.id)
+    calls.clear()
+    publisher.rollback_edition(ingest_session, 'target')
+    assert calls == [
+        'edition',
+        'history',
+        ('runs', tuple(sorted((first.id, second.id, third.id), key=lambda value: value.hex))),
+    ]
+
+
+def test_sqlite_edition_write_lock_serializes_competing_publishers(test_settings):
+    import app.library.ingest.publish as publisher
+    from app.application import create_application
+    from .conftest import make_ingest_run
+
+    application = create_application(test_settings)
+    factory = application.state.session_factory
+    with factory() as setup:
+        create_legacy_texts(setup)
+        run = make_ingest_run(setup, 'target', 'Competing text')
+        setup.commit()
+        run_id = run.id
+
+    with factory() as first, factory() as competing:
+        competing.connection().exec_driver_sql('PRAGMA busy_timeout=50')
+        outer = first.begin()
+        publisher._lock_edition(first, 'target')
+
+        with pytest.raises(publisher.PublicationConflict, match='Concurrent publication'):
+            publisher.publish_run(competing, run_id)
+
+        outer.rollback()
+    with factory() as reopened:
+        assert active_publication(reopened, 'target') is None
+        assert legacy_rows(reopened, 'target') == []
+
+
+def test_only_recognized_publication_integrity_races_are_translated(
+    ingest_session, monkeypatch
+):
+    import app.library.ingest.publish as publisher
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Conflict text')
+
+    def recognized_race(*_args, **_kwargs):
+        raise IntegrityError(
+            'insert',
+            {},
+            sqlite3.IntegrityError(
+                'UNIQUE constraint failed: scripture_publications.edition_code, '
+                'scripture_publications.publication_version'
+            ),
+        )
+
+    monkeypatch.setattr(publisher, '_copy_snapshot', recognized_race)
+    with pytest.raises(publisher.PublicationConflict, match='Concurrent publication'):
+        publisher.publish_run(ingest_session, run.id)
+
+    def unrelated_integrity_error(*_args, **_kwargs):
+        raise IntegrityError(
+            'insert', {}, sqlite3.IntegrityError('FOREIGN KEY constraint failed')
+        )
+
+    monkeypatch.setattr(publisher, '_copy_snapshot', unrelated_integrity_error)
+    with pytest.raises(IntegrityError, match='FOREIGN KEY'):
+        publisher.publish_run(ingest_session, run.id)
