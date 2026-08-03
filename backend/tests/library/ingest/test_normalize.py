@@ -66,10 +66,10 @@ def test_normalizes_combining_characters_and_unicode_whitespace():
     assert verse.text == 'caf\u00e9 and grace'
 
 
-def test_preserves_legitimate_comparison_and_ampersand_text():
-    verse = normalize_verse('Genesis', 1, 1, 'For 2 < 3, and A & B remain.')
+def test_preserves_legitimate_comparison_ampersand_and_non_tag_angle_text():
+    verse = normalize_verse('Genesis', 1, 1, 'For 2 < 3, <1> is not a tag, and A & B remain.')
 
-    assert verse.text == 'For 2 < 3, and A & B remain.'
+    assert verse.text == 'For 2 < 3, <1> is not a tag, and A & B remain.'
 
 
 @pytest.mark.parametrize('markup', [
@@ -83,6 +83,30 @@ def test_preserves_legitimate_comparison_and_ampersand_text():
 def test_rejects_html_and_xml_markup_instead_of_stripping_it(markup):
     with pytest.raises(ValueError, match='markup'):
         normalize_verse('Genesis', 1, 1, markup)
+
+
+@pytest.mark.parametrize('markup', [
+    '<_verse>word</_verse>',
+    '</_verse>',
+    '<ns:verse source="import">word</ns:verse>',
+    '<π/>',
+    '<ሕግ n="1">word</ሕግ>',
+])
+def test_rejects_xml_tags_with_all_valid_name_start_forms_in_text(markup):
+    with pytest.raises(ValueError, match='markup'):
+        normalize_verse('Genesis', 1, 1, markup)
+
+
+@pytest.mark.parametrize('markup', [
+    '<_source/>',
+    '</_source>',
+    '<ns:source path="file"/>',
+    '<π source="file"/>',
+    '<ምንጭ>file</ምንጭ>',
+])
+def test_rejects_xml_tags_with_all_valid_name_start_forms_in_locator(markup):
+    with pytest.raises(ValueError, match='source_locator.*markup'):
+        normalize_verse('Genesis', 1, 1, 'In the beginning', markup)
 
 
 @pytest.mark.parametrize('text', ['', '  \u00a0\n\u2009  '])
