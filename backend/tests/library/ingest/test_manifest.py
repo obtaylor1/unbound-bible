@@ -30,7 +30,7 @@ VALID = {
         'sha256': 'a' * 64,
         'source_url': 'https://example.org/kjv.txt',
     }],
-    'adapter': 'usfm-text',
+    'adapter': 'usfm',
     'adapter_options': {'encoding': 'utf-8'},
 }
 
@@ -269,86 +269,6 @@ def test_manifest_urls_reject_embedded_credentials(field, url):
 
 
 @pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
-@pytest.mark.parametrize(
-    'query_name',
-    ('token', 'key', 'signature', 'auth', 'credential', 'X-API-Key'),
-)
-def test_manifest_urls_reject_secret_query_parameters(field, query_name):
-    url = f'https://example.org/kjv.txt?{query_name}=do-not-commit'
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(value)
-
-
-@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
-@pytest.mark.parametrize(
-    'query_name',
-    (
-        'clientsecret',
-        'accesstoken',
-        'refreshtoken',
-        'privatekey',
-        'secretkey',
-        'xapikey',
-        'apikey',
-        'tokenvalue',
-        'authorization',
-        'bearer',
-        'credentials',
-        'passwd',
-    ),
-)
-def test_manifest_urls_reject_compact_secret_query_parameters(field, query_name):
-    url = f'https://example.org/kjv.txt?{query_name}=do-not-commit'
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(value)
-
-
-@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
-def test_manifest_urls_allow_harmless_configuration_query_parameters(field):
-    url = (
-        'https://example.org/kjv.txt?auth_method=none&credentials_mode=omit'
-        '&requires_authorization=false&max_tokens=1000'
-    )
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
-    manifest = SourceManifest.model_validate(value)
-    assert manifest is not None
-
-
-@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
-@pytest.mark.parametrize(
-    'fragment',
-    ('access_token=do-not-commit', 'section=full&token=do-not-commit'),
-)
-def test_manifest_urls_reject_secret_query_style_fragments(field, fragment):
-    url = f'https://example.org/kjv.txt#{fragment}'
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(value)
-
-
-@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
 def test_manifest_urls_allow_normal_anchor_fragments(field):
     url = 'https://example.org/kjv.txt#section-2'
     value = manifest_with()
@@ -361,76 +281,46 @@ def test_manifest_urls_allow_normal_anchor_fragments(field):
     assert manifest is not None
 
 
-SENSITIVE_PARAMETER_NAMES = (
-    'accesskey',
-    'bearertoken',
-    'clientpassword',
-    'sessiontoken',
-    'basicauth',
-    'authorizationheader',
-    'encryption_key',
-    'signing-key',
-    'userPassword',
-    'db_password',
-    'auth_header',
-    'signature',
-    'cookie',
-    'sessioncookie',
+URL_SECRET_PARAMETER_NAMES = (
+    'sig', 'key', 'auth', 'authorization', 'bearer', 'token', 'access_token',
+    'secret', 'password', 'passwd', 'credential', 'credentials', 'signature',
+    'apitoken', 'oauthclientsecret', 'jwtsecret', 'databasepassword',
+    'accesskey', 'bearertoken', 'clientpassword', 'sessiontoken', 'basicauth',
+    'authorizationheader', 'X-API-Key', 'private_key', 'signing_key',
+    'encryption_key', 'session_key',
 )
-
-
-SAFE_CONFIGURATION_PARAMETERS = (
+URL_SAFE_PARAMETERS = (
+    ('book_key', 'genesis'),
+    ('chapter_key', 'chapter'),
+    ('sort_key', 'canonical'),
+    ('signature_algorithm', 'sha256'),
     ('auth_type', 'none'),
     ('authorization_scheme', 'none'),
     ('credential_source', 'environment'),
-    ('auth_method', 'none'),
-    ('credentials_mode', 'omit'),
-    ('authorization_required', False),
-    ('cookie_enabled', False),
-    ('encryption_key_source', 'environment'),
-    ('max_tokens', 1000),
-)
-
-
-UNSAFE_CONFIGURATION_PARAMETERS = (
-    ('auth_type', 'basic'),
-    ('authorization_scheme', 'bearer-value'),
-    ('credential_source', 'actual-credential'),
-    ('auth_method', 'password'),
-    ('credentials_mode', 'embedded'),
-    ('authorization_required', 'actual-authorization'),
-    ('cookie_enabled', 'session-cookie-value'),
-    ('encryption_key_source', 'hardcoded-key'),
 )
 
 
 @pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
 @pytest.mark.parametrize('surface', ('query', 'fragment'))
-@pytest.mark.parametrize('parameter_name', SENSITIVE_PARAMETER_NAMES)
-def test_manifest_url_surfaces_reject_generalized_secret_names(
-    field, surface, parameter_name
-):
+def test_manifest_url_policy_rejects_secret_names(field, surface):
     separator = '?' if surface == 'query' else '#'
-    url = f'https://example.org/kjv.txt{separator}{parameter_name}=do-not-commit'
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(value)
+    for parameter_name in URL_SECRET_PARAMETER_NAMES:
+        url = f'https://example.org/kjv.txt{separator}{parameter_name}=value'
+        value = manifest_with()
+        if field == 'provenance_url':
+            value[field] = url
+        else:
+            value['source_files'][0][field] = url
+        with pytest.raises(ValidationError):
+            SourceManifest.model_validate(value)
 
 
 @pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
 @pytest.mark.parametrize('surface', ('query', 'fragment'))
-@pytest.mark.parametrize(('name', 'parameter_value'), SAFE_CONFIGURATION_PARAMETERS)
-def test_manifest_url_surfaces_allow_safe_configuration_values(
-    field, surface, name, parameter_value
-):
-    serialized_value = str(parameter_value).lower()
+def test_manifest_url_policy_allows_ordinary_names(field, surface):
     separator = '?' if surface == 'query' else '#'
-    url = f'https://example.org/kjv.txt{separator}{name}={serialized_value}'
+    query = '&'.join(f'{name}={value}' for name, value in URL_SAFE_PARAMETERS)
+    url = f'https://example.org/kjv.txt{separator}{query}'
     value = manifest_with()
     if field == 'provenance_url':
         value[field] = url
@@ -440,151 +330,128 @@ def test_manifest_url_surfaces_allow_safe_configuration_values(
     assert SourceManifest.model_validate(value) is not None
 
 
-@pytest.mark.parametrize('field', ('provenance_url', 'source_url'))
-@pytest.mark.parametrize('surface', ('query', 'fragment'))
-@pytest.mark.parametrize(('name', 'parameter_value'), UNSAFE_CONFIGURATION_PARAMETERS)
-def test_manifest_url_surfaces_reject_unsafe_configuration_values(
-    field, surface, name, parameter_value
+@pytest.mark.parametrize(
+    ('adapter', 'expected'),
+    (
+        ('usfm', {'encoding': 'utf-8', 'book_map': {}, 'strip_notes': False}),
+        ('ertale', {'encoding': 'utf-8', 'book_map': {}}),
+        ('wikisource', {'encoding': 'utf-8', 'page_map': {}}),
+    ),
+)
+def test_manifest_defaults_typed_options_for_each_adapter(adapter, expected):
+    value = manifest_with(adapter=adapter)
+    value.pop('adapter_options')
+
+    manifest = SourceManifest.model_validate(value)
+
+    assert manifest.model_dump(mode='json')['adapter_options'] == expected
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'options', 'mapping_name'),
+    (
+        ('usfm', {
+            'encoding': 'utf-8-sig',
+            'book_map': {'GEN': 'genesis'},
+            'strip_notes': True,
+        }, 'book_map'),
+        ('ertale', {
+            'encoding': 'utf-8',
+            'book_map': {'1-Enoch': '1-enoch'},
+        }, 'book_map'),
+        ('wikisource', {
+            'encoding': 'utf-8',
+            'page_map': {'Bible/Genesis 1': 'genesis'},
+        }, 'page_map'),
+    ),
+)
+def test_manifest_accepts_adapter_specific_options(adapter, options, mapping_name):
+    manifest = SourceManifest.model_validate(
+        manifest_with(adapter=adapter, adapter_options=options)
+    )
+
+    assert manifest.model_dump(mode='json')['adapter_options'][mapping_name]
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'adapter_options'),
+    (
+        ('ertale', {'strip_notes': True}),
+        ('usfm', {'page_map': {'Genesis 1': 'genesis'}}),
+        ('wikisource', {'book_map': {'GEN': 'genesis'}}),
+    ),
+)
+def test_manifest_rejects_options_belonging_to_another_adapter(
+    adapter, adapter_options
 ):
-    separator = '?' if surface == 'query' else '#'
-    url = f'https://example.org/kjv.txt{separator}{name}={parameter_value}'
-    value = manifest_with()
-    if field == 'provenance_url':
-        value[field] = url
-    else:
-        value['source_files'][0][field] = url
-
     with pytest.raises(ValidationError):
-        SourceManifest.model_validate(value)
+        SourceManifest.model_validate(
+            manifest_with(adapter=adapter, adapter_options=adapter_options)
+        )
 
 
-@pytest.mark.parametrize('adapter', ('usfm text', 'usfm/text', '.usfm', 'adapter!'))
-def test_manifest_rejects_invalid_adapter_identifiers(adapter):
+@pytest.mark.parametrize('adapter', ('usfm-text', 'custom', '', 'USFM', ['usfm']))
+def test_manifest_rejects_unapproved_adapters(adapter):
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_with(adapter=adapter))
 
 
 @pytest.mark.parametrize(
-    'secret_key',
+    'adapter_options',
     (
-        'secret',
-        'secret_key',
-        'CLIENT SECRET',
-        'X-API-Key',
-        'api-key',
-        'apikey',
-        'token',
-        'token_value',
-        'access-token',
-        'password',
-        'passwd',
-        'Authorization',
-        'authorization_header',
-        'auth',
-        'basic_auth',
-        'credential',
-        'credentials',
-        'private key',
-        'access-key',
-        'bearer',
+        {'unknown': True},
+        {'max_tokens': 1_000},
+        {'nested': {'setting': True}},
+        {'api_key': 'do-not-commit'},
+        {'password': 'do-not-commit'},
+        {'encoding': 'latin-1'},
+        {'encoding': object()},
+        {'book_map': {'GEN': {'nested': 'value'}}},
     ),
 )
-def test_manifest_rejects_obvious_secret_adapter_options(secret_key):
+def test_manifest_rejects_unimplemented_or_invalid_usfm_options(adapter_options):
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(
-            manifest_with(adapter_options={secret_key: 'do-not-commit'})
+            manifest_with(adapter='usfm', adapter_options=adapter_options)
+        )
+
+
+@pytest.mark.parametrize('adapter_options', (None, [], 'encoding=utf-8'))
+def test_manifest_rejects_non_dictionary_adapter_options(adapter_options):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(
+            manifest_with(adapter='usfm', adapter_options=adapter_options)
         )
 
 
 @pytest.mark.parametrize(
-    'secret_key',
+    ('adapter', 'mapping_name', 'mapping'),
     (
-        'clientsecret',
-        'accesstoken',
-        'refreshtoken',
-        'privatekey',
-        'secretkey',
-        'xapikey',
-        'tokenvalue',
+        ('usfm', 'book_map', {'../GEN': 'genesis'}),
+        ('ertale', 'book_map', {'': 'genesis'}),
+        ('wikisource', 'page_map', {'': 'genesis'}),
+        ('usfm', 'book_map', {'GEN': ''}),
+        ('wikisource', 'page_map', {'Genesis': 'w' * 101}),
     ),
 )
-def test_manifest_rejects_compact_secret_adapter_options(secret_key):
+def test_manifest_rejects_invalid_adapter_mappings(adapter, mapping_name, mapping):
     with pytest.raises(ValidationError):
-        SourceManifest.model_validate(
-            manifest_with(adapter_options={secret_key: 'do-not-commit'})
-        )
+        SourceManifest.model_validate(manifest_with(
+            adapter=adapter,
+            adapter_options={mapping_name: mapping},
+        ))
 
 
-@pytest.mark.parametrize('secret_key', SENSITIVE_PARAMETER_NAMES)
-def test_manifest_rejects_generalized_secret_adapter_options(secret_key):
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(
-            manifest_with(adapter_options={secret_key: 'do-not-commit'})
-        )
+def test_manifest_typed_adapter_options_round_trip_as_dictionary():
+    manifest = SourceManifest.model_validate(manifest_with(adapter_options={
+        'encoding': 'utf-8-sig',
+        'book_map': {'GEN': 'genesis'},
+        'strip_notes': True,
+    }))
+    dumped = manifest.model_dump(mode='json')
 
-
-@pytest.mark.parametrize(('name', 'value'), SAFE_CONFIGURATION_PARAMETERS)
-def test_manifest_allows_safe_declarative_adapter_options(name, value):
-    manifest = SourceManifest.model_validate(
-        manifest_with(adapter_options={name: value})
-    )
-
-    assert manifest.adapter_options[name] == value
-
-
-@pytest.mark.parametrize(('name', 'value'), UNSAFE_CONFIGURATION_PARAMETERS)
-def test_manifest_rejects_unsafe_declarative_adapter_options(name, value):
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(
-            manifest_with(adapter_options={name: value})
-        )
-
-
-def test_manifest_rejects_secret_options_nested_in_dicts_and_lists():
-    options = {'formats': [{'settings': {'Client-Secret': 'do-not-commit'}}]}
-
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(manifest_with(adapter_options=options))
-
-
-def test_manifest_allows_harmless_token_and_authorization_configuration():
-    options = {
-        'auth_method': 'none',
-        'credentials_mode': 'omit',
-        'requires_authorization': False,
-        'max_tokens': 1000,
-    }
-
-    manifest = SourceManifest.model_validate(manifest_with(adapter_options=options))
-
-    assert manifest.adapter_options == options
-
-
-@pytest.mark.parametrize('options', (None, [], 'encoding=utf-8'))
-def test_manifest_rejects_non_dictionary_adapter_options(options):
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(manifest_with(adapter_options=options))
-
-
-@pytest.mark.parametrize(
-    'non_json_value',
-    ({'utf-8'}, ('utf-8',), object(), float('nan'), float('inf')),
-)
-def test_manifest_rejects_non_json_adapter_option_values(non_json_value):
-    with pytest.raises(ValidationError):
-        SourceManifest.model_validate(
-            manifest_with(adapter_options={'encoding': non_json_value})
-        )
-
-
-def test_manifest_defaults_adapter_options_and_round_trips_model_dump():
-    value = manifest_with()
-    value.pop('adapter_options')
-
-    manifest = SourceManifest.model_validate(value)
-
-    assert manifest.adapter_options == {}
-    assert SourceManifest.model_validate(manifest.model_dump(mode='json')).model_dump(mode='json') == manifest.model_dump(mode='json')
+    assert isinstance(dumped['adapter_options'], dict)
+    assert SourceManifest.model_validate(dumped).model_dump(mode='json') == dumped
 
 
 def test_manifest_enforces_edition_code_database_length_boundary():

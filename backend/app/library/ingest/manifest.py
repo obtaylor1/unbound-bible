@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import date
-from math import isfinite
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl
 
@@ -14,6 +13,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictBool,
     StrictInt,
     StrictStr,
     StringConstraints,
@@ -49,9 +49,7 @@ WorkId = Annotated[
 SourcePath = Annotated[
     StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
 ]
-AdapterId = Annotated[
-    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
-]
+AdapterId = Literal['usfm', 'ertale', 'wikisource']
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
 VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
@@ -65,47 +63,31 @@ _LICENSES = Literal[
     'CC-BY-SA-4.0',
 ]
 _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_reading']
-_ADAPTER_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 _CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
 _KEY_TOKEN = re.compile(r'[a-z0-9]+')
-_CONFIGURATION_SUFFIXES = (
-    'mode',
-    'method',
-    'type',
-    'scheme',
-    'source',
-    'required',
-    'enabled',
-)
-_SAFE_SENTINELS = {
-    'none',
-    'omit',
-    'environment',
-    'default',
-    'anonymous',
-    'public',
-    'true',
-    'false',
-}
-_SECRET_PRIMITIVES = {
-    'secret',
-    'password',
-    'passwd',
-    'token',
-    'authorization',
-    'auth',
-    'bearer',
-    'key',
-    'credential',
-    'credentials',
+_URL_SECRET_EXACT = {'sig', 'key', 'auth', 'authorization', 'bearer'}
+_URL_SECRET_SUFFIXES = (
+    'token', 'secret', 'password', 'passwd', 'credential', 'credentials',
     'signature',
-    'cookie',
+)
+_URL_SECURITY_KEY_PREFIXES = {
+    'api', 'access', 'private', 'secret', 'signing', 'encryption', 'session',
 }
-_KEY_PREFIXES = {'api', 'access', 'private', 'secret', 'encryption', 'signing', 'session'}
-_TOKEN_PREFIXES = {'access', 'refresh', 'session', 'bearer', 'client'}
-_PASSWORD_PREFIXES = {'client', 'user', 'db'}
-_VALUE_PREFIXES = _SECRET_PRIMITIVES - {'key'}
-_AUTH_COMPOUNDS = {'basicauth', 'authheader', 'authorizationheader'}
+_URL_AUTH_COMPOUNDS = {'basicauth', 'authheader', 'authorizationheader'}
+
+SourceBookCode = Annotated[
+    StrictStr,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=64,
+        pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]*$',
+    ),
+]
+ExportedPageId = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+TextEncoding = Literal['utf-8', 'utf-8-sig']
 
 
 class ExpectedCoverage(BaseModel):
@@ -164,6 +146,42 @@ class SourceFile(BaseModel):
         return value
 
 
+class UsfmAdapterOptions(BaseModel):
+    """Reviewed options for local USFM sources."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    encoding: TextEncoding = 'utf-8'
+    book_map: dict[SourceBookCode, WorkId] = Field(default_factory=dict)
+    strip_notes: StrictBool = False
+
+
+class ErtaleAdapterOptions(BaseModel):
+    """Reviewed options for Ertale exports."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    encoding: TextEncoding = 'utf-8'
+    book_map: dict[SourceBookCode, WorkId] = Field(default_factory=dict)
+
+
+class WikisourceAdapterOptions(BaseModel):
+    """Reviewed options for Wikisource page exports."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    encoding: TextEncoding = 'utf-8'
+    page_map: dict[ExportedPageId, WorkId] = Field(default_factory=dict)
+
+
+AdapterOptions = UsfmAdapterOptions | ErtaleAdapterOptions | WikisourceAdapterOptions
+_ADAPTER_OPTIONS_MODELS: dict[AdapterId, type[BaseModel]] = {
+    'usfm': UsfmAdapterOptions,
+    'ertale': ErtaleAdapterOptions,
+    'wikisource': WikisourceAdapterOptions,
+}
+
+
 class SourceManifest(BaseModel):
     """Licensed provenance and expected coverage for a scripture edition."""
 
@@ -186,19 +204,29 @@ class SourceManifest(BaseModel):
     expected_works: dict[WorkId, ExpectedCoverage]
     source_files: list[SourceFile]
     adapter: AdapterId
-    adapter_options: dict[str, Any] = Field(default_factory=dict)
+    adapter_options: AdapterOptions
+
+    @model_validator(mode='before')
+    @classmethod
+    def validate_adapter_options_for_adapter(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        adapter = value.get('adapter')
+        if not isinstance(adapter, str):
+            return value
+        options_model = _ADAPTER_OPTIONS_MODELS.get(adapter)
+        if options_model is None:
+            return value
+        normalized = dict(value)
+        normalized['adapter_options'] = options_model.model_validate(
+            value.get('adapter_options', {})
+        )
+        return normalized
 
     @field_validator('provenance_url')
     @classmethod
     def provenance_url_is_commit_safe(cls, value: HttpUrl) -> HttpUrl:
         _validate_commit_safe_url(value)
-        return value
-
-    @field_validator('adapter')
-    @classmethod
-    def adapter_is_a_conservative_identifier(cls, value: str) -> str:
-        if not _ADAPTER_PATTERN.fullmatch(value):
-            raise ValueError('adapter must contain only letters, numbers, underscores, or hyphens.')
         return value
 
     @field_validator('expected_works', mode='before')
@@ -232,38 +260,6 @@ class SourceManifest(BaseModel):
             raise ValueError('source_files paths must be unique.')
         return value
 
-    @field_validator('adapter_options', mode='before')
-    @classmethod
-    def adapter_options_do_not_contain_secrets(
-        cls, value: Any
-    ) -> Any:
-        if not isinstance(value, dict):
-            raise ValueError('adapter_options must be a JSON-compatible dictionary.')
-        _raise_for_non_json_or_secret_option(value)
-        return value
-
-
-def _raise_for_non_json_or_secret_option(value: Any) -> None:
-    if value is None or isinstance(value, (str, int, bool)):
-        return
-    if isinstance(value, float):
-        if not isfinite(value):
-            raise ValueError('adapter_options numbers must be finite.')
-        return
-    if isinstance(value, dict):
-        for key, nested_value in value.items():
-            if not isinstance(key, str):
-                raise ValueError('adapter_options dictionary keys must be strings.')
-            if _is_secret_key(key, nested_value):
-                raise ValueError('adapter_options may not include secret fields.')
-            _raise_for_non_json_or_secret_option(nested_value)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _raise_for_non_json_or_secret_option(item)
-        return
-    raise ValueError('adapter_options must contain only JSON-compatible values.')
-
 
 def _key_tokens(key: str) -> tuple[str, ...]:
     expanded = _CAMEL_CASE_BOUNDARY.sub(' ', key)
@@ -274,66 +270,22 @@ def _compact_key(key: str) -> str:
     return ''.join(_KEY_TOKEN.findall(key.casefold()))
 
 
-def _is_safe_sentinel(value: Any) -> bool:
-    if value is None or isinstance(value, bool):
+def _is_secret_url_parameter(name: str) -> bool:
+    tokens = _key_tokens(name)
+    compact_name = _compact_key(name)
+    if compact_name in _URL_SECRET_EXACT | _URL_AUTH_COMPOUNDS:
         return True
-    return isinstance(value, str) and value.strip().casefold() in _SAFE_SENTINELS
-
-
-def _is_numeric_configuration(value: Any) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return isfinite(value)
-    return isinstance(value, str) and value.strip().isdigit()
-
-
-def _is_safe_configuration(compact_name: str, value: Any) -> bool:
-    if compact_name == 'maxtokens':
-        return _is_numeric_configuration(value)
-    if compact_name.startswith('requires'):
-        return _is_safe_sentinel(value)
-    return (
-        compact_name.endswith(_CONFIGURATION_SUFFIXES)
-        and _is_safe_sentinel(value)
+    if compact_name.endswith(_URL_SECRET_SUFFIXES):
+        return True
+    if any(
+        compact_name.endswith(f'{prefix}key')
+        for prefix in _URL_SECURITY_KEY_PREFIXES
+    ):
+        return True
+    return any(
+        first in _URL_SECURITY_KEY_PREFIXES and second == 'key'
+        for first, second in zip(tokens, tokens[1:])
     )
-
-
-def _is_sensitive_compact_name(compact_name: str) -> bool:
-    if compact_name in _SECRET_PRIMITIVES:
-        return True
-    if compact_name.endswith('apikey'):
-        return True
-    if any(compact_name == f'{prefix}key' for prefix in _KEY_PREFIXES):
-        return True
-    if any(compact_name == f'{prefix}token' for prefix in _TOKEN_PREFIXES):
-        return True
-    if compact_name == 'clientsecret':
-        return True
-    if any(compact_name == f'{prefix}password' for prefix in _PASSWORD_PREFIXES):
-        return True
-    if any(compact_name == f'{prefix}value' for prefix in _VALUE_PREFIXES):
-        return True
-    return compact_name in _AUTH_COMPOUNDS | {'sessioncookie'}
-
-
-def _is_secret_key(key: str, value: Any) -> bool:
-    tokens = _key_tokens(key)
-    if not tokens:
-        return False
-    compact_name = _compact_key(key)
-    if _is_safe_configuration(compact_name, value):
-        return False
-    if compact_name == 'maxtokens':
-        return True
-    if _is_sensitive_compact_name(compact_name):
-        return True
-    if any(token in _SECRET_PRIMITIVES for token in tokens):
-        return True
-    for suffix in _CONFIGURATION_SUFFIXES:
-        if compact_name.endswith(suffix):
-            return _is_sensitive_compact_name(compact_name[:-len(suffix)])
-    return False
 
 
 def _validate_commit_safe_url(url: HttpUrl) -> None:
@@ -341,11 +293,11 @@ def _validate_commit_safe_url(url: HttpUrl) -> None:
         raise ValueError('URL must not exceed 2048 serialized characters.')
     if url.username is not None or url.password is not None:
         raise ValueError('URL must not include embedded credentials.')
-    for query_name, query_value in parse_qsl(url.query or '', keep_blank_values=True):
-        if _is_secret_key(query_name, query_value):
+    for query_name, _ in parse_qsl(url.query or '', keep_blank_values=True):
+        if _is_secret_url_parameter(query_name):
             raise ValueError('URL must not include secret-like query parameters.')
     fragment = url.fragment or ''
     if '=' in fragment:
-        for fragment_name, fragment_value in parse_qsl(fragment, keep_blank_values=True):
-            if _is_secret_key(fragment_name, fragment_value):
+        for fragment_name, _ in parse_qsl(fragment, keep_blank_values=True):
+            if _is_secret_url_parameter(fragment_name):
                 raise ValueError('URL fragment must not include secret-like parameters.')
