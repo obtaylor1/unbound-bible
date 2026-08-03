@@ -16,13 +16,21 @@ from app.library.ingest.types import NormalizedVerse, contains_markup, normalize
 _CANONICAL_WORKS = (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
 _KNOWN_WORK_IDS = frozenset(work.id for work in _CANONICAL_WORKS)
 _WORK_ORDER = {work.id: index for index, work in enumerate(_CANONICAL_WORKS)}
+_MAX_CHAPTER = 200
+_MAX_VERSE = 1000
 _CODE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 _WARNING_CODE = re.compile(r'^[a-z][a-z0-9_ -]{0,63}$')
-_PLACEHOLDER = re.compile(
-    r'\b(?:awaiting|sample placeholder|text unavailable|no text available|not yet added|to be added|tbd|lorem ipsum)\b',
+_PLACEHOLDER_ROW = re.compile(
+    r'^(?:(?:awaiting|tbd|placeholder|sample placeholder|text unavailable|'
+    r'no text available|not yet added|to be added)[\s.!?…—-]*|lorem ipsum\b.*)$',
     re.IGNORECASE,
 )
-_BRACKETED_DESCRIPTION = re.compile(r'^\[[^\]]*\b(?:book|chapter)\b[^\]]*\]$', re.IGNORECASE)
+_BRACKETED_DESCRIPTION = re.compile(
+    r'^\[(?=[^\]]*(?:\b(?:source|text|book|chapter|awaiting|unavailable|placeholder|tbd)\b|'
+    r'\bnot(?:(?:-| )yet)?(?:-| )added\b|\bto(?:-| )be(?:-| )added\b))'
+    r'[^\]]+\]$',
+    re.IGNORECASE,
+)
 _WARNING_MESSAGES = {
     'related_recension': 'The source is a related recension and requires reviewer context.',
 }
@@ -145,7 +153,7 @@ def _normalize_coverage(expected_works: object) -> dict[str, _Coverage]:
         else:
             raise ValueError(f'expected coverage for {work_id!r} must be an ExpectedCoverage or dictionary.')
 
-        chapter_count = _as_positive_int('chapters', chapters, 200)
+        chapter_count = _as_positive_int('chapters', chapters, _MAX_CHAPTER)
         if type(raw_counts) is not dict:
             raise ValueError(f'expected coverage verse_counts for {work_id!r} must be a dictionary.')
         counts: dict[int, int] = {}
@@ -155,7 +163,7 @@ def _normalize_coverage(expected_works: object) -> dict[str, _Coverage]:
             chapter = int(chapter_key)
             if chapter > chapter_count:
                 raise ValueError(f'expected coverage verse_counts for {work_id!r} exceeds chapters.')
-            counts[chapter] = _as_positive_int('verse_counts value', verse_count, 1000)
+            counts[chapter] = _as_positive_int('verse_counts value', verse_count, _MAX_VERSE)
         normalized[work_id] = _Coverage(chapter_count, counts)
     return normalized
 
@@ -185,10 +193,13 @@ def _is_unsafe_text(text: object) -> bool:
 
 
 def _is_placeholder(text: str) -> bool:
-    return bool(_PLACEHOLDER.search(text) or _BRACKETED_DESCRIPTION.fullmatch(text.strip()))
+    return bool(
+        _PLACEHOLDER_ROW.fullmatch(text)
+        or _BRACKETED_DESCRIPTION.fullmatch(text)
+    )
 
 
-def _safe_position(row: NormalizedVerse) -> tuple[str, int, int] | None:
+def _positive_position(row: NormalizedVerse) -> tuple[str, int, int] | None:
     if type(row.work_id) is not str or row.work_id not in _KNOWN_WORK_IDS:
         return None
     if type(row.chapter) is not int or row.chapter <= 0:
@@ -242,11 +253,21 @@ def validate_edition(
 
     checked_rows: list[tuple[NormalizedVerse, tuple[str, int, int] | None, bool]] = []
     for row in rows:
-        position = _safe_position(row)
+        position = _positive_position(row)
         if position is None:
             findings.append(ValidationFinding(
                 'error', 'unsafe_row', 'Normalized verse identity or source scalars are unsafe.',
                 *_finding_location(row),
+            ))
+            checked_rows.append((row, None, False))
+            continue
+
+        work_id, chapter, verse = position
+        if chapter > _MAX_CHAPTER or verse > _MAX_VERSE:
+            findings.append(ValidationFinding(
+                'error', 'observed_coverage_mismatch',
+                'Observed verse position exceeds validation domain limits.',
+                work_id, chapter, verse,
             ))
             checked_rows.append((row, None, False))
             continue

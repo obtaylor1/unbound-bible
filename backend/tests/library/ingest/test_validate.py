@@ -94,6 +94,9 @@ def test_repeated_text_at_different_positions_is_warning_not_error():
 @pytest.mark.parametrize('text', [
     'They that wait upon the Lord shall renew their strength.',
     'The Lord waited for the people to return.',
+    'There is to be added unto them no other burden.',
+    'Awaiting the moving of the water, a great multitude lay there.',
+    '[Selah]',
 ])
 def test_placeholder_detection_does_not_flag_scripture_language(text):
     result = validate_edition([verse(1, 1, text)], coverage(verse_counts={'1': 1}))
@@ -205,6 +208,48 @@ def test_whole_bracketed_book_or_chapter_description_is_placeholder():
     )
 
     assert [finding.code for finding in result.errors] == ['placeholder_text']
+
+
+@pytest.mark.parametrize('placeholder', [
+    'TBD',
+    'Placeholder',
+    'Sample placeholder.',
+    'Text unavailable',
+    'No text available.',
+    'Not yet added',
+    'To be added.',
+    'Lorem ipsum dolor sit amet...',
+    '[Awaiting full Ge\'ez source text ...]',
+    '[Chapter text unavailable from source]',
+    '[Not yet added]',
+])
+def test_full_row_operational_placeholders_are_rejected(placeholder):
+    result = validate_edition(
+        [verse(1, 1, placeholder)], coverage(verse_counts={'1': 1})
+    )
+
+    assert [finding.code for finding in result.errors] == ['placeholder_text']
+
+
+@pytest.mark.parametrize(('field', 'extreme'), [
+    ('chapter', 10**12),
+    ('verse', 1001),
+])
+def test_extreme_positions_produce_one_bounded_mismatch_and_skip_checksums(field, extreme):
+    rows = [verse(1, 1, 'Same text'), verse(1, 2, 'Same text')]
+    object.__setattr__(rows[1], field, extreme)
+
+    result = validate_edition(rows, coverage())
+
+    assert [(finding.code, finding.chapter, finding.verse) for finding in result.errors] == [
+        (
+            'observed_coverage_mismatch',
+            extreme if field == 'chapter' else 1,
+            2 if field == 'chapter' else extreme,
+        )
+    ]
+    assert result.warnings == ()
+    assert len(result.findings) == 1
 
 
 def test_missing_verses_without_declared_counts_include_start_and_interior_gaps():
