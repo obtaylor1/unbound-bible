@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 from app.library.ingest.models import ScripturePublication, StagedScriptureVerse
 from app.library.models import EditionCoverage, TextEdition
@@ -105,7 +105,7 @@ def test_publish_is_checksum_idempotent_without_mutating_requested_run(ingest_se
     create_legacy_texts(ingest_session)
     first = make_ingest_run(ingest_session, 'target', 'First text')
     publish_run(ingest_session, first.id)
-    requested = make_ingest_run(ingest_session, 'target', 'Different staged rows', status='staged')
+    requested = make_ingest_run(ingest_session, 'target', 'Different staged rows')
     requested.source_checksum = first.source_checksum
     ingest_session.flush()
     original_rows = legacy_rows(ingest_session, 'target')
@@ -116,10 +116,73 @@ def test_publish_is_checksum_idempotent_without_mutating_requested_run(ingest_se
     assert result.run_id == first.id
     assert result.publication_version == 1
     assert legacy_rows(ingest_session, 'target') == original_rows
-    assert requested.status == 'staged'
+    assert requested.status == 'verified'
     assert ingest_session.scalars(select(ScripturePublication).where(
         ScripturePublication.edition_code == 'target'
     )).all() == [active_publication(ingest_session, 'target')]
+
+
+@pytest.mark.parametrize('status,finding,remove_staged_rows', [
+    ('staged', None, False),
+    ('verified', {'severity': 'error', 'code': 'missing_verse', 'message': 'Missing verse'}, False),
+    ('verified', None, True),
+])
+def test_same_checksum_does_not_bypass_publication_gate(
+    ingest_session, status, finding, remove_staged_rows
+):
+    from app.library.ingest.publish import PublicationBlocked, publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    first = make_ingest_run(ingest_session, 'target', 'Published text')
+    publish_run(ingest_session, first.id)
+    requested = make_ingest_run(
+        ingest_session,
+        'target',
+        'Unsafe replacement rows',
+        status=status,
+        finding=finding,
+    )
+    requested.source_checksum = first.source_checksum
+    if remove_staged_rows:
+        ingest_session.execute(delete(StagedScriptureVerse).where(
+            StagedScriptureVerse.run_id == requested.id
+        ))
+    ingest_session.flush()
+    original_rows = legacy_rows(ingest_session, 'target')
+    original_publication = active_publication(ingest_session, 'target')
+    original_coverage = ingest_session.scalar(select(EditionCoverage).where(
+        EditionCoverage.edition_code == 'target'
+    ))
+    coverage_snapshot = (
+        original_coverage.id,
+        original_coverage.status,
+        original_coverage.chapter_count,
+        original_coverage.verse_count,
+        original_coverage.note,
+    )
+
+    with pytest.raises(PublicationBlocked):
+        publish_run(ingest_session, requested.id)
+
+    assert legacy_rows(ingest_session, 'target') == original_rows
+    assert active_publication(ingest_session, 'target') is original_publication
+    assert len(ingest_session.scalars(select(ScripturePublication).where(
+        ScripturePublication.edition_code == 'target'
+    )).all()) == 1
+    coverage = ingest_session.scalar(select(EditionCoverage).where(
+        EditionCoverage.edition_code == 'target'
+    ))
+    assert (
+        coverage.id,
+        coverage.status,
+        coverage.chapter_count,
+        coverage.verse_count,
+        coverage.note,
+    ) == coverage_snapshot
+    assert first.status == 'published'
+    assert requested.status == status
+    assert requested.published_count == 0
 
 
 @pytest.mark.parametrize('status,finding', [

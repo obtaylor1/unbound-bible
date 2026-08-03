@@ -252,8 +252,8 @@ def _next_version(history: Sequence[ScripturePublication]) -> int:
 def publish_run(session: Session, run_id: UUID) -> PublicationResult:
     """Atomically make one verified run the active text for its edition.
 
-    A matching active checksum is a deliberate no-op, including repeat calls
-    after the original run has been marked ``published``.
+    A verified, error-free run with a matching active checksum is a deliberate
+    no-op.  The publication gate is never bypassed by checksum reuse.
     """
     with _atomic(session):
         run = _locked_run(session, run_id)
@@ -263,6 +263,7 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
         history = _locked_history(session, edition.edition_code)
         active = _active_publication(history)
         _require_legacy_schema(session)
+        rows = _ensure_publishable(session, run)
         if active is not None:
             active_run = _locked_run(session, active.run_id)
             if active_run.edition_code != edition.edition_code:
@@ -276,7 +277,6 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                     active_run.published_count,
                 )
 
-        rows = _ensure_publishable(session, run)
         if active is not None:
             active.active = False
             # Make the partial-active uniqueness invariant explicit before the
