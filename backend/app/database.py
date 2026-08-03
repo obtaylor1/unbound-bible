@@ -10,7 +10,7 @@ class Base(DeclarativeBase):
     pass
 
 
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+def _enable_sqlite_foreign_keys(dbapi_connection, *_args) -> None:
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute('PRAGMA foreign_keys=ON')
@@ -18,13 +18,20 @@ def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
         cursor.close()
 
 
+def ensure_sqlite_foreign_keys(database_engine: Engine) -> None:
+    """Enable SQLite foreign keys on every checkout, including pooled connections."""
+    if database_engine.dialect.name != 'sqlite':
+        return
+    if not event.contains(database_engine, 'checkout', _enable_sqlite_foreign_keys):
+        event.listen(database_engine, 'checkout', _enable_sqlite_foreign_keys)
+
+
 def create_database_engine(settings: Settings) -> Engine:
     options: dict[str, object] = {"pool_pre_ping": True}
     if settings.database_url.startswith("sqlite"):
         options["connect_args"] = {"check_same_thread": False}
     database_engine = create_engine(settings.database_url, **options)
-    if database_engine.dialect.name == 'sqlite':
-        event.listen(database_engine, 'connect', _enable_sqlite_foreign_keys)
+    ensure_sqlite_foreign_keys(database_engine)
     return database_engine
 
 
