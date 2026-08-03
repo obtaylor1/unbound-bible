@@ -10,6 +10,7 @@ from app.sharing import models as sharing_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
 from app.community import models as community_models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
+from app.library.seed import seed_ethiopian_canon
 from app.security.rate_limits import InMemoryRateLimiter
 from app.observability.logging import configure_logging
 
@@ -31,6 +32,8 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     configure_logging()
     if settings.environment == "test":
         Base.metadata.create_all(engine)
+        with application.state.session_factory() as session:
+            seed_ethiopian_canon(session)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
