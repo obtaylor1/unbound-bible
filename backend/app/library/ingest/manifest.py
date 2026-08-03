@@ -17,6 +17,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     StringConstraints,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -73,7 +74,9 @@ _URL_SECRET_SUFFIXES = (
 _URL_SECURITY_KEY_PREFIXES = {
     'api', 'access', 'private', 'secret', 'signing', 'encryption', 'session',
 }
-_URL_AUTH_COMPOUNDS = {'basicauth', 'authheader', 'authorizationheader'}
+_URL_AUTH_COMPOUNDS = {
+    'basicauth', 'authheader', 'authorizationheader', 'sessioncookie',
+}
 
 SourceBookCode = Annotated[
     StrictStr,
@@ -88,6 +91,26 @@ ExportedPageId = Annotated[
     StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
 ]
 TextEncoding = Literal['utf-8', 'utf-8-sig']
+
+
+def _normalize_mapping_keys(
+    value: Any, *, case_insensitive: bool
+) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    normalized: dict[str, Any] = {}
+    seen: set[str] = set()
+    for key, mapped_work in value.items():
+        if not isinstance(key, str):
+            raise ValueError('adapter mapping keys must be strings.')
+        cleaned = unicodedata.normalize('NFC', key.strip())
+        identity = cleaned.casefold() if case_insensitive else cleaned
+        if identity in seen:
+            raise ValueError('adapter mapping keys must be unique after normalization.')
+        seen.add(identity)
+        normalized[cleaned] = mapped_work
+    return normalized
 
 
 class ExpectedCoverage(BaseModel):
@@ -155,6 +178,11 @@ class UsfmAdapterOptions(BaseModel):
     book_map: dict[SourceBookCode, WorkId] = Field(default_factory=dict)
     strip_notes: StrictBool = False
 
+    @field_validator('book_map', mode='before')
+    @classmethod
+    def normalize_book_map_keys(cls, value: Any) -> Any:
+        return _normalize_mapping_keys(value, case_insensitive=True)
+
 
 class ErtaleAdapterOptions(BaseModel):
     """Reviewed options for Ertale exports."""
@@ -164,6 +192,11 @@ class ErtaleAdapterOptions(BaseModel):
     encoding: TextEncoding = 'utf-8'
     book_map: dict[SourceBookCode, WorkId] = Field(default_factory=dict)
 
+    @field_validator('book_map', mode='before')
+    @classmethod
+    def normalize_book_map_keys(cls, value: Any) -> Any:
+        return _normalize_mapping_keys(value, case_insensitive=True)
+
 
 class WikisourceAdapterOptions(BaseModel):
     """Reviewed options for Wikisource page exports."""
@@ -172,6 +205,11 @@ class WikisourceAdapterOptions(BaseModel):
 
     encoding: TextEncoding = 'utf-8'
     page_map: dict[ExportedPageId, WorkId] = Field(default_factory=dict)
+
+    @field_validator('page_map', mode='before')
+    @classmethod
+    def normalize_page_map_keys(cls, value: Any) -> Any:
+        return _normalize_mapping_keys(value, case_insensitive=False)
 
 
 AdapterOptions = UsfmAdapterOptions | ErtaleAdapterOptions | WikisourceAdapterOptions
@@ -204,24 +242,26 @@ class SourceManifest(BaseModel):
     expected_works: dict[WorkId, ExpectedCoverage]
     source_files: list[SourceFile]
     adapter: AdapterId
-    adapter_options: AdapterOptions
+    adapter_options: AdapterOptions = Field(default_factory=UsfmAdapterOptions)
 
     @model_validator(mode='before')
     @classmethod
-    def validate_adapter_options_for_adapter(cls, value: Any) -> Any:
+    def default_adapter_options(cls, value: Any) -> Any:
         if not isinstance(value, dict):
             return value
-        adapter = value.get('adapter')
-        if not isinstance(adapter, str):
-            return value
-        options_model = _ADAPTER_OPTIONS_MODELS.get(adapter)
-        if options_model is None:
+        if 'adapter_options' in value:
             return value
         normalized = dict(value)
-        normalized['adapter_options'] = options_model.model_validate(
-            value.get('adapter_options', {})
-        )
+        normalized['adapter_options'] = {}
         return normalized
+
+    @field_validator('adapter_options', mode='before')
+    @classmethod
+    def validate_adapter_options_for_adapter(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        options_model = _ADAPTER_OPTIONS_MODELS.get(info.data.get('adapter'))
+        return options_model.model_validate(value) if options_model else value
 
     @field_validator('provenance_url')
     @classmethod
@@ -275,6 +315,8 @@ def _is_secret_url_parameter(name: str) -> bool:
     compact_name = _compact_key(name)
     if compact_name in _URL_SECRET_EXACT | _URL_AUTH_COMPOUNDS:
         return True
+    if compact_name.endswith('value'):
+        return _is_secret_url_parameter(compact_name[:-len('value')])
     if compact_name.endswith(_URL_SECRET_SUFFIXES):
         return True
     if any(

@@ -287,7 +287,10 @@ URL_SECRET_PARAMETER_NAMES = (
     'apitoken', 'oauthclientsecret', 'jwtsecret', 'databasepassword',
     'accesskey', 'bearertoken', 'clientpassword', 'sessiontoken', 'basicauth',
     'authorizationheader', 'X-API-Key', 'private_key', 'signing_key',
-    'encryption_key', 'session_key',
+    'encryption_key', 'session_key', 'token_value', 'tokenvalue',
+    'password_value', 'client_secret_value', 'signature_value',
+    'credential_value', 'api_key_value', 'privatekeyvalue', 'sessioncookie',
+    'session_cookie',
 )
 URL_SAFE_PARAMETERS = (
     ('book_key', 'genesis'),
@@ -345,6 +348,10 @@ def test_manifest_defaults_typed_options_for_each_adapter(adapter, expected):
     manifest = SourceManifest.model_validate(value)
 
     assert manifest.model_dump(mode='json')['adapter_options'] == expected
+
+
+def test_manifest_schema_does_not_require_adapter_options():
+    assert 'adapter_options' not in SourceManifest.model_json_schema()['required']
 
 
 @pytest.mark.parametrize(
@@ -440,6 +447,55 @@ def test_manifest_rejects_invalid_adapter_mappings(adapter, mapping_name, mappin
             adapter=adapter,
             adapter_options={mapping_name: mapping},
         ))
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'mapping_name', 'mapping'),
+    (
+        ('usfm', 'book_map', {'GEN': 'genesis', ' gen ': 'exodus'}),
+        ('ertale', 'book_map', {'1-Enoch': '1-enoch', ' 1-Enoch ': 'enoch'}),
+        ('wikisource', 'page_map', {'Genesis 1': 'genesis', ' Genesis 1 ': 'exodus'}),
+        ('wikisource', 'page_map', {'Café': 'genesis', 'Café': 'exodus'}),
+    ),
+)
+def test_manifest_rejects_normalized_adapter_mapping_key_collisions(
+    adapter, mapping_name, mapping
+):
+    with pytest.raises(ValidationError):
+        SourceManifest.model_validate(manifest_with(
+            adapter=adapter,
+            adapter_options={mapping_name: mapping},
+        ))
+
+
+def test_manifest_adapter_option_errors_include_public_field_location():
+    with pytest.raises(ValidationError) as exc_info:
+        SourceManifest.model_validate(manifest_with(adapter_options={
+            'book_map': {'GEN': 'genesis', ' GEN ': 'exodus'},
+        }))
+
+    assert exc_info.value.errors()[0]['loc'][:2] == ('adapter_options', 'book_map')
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'mapping_name', 'mapping'),
+    (
+        ('usfm', 'book_map', {' GEN ': 'genesis', 'EXO': 'exodus'}),
+        ('ertale', 'book_map', {' 1-Enoch ': '1-enoch', 'Jubilees': 'jubilees'}),
+        ('wikisource', 'page_map', {' Genesis 1 ': 'genesis', 'Genesis 2': 'genesis'}),
+    ),
+)
+def test_manifest_normalizes_and_preserves_distinct_adapter_mapping_keys(
+    adapter, mapping_name, mapping
+):
+    manifest = SourceManifest.model_validate(manifest_with(
+        adapter=adapter,
+        adapter_options={mapping_name: mapping},
+    ))
+
+    assert manifest.model_dump(mode='json')['adapter_options'][mapping_name] == {
+        key.strip(): value for key, value in mapping.items()
+    }
 
 
 def test_manifest_typed_adapter_options_round_trip_as_dictionary():
