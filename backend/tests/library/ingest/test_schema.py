@@ -1,7 +1,9 @@
 import importlib.util
-import io
+import os
 from hashlib import sha256
 from pathlib import Path
+import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -185,10 +187,10 @@ def test_publications_reject_cross_edition_run_links(ingest_session, link):
             ingest_session.flush()
 
 
-def _alembic_config(database_path=None, *, database_url=None, output_buffer=None):
-    config = Config(str(BACKEND_ROOT / 'alembic.ini'), output_buffer=output_buffer)
+def _alembic_config(database_path):
+    config = Config(str(BACKEND_ROOT / 'alembic.ini'))
     config.set_main_option('script_location', str(BACKEND_ROOT / 'alembic'))
-    config.set_main_option('sqlalchemy.url', database_url or f'sqlite:///{database_path}')
+    config.set_main_option('sqlalchemy.url', f'sqlite:///{database_path}')
     return config
 
 
@@ -216,41 +218,38 @@ def test_all_alembic_revision_identifiers_fit_the_version_table(tmp_path):
 
 
 @pytest.mark.parametrize('database_url', ('sqlite://', 'postgresql://offline/ingest'))
-def test_offline_upgrade_and_downgrade_compile_audit_schema(database_url, monkeypatch):
-    monkeypatch.delenv('DATABASE_URL', raising=False)
-    upgrade_sql = io.StringIO()
-    upgrade_config = _alembic_config(database_url=database_url, output_buffer=upgrade_sql)
-    try:
-        command.upgrade(upgrade_config, REVISION, sql=True)
-    except Exception as error:
-        pytest.fail(f'offline upgrade compilation failed: {error}')
+@pytest.mark.parametrize(
+    ('direction', 'target', 'forbidden_ddl'),
+    (
+        ('upgrade', REVISION, 'create table scripture_ingest_runs'),
+        ('downgrade', f'{REVISION}:0006_ethiopian_library', 'drop table scripture_ingest_runs'),
+    ),
+)
+def test_offline_migration_refuses_before_task2_ddl(
+    database_url, direction, target, forbidden_ddl
+):
+    result = subprocess.run(
+        [sys.executable, '-m', 'alembic', '-c', 'alembic.ini', direction, target, '--sql'],
+        cwd=BACKEND_ROOT,
+        env={**os.environ, 'DATABASE_URL': database_url, 'PYTHONPATH': str(BACKEND_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    output = f'{result.stdout}\n{result.stderr}'.lower()
 
-    compiled_upgrade = ' '.join(upgrade_sql.getvalue().lower().split())
-    assert 'create table scripture_ingest_runs' in compiled_upgrade
-    assert 'create table scripture_publications' in compiled_upgrade
-    assert 'foreign key(run_id, edition_code)' in compiled_upgrade
-    assert 'foreign key(previous_run_id, edition_code)' in compiled_upgrade
-    assert 'create unique index uq_scripture_publications_active_edition' in compiled_upgrade
-    assert 'where active is' in compiled_upgrade
-    assert 'legacy biblical_texts identity index omitted in offline mode' in compiled_upgrade
-    assert 'duplicate preflight not run' in compiled_upgrade
-
-    downgrade_sql = io.StringIO()
-    downgrade_config = _alembic_config(database_url=database_url, output_buffer=downgrade_sql)
-    try:
-        command.downgrade(
-            downgrade_config,
-            f'{REVISION}:0006_ethiopian_library',
-            sql=True,
-        )
-    except Exception as error:
-        pytest.fail(f'offline downgrade compilation failed: {error}')
-
-    compiled_downgrade = ' '.join(downgrade_sql.getvalue().lower().split())
-    assert 'drop table scripture_publications' in compiled_downgrade
-    assert 'drop table scripture_ingest_runs' in compiled_downgrade
-    assert 'legacy biblical_texts identity index omitted in offline mode' in compiled_downgrade
-    assert 'duplicate preflight not run' in compiled_downgrade
+    assert result.returncode != 0
+    assert 'offline migration refused for 0007_verified_ingest' in output
+    assert 'run alembic online without --sql' in output
+    assert 'inspect biblical_texts' in output
+    assert 'preflight duplicate verse identities' in output
+    assert 'conditionally manage the functional unique index' in output
+    assert forbidden_ddl not in output
+    assert 'create table scripture_publications' not in output
+    assert 'drop table scripture_publications' not in output
+    if direction == 'upgrade':
+        assert 'create table library_works' in result.stdout.lower()
 
 
 def test_legacy_functional_unique_index_compiles_for_sqlite_and_postgresql():

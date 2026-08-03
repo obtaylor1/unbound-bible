@@ -12,6 +12,16 @@ depends_on = None
 
 LEGACY_TABLE = 'biblical_texts'
 LEGACY_INDEX = 'uq_biblical_texts_translation_book_chapter_verse'
+OFFLINE_REFUSAL = (
+    'Offline migration refused for 0007_verified_ingest. Run Alembic online without --sql '
+    'so the migration can inspect biblical_texts, preflight duplicate verse identities, and '
+    'conditionally manage the functional unique index.'
+)
+
+
+def _require_online_migration() -> None:
+    if context.is_offline_mode():
+        raise RuntimeError(OFFLINE_REFUSAL)
 
 
 def _legacy_identity_index() -> sa.Index:
@@ -79,9 +89,9 @@ def _legacy_index_exists(bind) -> bool:
 
 
 def upgrade() -> None:
+    _require_online_migration()
     # Preflight before creating any new tables so duplicate legacy data leaves this migration untouched.
-    offline = context.is_offline_mode()
-    legacy_table_present = False if offline else _preflight_legacy_biblical_texts()
+    legacy_table_present = _preflight_legacy_biblical_texts()
 
     op.create_table(
         'scripture_ingest_runs',
@@ -200,24 +210,14 @@ def upgrade() -> None:
             legacy_index.expressions,
             unique=True,
         )
-    elif offline:
-        op.execute(sa.text(
-            '/* legacy biblical_texts identity index omitted in offline mode; '
-            'duplicate preflight not run */'
-        ))
 
 
 def downgrade() -> None:
-    if context.is_offline_mode():
-        op.execute(sa.text(
-            '/* legacy biblical_texts identity index omitted in offline mode; '
-            'duplicate preflight not run */'
-        ))
-    else:
-        bind = op.get_bind()
-        inspector = sa.inspect(bind)
-        if LEGACY_TABLE in inspector.get_table_names() and _legacy_index_exists(bind):
-            op.drop_index(LEGACY_INDEX, table_name=LEGACY_TABLE)
+    _require_online_migration()
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if LEGACY_TABLE in inspector.get_table_names() and _legacy_index_exists(bind):
+        op.drop_index(LEGACY_INDEX, table_name=LEGACY_TABLE)
 
     op.drop_index('uq_scripture_publications_active_edition', table_name='scripture_publications')
     op.drop_table('scripture_publications')
