@@ -11,6 +11,7 @@ from app.sharing import models as sharing_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
 from app.community import models as community_models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
+from app.library.ingest import models as ingest_models  # noqa: F401
 from app.library.seed import seed_ethiopian_canon
 from app.observability.logging import configure_logging
 
