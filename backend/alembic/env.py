@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.database import Base
 from app.auth import models  # noqa: F401
+from app.library import models as library_models  # noqa: F401
 
 
 config = context.config
