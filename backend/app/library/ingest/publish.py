@@ -260,13 +260,8 @@ def _manifest_for_run(run: ScriptureIngestRun) -> SourceManifest:
     return manifest
 
 
-def _ensure_publishable(
-    session: Session, run: ScriptureIngestRun
-) -> tuple[tuple[StagedScriptureVerse, ...], SourceManifest]:
-    if run.status != 'verified':
-        raise PublicationBlocked(
-            f'Cannot publish run {run.id}: status must be verified, not {run.status!r}.'
-        )
+def _ensure_error_free(session: Session, run: ScriptureIngestRun) -> None:
+    """Apply the persisted validation gate, including on idempotent retries."""
     if run.error_count > 0:
         raise PublicationBlocked(
             f'Cannot publish run {run.id}: recorded error count is {run.error_count}.'
@@ -281,6 +276,16 @@ def _ensure_publishable(
     )
     if error_finding is not None:
         raise PublicationBlocked(f'Cannot publish run {run.id}: it has error findings.')
+
+
+def _ensure_publishable(
+    session: Session, run: ScriptureIngestRun
+) -> tuple[tuple[StagedScriptureVerse, ...], SourceManifest]:
+    if run.status != 'verified':
+        raise PublicationBlocked(
+            f'Cannot publish run {run.id}: status must be verified, not {run.status!r}.'
+        )
+    _ensure_error_free(session, run)
     rows = _staged_rows(session, run.id)
     _validate_row_checksums(rows, label='staged')
     return rows, _manifest_for_run(run)
@@ -453,6 +458,7 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
             if run.edition_code != edition.edition_code:
                 raise PublicationBlocked('Cannot publish a run for a different text edition.')
             if active is not None and active.run_id == run.id:
+                _ensure_error_free(session, run)
                 return PublicationResult(
                     edition.edition_code,
                     run.id,
@@ -469,6 +475,7 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                         'Active publication belongs to a different text edition.'
                     )
                 if active_run.source_checksum == run.source_checksum:
+                    _ensure_error_free(session, active_run)
                     return PublicationResult(
                         edition.edition_code,
                         active_run.id,

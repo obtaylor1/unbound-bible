@@ -251,6 +251,54 @@ def test_exact_active_run_retry_is_a_noop_after_run_is_published(ingest_session)
     )).all()) == 1
 
 
+@pytest.mark.parametrize('corruption', ['error_count', 'error_finding'])
+def test_exact_active_run_retry_rechecks_error_gate(ingest_session, corruption):
+    from app.library.ingest.models import ScriptureValidationFinding
+    from app.library.ingest.publish import PublicationBlocked, publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Published once')
+    publish_run(ingest_session, run.id)
+    if corruption == 'error_count':
+        run.error_count = 1
+    else:
+        ingest_session.add(ScriptureValidationFinding(
+            run_id=run.id,
+            severity='error',
+            code='post_publish_audit_error',
+            message='Post-publication audit found an error.',
+        ))
+    ingest_session.flush()
+
+    with pytest.raises(PublicationBlocked, match='error'):
+        publish_run(ingest_session, run.id)
+
+    assert active_publication(ingest_session, 'target').run_id == run.id
+    assert legacy_rows(ingest_session, 'target') == [
+        ('Genesis', 1, 1, 'Published once', 'target')
+    ]
+
+
+def test_matching_checksum_noop_rechecks_active_run_error_gate(ingest_session):
+    from app.library.ingest.publish import PublicationBlocked, publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    active = make_ingest_run(ingest_session, 'target', 'Published once')
+    publish_run(ingest_session, active.id)
+    active.error_count = 1
+    requested = make_ingest_run(ingest_session, 'target', 'Different staged rows')
+    requested.source_checksum = active.source_checksum
+    ingest_session.flush()
+
+    with pytest.raises(PublicationBlocked, match='error count'):
+        publish_run(ingest_session, requested.id)
+
+    assert active_publication(ingest_session, 'target').run_id == active.id
+    assert requested.status == 'verified'
+
+
 @pytest.mark.parametrize('status,finding,remove_staged_rows', [
     ('staged', None, False),
     ('verified', {'severity': 'error', 'code': 'missing_verse', 'message': 'Missing verse'}, False),

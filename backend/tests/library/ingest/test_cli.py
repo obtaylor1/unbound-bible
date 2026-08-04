@@ -338,6 +338,7 @@ def test_rollback_command_restores_the_previous_published_run(
 
 def test_stage_validate_publish_and_coverage_report(cli_database, tmp_path, monkeypatch):
     from app.library.ingest import cli
+    from app.library.ingest.models import ScriptureIngestRun
     from app.library.ingest.types import NormalizedVerse
     from sqlalchemy import text
 
@@ -385,6 +386,20 @@ def test_stage_validate_publish_and_coverage_report(cli_database, tmp_path, monk
     assert coverage['run_id'] == staged['run_id']
     assert coverage['edition_code'] == 'CLI_TEST'
     assert coverage['published_count'] == 1
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session, session.begin():
+            run = session.get(ScriptureIngestRun, UUID(staged['run_id']))
+            run.error_count = 1
+    finally:
+        engine.dispose()
+    rejected_retry = runner.invoke(cli.app, [
+        'publish', '--run-id', staged['run_id'], '--confirm',
+        '--database-url', cli_database,
+    ])
+    assert rejected_retry.exit_code != 0
+    assert 'error count' in rejected_retry.output.lower()
 
 
 def test_validate_records_errors_and_publish_refuses_the_run(
