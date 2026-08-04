@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import event
+from sqlalchemy import event, text
 
 from app.application import create_application
 from app.library.canon import navigation_works
@@ -61,6 +61,59 @@ def _add_verified_genesis_coverage(application) -> None:
             note='Route fixture',
         ))
         session.commit()
+
+
+def _add_reader_fixture(application) -> None:
+    with application.state.session_factory() as session:
+        session.execute(text('''
+            CREATE TABLE biblical_texts (
+                id INTEGER PRIMARY KEY,
+                book TEXT NOT NULL,
+                chapter INTEGER NOT NULL,
+                verse INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                translation TEXT
+            )
+        '''))
+        session.add(TextEdition(
+            edition_code='GEEZ1980-RESEARCH',
+            name="Ge'ez Bible (1980 EC) — Research Use",
+            reading_language="Ge'ez",
+            source_language="Ge'ez",
+            script="Ge'ez",
+            relationship='exact_ethiopian',
+            expected_coverage={'works': ['genesis']},
+            verification_status='verified',
+            license_spdx='CC-BY-NC-ND-4.0',
+            source_tradition='Ethiopian Orthodox Tewahedo',
+        ))
+        session.execute(text('''
+            INSERT INTO biblical_texts
+                (id, book, chapter, verse, text, translation)
+            VALUES
+                (1, 'Genesis', 1, 1, 'በቀዳሚ ገብረ እግዚአብሔር ሰማየ ወምድረ።', 'GEEZ1980-RESEARCH'),
+                (2, 'Genesis', 1, 1, 'In the beginning God created the heaven and the earth.', 'KJV')
+        '''))
+        session.commit()
+
+
+def test_modular_launcher_exposes_reader_compatibility_routes(test_settings):
+    application = create_application(test_settings)
+    _add_reader_fixture(application)
+    client = TestClient(application)
+
+    available = client.get('/api/biblical-texts/available-books')
+    chapter = client.get('/api/biblical-texts/chapter-content?book=Genesis&chapter=1')
+    book = client.get('/api/biblical-texts/book-content?book=Genesis')
+    details = client.get('/api/v1/texts/Genesis/1/1/details')
+
+    assert available.status_code == chapter.status_code == book.status_code == details.status_code == 200
+    assert available.json() == {'books': ['Genesis']}
+    assert len(chapter.json()['content']) == len(book.json()['content']) == 2
+    geez = next(row for row in chapter.json()['content'] if row['translation'] == 'GEEZ1980-RESEARCH')
+    assert geez['text'] == 'በቀዳሚ ገብረ እግዚአብሔር ሰማየ ወምድረ።'
+    assert geez['edition']['name'] == "Ge'ez Bible (1980 EC) — Research Use"
+    assert details.json()['translations']['geez1980-research'] == geez['text']
 
 
 def test_ethiopian_books_are_seeded_without_installed_text_coverage(test_settings):

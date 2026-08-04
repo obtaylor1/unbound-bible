@@ -13,6 +13,7 @@ from app.community import models as community_models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
 from app.library.ingest import models as ingest_models  # noqa: F401
 from app.library.seed import seed_ethiopian_canon
+from app.library.router import compatibility_router
 from app.observability.logging import configure_logging
 
 
@@ -40,6 +41,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     application.include_router(api_router, prefix="/api/v1")
+    application.include_router(compatibility_router)
     return application
 
 

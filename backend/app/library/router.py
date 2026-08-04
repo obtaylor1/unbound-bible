@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_session
@@ -28,6 +28,7 @@ from app.library.seed import CANON_CODE
 
 
 router = APIRouter(tags=['library'])
+compatibility_router = APIRouter(tags=['scripture reader compatibility'])
 
 _TESTAMENT_NAMES = {'OT': 'Old Testament', 'NT': 'New Testament'}
 _ETHIOPIAN_ENTRIES_BY_KEY = {
@@ -45,6 +46,122 @@ _WORKS_BY_ID = {
 
 def _testament_name(value: str) -> str:
     return _TESTAMENT_NAMES.get(value, value)
+
+
+def _legacy_table_available(session: Session) -> bool:
+    return inspect(session.bind).has_table('biblical_texts')
+
+
+def _edition_payload(edition: TextEdition | None) -> dict | None:
+    if edition is None:
+        return None
+    return {
+        'code': edition.edition_code,
+        'name': edition.name,
+        'language': edition.reading_language,
+        'source_language': edition.source_language,
+        'script': edition.script,
+        'publisher': edition.publisher,
+        'license': edition.license_spdx,
+        'attribution': edition.attribution,
+        'provenance_url': edition.provenance_url,
+        'source_tradition': edition.source_tradition,
+        'relationship': edition.relationship,
+        'versification': edition.versification,
+        'verification_status': edition.verification_status,
+    }
+
+
+def _reader_rows(session: Session, where_clause: str, params: dict) -> list[dict]:
+    if not _legacy_table_available(session):
+        return []
+    rows = session.execute(text(f'''
+        SELECT id, book, chapter, verse, text, translation
+        FROM biblical_texts
+        WHERE {where_clause}
+        ORDER BY chapter, verse, translation
+    '''), params).mappings().all()
+    codes = {row['translation'] for row in rows if row['translation']}
+    editions = {
+        edition.edition_code: edition
+        for edition in session.scalars(
+            select(TextEdition).where(TextEdition.edition_code.in_(codes))
+        ).all()
+    } if codes else {}
+    return [
+        {**dict(row), 'edition': _edition_payload(editions.get(row['translation']))}
+        for row in rows
+    ]
+
+
+@compatibility_router.get('/api/biblical-texts/available-books')
+def available_reader_books(session: Session = Depends(get_session)) -> dict:
+    if not _legacy_table_available(session):
+        return {'books': []}
+    books = session.scalars(text(
+        'SELECT DISTINCT book FROM biblical_texts ORDER BY book'
+    )).all()
+    return {'books': list(books)}
+
+
+@compatibility_router.get('/api/biblical-texts/chapter-content')
+def reader_chapter_content(
+    book: str = Query(min_length=1, max_length=200),
+    chapter: int = Query(ge=1),
+    session: Session = Depends(get_session),
+) -> dict:
+    return {'content': _reader_rows(
+        session,
+        'lower(book) = lower(:book) AND chapter = :chapter',
+        {'book': book, 'chapter': chapter},
+    )}
+
+
+@compatibility_router.get('/api/biblical-texts/book-content')
+def reader_book_content(
+    book: str = Query(min_length=1, max_length=200),
+    session: Session = Depends(get_session),
+) -> dict:
+    return {'content': _reader_rows(
+        session,
+        'lower(book) = lower(:book)',
+        {'book': book},
+    )}
+
+
+@compatibility_router.get('/api/v1/texts/{book}/{chapter}/{verse}/details')
+def reader_verse_details(
+    book: str,
+    chapter: int,
+    verse: int,
+    session: Session = Depends(get_session),
+) -> dict:
+    rows = _reader_rows(
+        session,
+        'lower(book) = lower(:book) AND chapter = :chapter AND verse = :verse',
+        {'book': book, 'chapter': chapter, 'verse': verse},
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail='Verse not found')
+    return {
+        'book': book,
+        'chapter': chapter,
+        'verse': verse,
+        'translations': {
+            (row['translation'] or 'unknown').lower(): row['text']
+            for row in rows
+        },
+        'historical_context': [],
+        'geographical_context': [],
+        'original_words': [],
+        'original_language_insights': [],
+        'cross_references': [],
+        'translation_biases': [],
+        'race_misuse_records': [],
+        'verse_meaning': '',
+        'translation_comparison': '',
+        'critical_analysis': '',
+    }
 
 
 def _coverage_by_work(session: Session, work_ids: Iterable[str]) -> dict[str, list[dict]]:
