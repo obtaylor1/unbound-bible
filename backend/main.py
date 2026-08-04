@@ -1,7 +1,7 @@
 # Liberation Bible Project - FastAPI Backend
 # Referenced from blueprint:python_database integration
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional, cast
@@ -93,335 +93,6 @@ from routes.context_api import router as context_router
 # Include context API router
 app.include_router(context_router)
 
-PROTESTANT_BOOKS = {
-    "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua", "Judges", "Ruth",
-    "1 Samuel", "2 Samuel", "1 Kings", "2 Kings", "1 Chronicles", "2 Chronicles", "Ezra", "Nehemiah",
-    "Esther", "Job", "Psalms", "Proverbs", "Ecclesiastes", "Song of Solomon", "Isaiah", "Jeremiah",
-    "Lamentations", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah",
-    "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi",
-    "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "1 Corinthians", "2 Corinthians",
-    "Galatians", "Ephesians", "Philippians", "Colossians", "1 Thessalonians", "2 Thessalonians",
-    "1 Timothy", "2 Timothy", "Titus", "Philemon", "Hebrews", "James", "1 Peter", "2 Peter",
-    "1 John", "2 John", "3 John", "Jude", "Revelation"
-}
-
-def download_chapter_data(book: str, chapter: int, translation: str) -> list:
-    """Downloads chapter data from bible-api.com (or api.nlt.to for NLT) with exponential backoff on rate limiting"""
-    import urllib.request
-    import urllib.parse
-    import urllib.error
-    import json
-    import ssl
-    import time
-    import re
-    from bs4 import BeautifulSoup
-    
-    if translation.lower() == 'nlt':
-        ref_str = f"{book}.{chapter}"
-        url_encoded = urllib.parse.quote(ref_str)
-        url = f"https://api.nlt.to/api/passages?ref={url_encoded}&key=TEST"
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        context = ssl._create_unverified_context()
-        
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                with urllib.request.urlopen(req, context=context, timeout=8) as response:
-                    if response.status == 200:
-                        html_content = response.read().decode('utf-8')
-                        soup = BeautifulSoup(html_content, 'html.parser')
-                        verses = []
-                        for export in soup.find_all('verse_export'):
-                            vn_str = export.get('vn')
-                            if not vn_str:
-                                continue
-                            try:
-                                vn = int(vn_str)
-                            except ValueError:
-                                continue
-                                
-                            # Clean up footnotes/translator notes
-                            for tag in export.find_all(class_=['tn', 'fn', 'a-tn', 'a-fn']):
-                                tag.decompose()
-                            for link in export.find_all('a'):
-                                link.decompose()
-                                
-                            text = export.get_text()
-                            text = text.strip()
-                            text = re.sub(rf'^{vn}', '', text)
-                            text = re.sub(r'\s+', ' ', text).strip()
-                            
-                            verses.append({
-                                'verse': vn,
-                                'text': text
-                            })
-                        return verses
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    wait_time = 2 ** attempt + 1
-                    print(f"Rate limited (429) for {book} {chapter} (NLT). Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    print(f"HTTP error {e.code} fetching {book} {chapter} (NLT): {e.reason}")
-                    break
-            except Exception as e:
-                print(f"Error fetching {book} {chapter} (NLT): {e}")
-                time.sleep(1)
-                continue
-        return []
-
-    # Normal bible-api.com fetcher
-    query_str = f"{book} {chapter}"
-    url_encoded = urllib.parse.quote(query_str)
-    url = f"https://bible-api.com/{url_encoded}?translation={translation.lower()}"
-    req = urllib.request.Request(
-        url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    )
-    context = ssl._create_unverified_context()
-    
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            with urllib.request.urlopen(req, context=context, timeout=8) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode('utf-8'))
-                    return data.get('verses', [])
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                wait_time = 2 ** attempt + 1
-                print(f"Rate limited (429) for {book} {chapter} ({translation}). Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            else:
-                print(f"HTTP error {e.code} fetching {book} {chapter} ({translation}): {e.reason}")
-                break
-        except Exception as e:
-            print(f"Error fetching {book} {chapter} ({translation}): {e}")
-            time.sleep(1)
-            continue
-    return []
-
-def get_or_create_translation(db: Session, code: str, name: str) -> int:
-    """Get the database ID of a translation, creating it if it doesn't exist"""
-    from models import Translation
-    trans = db.query(Translation).filter(Translation.code == code).first()
-    if not trans:
-        try:
-            trans = Translation(
-                code=code,
-                name=name,
-                language="English",
-                is_original_language=False,
-                is_public_domain=True,
-                description=f"{name} translation pulled from bible-api.com"
-            )
-            db.add(trans)
-            db.commit()
-            db.refresh(trans)
-            print(f"Created missing translation metadata record for {code}")
-        except Exception as e:
-            db.rollback()
-            print(f"Error creating translation metadata: {e}")
-            # Fallback to look up again in case of race condition
-            trans = db.query(Translation).filter(Translation.code == code).first()
-            if not trans:
-                return 1 # Fallback to KJV
-    return trans.id
-
-def ensure_translations_cached(book: str, db: Session):
-    """Ensures ASV, WEB, BBE, etc. translations are cached for the given book (limited concurrency)"""
-    if book not in PROTESTANT_BOOKS:
-        return
-    from sqlalchemy import func
-    from concurrent.futures import ThreadPoolExecutor
-    
-    kjv_count = db.query(func.count(BiblicalText.id)).filter(
-        BiblicalText.book == book,
-        BiblicalText.translation == 'KJV'
-    ).scalar() or 0
-    
-    if kjv_count == 0:
-        return
-        
-    supported = {
-        'ASV': ('asv', 'American Standard Version'),
-        'WEB': ('web', 'World English Bible'),
-        'WEBBE': ('webbe', 'World English Bible British Edition'),
-        'BBE': ('bbe', 'Bible in Basic English'),
-        'DARBY': ('darby', 'Darby Translation'),
-        'DRA': ('dra', 'Douay-Rheims 1899 American Edition'),
-        'YLT': ('ylt', 'Young\'s Literal Translation'),
-        'NLT': ('nlt', 'New Living Translation')
-    }
-    
-    translations_to_fetch = []
-    for code_upper, (code_lower, name) in supported.items():
-        count = db.query(func.count(BiblicalText.id)).filter(
-            BiblicalText.book == book,
-            BiblicalText.translation == code_upper
-        ).scalar() or 0
-        
-        if count < kjv_count * 0.9:
-            translations_to_fetch.append((code_lower, code_upper, name))
-            
-    if not translations_to_fetch:
-        return
-        
-    total_chapters = db.query(func.max(BiblicalText.chapter)).filter(
-        BiblicalText.book == book,
-        BiblicalText.translation == 'KJV'
-    ).scalar()
-    
-    if not total_chapters:
-        total_chapters = 50
-        
-    for code_lower, code_upper, name in translations_to_fetch:
-        print(f"Fetching {code_upper} translation for all {total_chapters} chapters of {book}...")
-        tasks = [(book, ch, code_lower) for ch in range(1, total_chapters + 1)]
-        
-        # Concurrency max_workers=2 to prevent rate limiting (429)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            results = list(executor.map(lambda t: download_chapter_data(*t), tasks))
-            
-        trans_id = get_or_create_translation(db, code_upper, name)
-        
-        new_texts = []
-        for ch_idx, verses in enumerate(results):
-            ch = ch_idx + 1
-            for v in verses:
-                v_num = v.get('verse')
-                v_text = v.get('text', '').strip()
-                
-                exists = db.query(BiblicalText).filter(
-                    BiblicalText.book == book,
-                    BiblicalText.chapter == ch,
-                    BiblicalText.verse == v_num,
-                    BiblicalText.translation == code_upper
-                ).first() is not None
-                
-                if not exists:
-                    new_texts.append(BiblicalText(
-                        book=book,
-                        chapter=ch,
-                        verse=v_num,
-                        translation=code_upper,
-                        translation_id=trans_id,
-                        text=v_text
-                    ))
-        if new_texts:
-            try:
-                db.bulk_save_objects(new_texts)
-                db.commit()
-                print(f"Successfully cached {len(new_texts)} verses of {book} for {code_upper}!")
-            except Exception as e:
-                print(f"Error bulk saving fetched verses: {e}")
-                db.rollback()
-
-def ensure_chapter_cached(book: str, chapter: int, db: Session):
-    """Ensures ASV, WEB, BBE, etc. translations are cached for the given book and chapter"""
-    if book not in PROTESTANT_BOOKS:
-        return
-    from sqlalchemy import func
-    
-    kjv_count = db.query(func.count(BiblicalText.id)).filter(
-        BiblicalText.book == book,
-        BiblicalText.chapter == chapter,
-        BiblicalText.translation == 'KJV'
-    ).scalar() or 0
-    
-    if kjv_count == 0:
-        return
-        
-    supported = {
-        'ASV': ('asv', 'American Standard Version'),
-        'WEB': ('web', 'World English Bible'),
-        'WEBBE': ('webbe', 'World English Bible British Edition'),
-        'BBE': ('bbe', 'Bible in Basic English'),
-        'DARBY': ('darby', 'Darby Translation'),
-        'DRA': ('dra', 'Douay-Rheims 1899 American Edition'),
-        'YLT': ('ylt', 'Young\'s Literal Translation'),
-        'NLT': ('nlt', 'New Living Translation')
-    }
-    
-    translations_to_fetch = []
-    for code_upper, (code_lower, name) in supported.items():
-        count = db.query(func.count(BiblicalText.id)).filter(
-            BiblicalText.book == book,
-            BiblicalText.chapter == chapter,
-            BiblicalText.translation == code_upper
-        ).scalar() or 0
-        
-        if count < kjv_count:
-            translations_to_fetch.append((code_lower, code_upper, name))
-            
-    if not translations_to_fetch:
-        return
-        
-    for code_lower, code_upper, name in translations_to_fetch:
-        print(f"Fetching {code_upper} translation for {book} {chapter}...")
-        verses = download_chapter_data(book, chapter, code_lower)
-        if not verses:
-            continue
-            
-        trans_id = get_or_create_translation(db, code_upper, name)
-        
-        new_texts = []
-        for v in verses:
-            v_num = v.get('verse')
-            v_text = v.get('text', '').strip()
-            
-            exists = db.query(BiblicalText).filter(
-                BiblicalText.book == book,
-                BiblicalText.chapter == chapter,
-                BiblicalText.verse == v_num,
-                BiblicalText.translation == code_upper
-            ).first() is not None
-            
-            if not exists:
-                new_texts.append(BiblicalText(
-                    book=book,
-                    chapter=chapter,
-                    verse=v_num,
-                    translation=code_upper,
-                    translation_id=trans_id,
-                    text=v_text
-                ))
-        if new_texts:
-            try:
-                db.bulk_save_objects(new_texts)
-                db.commit()
-                print(f"Successfully cached {len(new_texts)} verses of {book} {chapter} for {code_upper}!")
-            except Exception as e:
-                print(f"Error saving chapter: {e}")
-                db.rollback()
-
-def bg_ensure_translations_cached(book: str):
-    """Run ensure_translations_cached in a background task with a fresh session"""
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
-        ensure_translations_cached(book, db)
-    except Exception as e:
-        print(f"Background caching error for book {book}: {e}")
-    finally:
-        db.close()
-
-def bg_ensure_chapter_cached(book: str, chapter: int):
-    """Run ensure_chapter_cached in a background task with a fresh session"""
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
-        ensure_chapter_cached(book, chapter, db)
-    except Exception as e:
-        print(f"Background caching error for chapter {book} {chapter}: {e}")
-    finally:
-        db.close()
-
 @app.get("/api/biblical-texts", response_model=List[BiblicalTextResponse])
 def get_biblical_texts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     texts = db.query(BiblicalText).offset(skip).limit(limit).all()
@@ -448,15 +119,12 @@ def get_broader_canon_books(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to get broader canon books: {str(e)}")
 
 @app.get("/api/biblical-texts/book-content")
-def get_book_content(book: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def get_book_content(book: str, db: Session = Depends(get_db)):
     """
     Get all content for a specific book for the ApocryphaReader component
     Returns all verses/chapters organized by structure
     """
     try:
-        # Automatically cache missing standard translations in background
-        background_tasks.add_task(bg_ensure_translations_cached, book)
-        
         # Get all biblical texts for the specified book, ordered by chapter and verse
         texts = db.query(BiblicalText).filter(
             BiblicalText.book == book
@@ -516,15 +184,12 @@ def get_book_description(book_name: str) -> str:
 
 
 @app.get("/api/biblical-texts/chapter-content")
-def get_chapter_content(book: str, chapter: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def get_chapter_content(book: str, chapter: int, db: Session = Depends(get_db)):
     """
     Get all content for a specific book and chapter.
-    If translations like ASV/WEB are missing, fetch them from the web.
+    Missing translations remain unavailable until they are published by the verified pipeline.
     """
     try:
-        # Automatically cache missing standard translations in background for this chapter
-        background_tasks.add_task(bg_ensure_chapter_cached, book, chapter)
-        
         # Get all biblical texts for the specified book and chapter, ordered by verse
         texts = db.query(BiblicalText).filter(
             BiblicalText.book == book,
@@ -726,11 +391,7 @@ def detect_translation_bias(biblical_text, book: str, chapter: int, verse: int) 
 
 # Textual Comparison endpoint
 @app.get("/api/v1/texts/{book}/{chapter}/{verse}", response_model=TextualComparisonResponse)
-def get_verse_comparison(book: str, chapter: int, verse: int, canon: str = "PROT66", background_tasks: BackgroundTasks = None, db: Session = Depends(get_db)):
-    # Automatically cache missing standard translations in background for this chapter
-    if background_tasks:
-        background_tasks.add_task(bg_ensure_chapter_cached, book, chapter)
-    
+def get_verse_comparison(book: str, chapter: int, verse: int, canon: str = "PROT66", db: Session = Depends(get_db)):
     # Define Protestant canon books (66 books)
     protestant_books = {
         "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua", "Judges", "Ruth",

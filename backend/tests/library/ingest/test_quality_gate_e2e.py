@@ -54,6 +54,8 @@ def test_clean_migrated_database_supports_full_fixture_publication_lifecycle(
     database_url = f'sqlite:///{database_path}'
     monkeypatch.delenv('DATABASE_URL', raising=False)
     command.upgrade(_alembic_config(database_path), 'head')
+    hostile_database_path = tmp_path / 'ambient-database-must-not-be-touched.db'
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{hostile_database_path}')
 
     assert cli.ADAPTERS == {}
     monkeypatch.setattr(cli, 'ADAPTERS', {'usfm': _fixture_adapter})
@@ -213,3 +215,4 @@ def test_clean_migrated_database_supports_full_fixture_publication_lifecycle(
             assert coverage.note.endswith(f"source checksum {first[0]['checksum']}.")
     finally:
         engine.dispose()
+    assert not hostile_database_path.exists()

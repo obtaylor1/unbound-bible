@@ -94,6 +94,97 @@ def test_legacy_main_invokes_shared_application_state_wiring():
     assert [argument.id for argument in calls[0].args] == ['app', 'settings', 'engine']
 
 
+def test_legacy_main_has_no_direct_scripture_acquisition_or_cache_writer():
+    backend_root = Path(__file__).resolve().parents[1]
+    source = (backend_root / 'main.py').read_text(encoding='utf-8')
+    module = ast.parse(source)
+    retired_helpers = {
+        'download_chapter_data',
+        'get_or_create_translation',
+        'ensure_translations_cached',
+        'ensure_chapter_cached',
+        'bg_ensure_translations_cached',
+        'bg_ensure_chapter_cached',
+    }
+
+    assert retired_helpers.isdisjoint({
+        node.name for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    })
+    for forbidden in (
+        '_create_unverified_context',
+        'verify=False',
+        'CERT_NONE',
+        'check_hostname',
+        'urllib.request',
+        'urlopen(',
+        'bulk_save_objects',
+        'INSERT INTO biblical_texts',
+        'bible-api.com',
+        'api.nlt.to',
+    ):
+        assert forbidden not in source
+    for function in (
+        node for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+        constructs_scripture = any(
+            isinstance(call.func, ast.Name) and call.func.id == 'BiblicalText'
+            for call in calls
+        )
+        writes_session = any(
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr in {'add', 'bulk_save_objects', 'commit', 'execute'}
+            for call in calls
+        )
+        assert not (constructs_scripture and writes_session), function.name
+
+
+def test_legacy_scripture_read_routes_never_enqueue_acquisition_tasks():
+    backend_root = Path(__file__).resolve().parents[1]
+    module = ast.parse((backend_root / 'main.py').read_text(encoding='utf-8'))
+    route_paths = {
+        'get_book_content': '/api/biblical-texts/book-content',
+        'get_chapter_content': '/api/biblical-texts/chapter-content',
+        'get_verse_comparison': '/api/v1/texts/{book}/{chapter}/{verse}',
+    }
+    routes = {
+        node.name: node for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in route_paths
+    }
+
+    assert set(routes) == set(route_paths)
+    assert not any(
+        alias.name == 'BackgroundTasks'
+        for node in module.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    )
+    for name, route in routes.items():
+        assert any(
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == 'app'
+            and decorator.func.attr == 'get'
+            and decorator.args
+            and isinstance(decorator.args[0], ast.Constant)
+            and decorator.args[0].value == route_paths[name]
+            for decorator in route.decorator_list
+        )
+        assert 'background_tasks' not in {
+            argument.arg for argument in (*route.args.posonlyargs, *route.args.args)
+        }
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'add_task'
+            for node in ast.walk(route)
+        )
+
+
 def test_production_rejects_insecure_configuration():
     from pydantic import ValidationError
     from app.config import Settings
