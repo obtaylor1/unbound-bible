@@ -287,6 +287,25 @@ def test_body_allows_comparison_prose_that_is_not_markup():
     assert normalize_body('both 1<x and y>0 comparisons hold') == 'both 1<x and y>0 comparisons hold'
 
 
+@pytest.mark.parametrize('prose', ['x < y > z', 'both 1 < x and y > 0'])
+def test_body_allows_spaced_comparison_prose(prose):
+    from app.commentary.ingest.types import normalize_body
+
+    assert normalize_body(prose) == prose
+
+
+@pytest.mark.parametrize('tag', [
+    'abbr', 'bdi', 'bdo', 'big', 'blink', 'center', 'dfn', 'dir', 'font', 'kbd', 'marquee',
+    'nobr', 'noembed', 'noframes', 'param', 'plaintext', 'portal', 'rp', 'rt', 'ruby', 'samp',
+    'search', 'strike', 'tt', 'var', 'xmp', 'image',
+])
+def test_body_rejects_complete_standard_tag_set_even_when_embedded(tag):
+    from app.commentary.ingest.types import normalize_body
+
+    with pytest.raises(ValueError, match='markup'):
+        normalize_body(f'a<{tag}>b')
+
+
 @pytest.mark.parametrize('payload', [
     '<img src=x onerror=alert(1)>', '<svg/>', '<note/>', '<note>', '<hr>', '<h1>heading',
     '<note key="value">', '<unknown>text</unknown>',

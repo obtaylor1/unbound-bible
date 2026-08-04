@@ -18,15 +18,20 @@ _HORIZONTAL_WHITESPACE = re.compile(r'[^\S\n]+')
 _EXCESS_LINE_BREAKS = re.compile(r'\n{3,}')
 _MAX_RAW_BODY_CHARS = 200_000
 _STANDARD_HTML_TAGS = frozenset({
-    'a', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base', 'blockquote', 'body', 'br',
-    'button', 'canvas', 'caption', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd',
-    'del', 'details', 'dialog', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 'figure',
-    'footer', 'form', 'frame', 'frameset', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe',
-    'img', 'input', 'ins', 'label', 'legend', 'li', 'link', 'main', 'map', 'mark', 'media', 'menu',
-    'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output', 'p', 'picture',
-    'pre', 'progress', 'q', 'script', 'section', 'select', 'slot', 'small', 'source', 'span', 'strong',
-    'style', 'sub', 'summary', 'sup', 'svg', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot',
-    'th', 'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'video', 'wbr',
+    'a', 'abbr', 'acronym', 'address', 'applet', 'area', 'article', 'aside', 'audio', 'b', 'base',
+    'basefont', 'bdi', 'bdo', 'bgsound', 'big', 'blink', 'blockquote', 'body', 'br', 'button',
+    'canvas', 'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'command', 'content', 'data',
+    'datalist', 'dd', 'del', 'details', 'dfn', 'dialog', 'dir', 'div', 'dl', 'dt', 'element', 'em',
+    'embed', 'fieldset', 'figcaption', 'figure', 'font', 'footer', 'form', 'frame', 'frameset', 'head',
+    'header', 'hgroup', 'hr', 'html', 'i', 'iframe', 'image', 'img', 'input', 'ins', 'isindex', 'kbd',
+    'keygen', 'label', 'legend', 'li', 'link', 'listing', 'main', 'map', 'mark', 'marquee', 'math',
+    'media', 'menu', 'menuitem', 'meta', 'meter', 'multicol', 'nav', 'nextid', 'nobr', 'noembed',
+    'noframes', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output', 'p', 'param', 'picture',
+    'plaintext', 'portal', 'pre', 'progress', 'q', 'rb', 'rp', 'rt', 'rtc', 'ruby', 's', 'samp',
+    'script', 'search', 'section', 'select', 'shadow', 'slot', 'small', 'source', 'spacer', 'span',
+    'strike', 'strong', 'style', 'sub', 'summary', 'sup', 'svg', 'table', 'tbody', 'td', 'template',
+    'textarea', 'tfoot', 'th', 'thead', 'time', 'title', 'tr', 'track', 'tt', 'u', 'ul', 'var', 'video',
+    'wbr', 'xmp',
 }) | frozenset(f'h{level}' for level in range(1, 7))
 
 
@@ -79,16 +84,26 @@ def _contains_commentary_markup(value: str) -> bool:
 
         end = value.find('>', start + 1)
         if end < 0:
-            tail = value[start + 1:].lstrip()
+            tail = value[start + 1:]
+            if not tail or tail[0].isspace():
+                return False
             name_end = 0
             while name_end < len(tail) and _is_name_character(tail[name_end]):
                 name_end += 1
             return bool(name_end and tail[:name_end].lower() in _STANDARD_HTML_TAGS)
 
-        token = value[start + 1:end].strip()
+        token = value[start + 1:end]
         before = value[start - 1] if start else ''
         after = value[end + 1] if end + 1 < length else ''
-        if token.startswith('/') or token.endswith('/'):
+        if not token or token[0].isspace():
+            index = end + 1
+            continue
+        if token.startswith('/'):
+            if len(token) > 1 and token[1].isspace():
+                index = end + 1
+                continue
+            return True
+        if token.rstrip().endswith('/'):
             return True
         if token and _is_name_start(token[0]):
             name_end = 1
