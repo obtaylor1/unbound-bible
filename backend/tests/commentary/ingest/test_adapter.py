@@ -113,6 +113,11 @@ def test_rejects_empty_unknown_or_normalization_ambiguous_book_maps(book_map):
         _load(FIXTURE, book_map)
 
 
+def test_rejects_book_map_source_ids_that_resolve_to_the_same_work():
+    with pytest.raises(ValueError, match='canonical work'):
+        _load(FIXTURE, {'GEN': 'genesis', 'GenesisAlias': 'genesis'})
+
+
 def test_rejects_unmapped_and_duplicate_book_ids(tmp_path):
     bundle = _bundle()
     bundle['books'][0]['id'] = 'EXO'
@@ -230,6 +235,32 @@ def test_rejects_invalid_files_json_and_utf8(tmp_path):
     invalid_utf8.write_bytes(b'\x80')
     with pytest.raises(ValueError, match='UTF-8'):
         _load(invalid_utf8)
+
+
+@pytest.mark.parametrize('constant', [float('nan'), float('inf')], ids=['NaN', 'Infinity'])
+def test_rejects_nonstandard_json_constants_even_in_ignored_metadata(tmp_path, constant):
+    bundle = _bundle()
+    bundle['commentary']['metadata'] = constant
+
+    with pytest.raises(ValueError, match='JSON constant'):
+        _load(_write_bundle(tmp_path / 'constant.json', bundle))
+
+
+def test_accepts_an_optional_introduction_at_the_exact_body_limit(tmp_path):
+    bundle = _bundle()
+    bundle['books'][0]['introduction'] = 'x' * 100_000
+
+    rows = _load(_write_bundle(tmp_path / 'maximum.json', bundle))
+
+    assert rows[0].body == 'x' * 100_000
+
+
+def test_rejects_an_optional_introduction_over_the_body_limit(tmp_path):
+    bundle = _bundle()
+    bundle['books'][0]['introduction'] = 'x' * 100_001
+
+    with pytest.raises(ValueError, match='100000'):
+        _load(_write_bundle(tmp_path / 'over-limit.json', bundle))
 
 
 def test_rejects_oversized_file_before_reading(tmp_path):

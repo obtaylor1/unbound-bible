@@ -44,15 +44,22 @@ def _normalize_book_map(book_map: Mapping[str, str]) -> dict[str, str]:
     if not isinstance(book_map, Mapping) or not book_map:
         raise ValueError('book_map must be a nonempty mapping.')
     normalized: dict[str, str] = {}
+    source_id_by_work: dict[str, str] = {}
     for source_id, work_id in book_map.items():
         source_key = _normalize_scalar('book_map source id', source_id, maximum=500)
         if source_key in normalized:
             raise ValueError('book_map has ambiguous duplicate source IDs after normalization.')
         work_label = _normalize_scalar('book_map work id', work_id, maximum=255)
         try:
-            normalized[source_key] = resolve_source_work_id(work_label)
+            canonical_work_id = resolve_source_work_id(work_label)
         except ValueError as exc:
             raise ValueError(f'book_map contains an unknown work: {work_label!r}.') from exc
+        if canonical_work_id in source_id_by_work:
+            raise ValueError(
+                'book_map source IDs must map to unique canonical work IDs.',
+            )
+        source_id_by_work[canonical_work_id] = source_key
+        normalized[source_key] = canonical_work_id
     return normalized
 
 
@@ -86,9 +93,15 @@ def _content_body(value: object) -> str:
 def _optional_body(name: str, value: object) -> str | None:
     if type(value) is not str:
         raise ValueError(f'{name} must be a string.')
+    if value.strip():
+        return normalize_body(value)
     # Validate even whitespace-only optional fields, which otherwise emit no row.
-    normalize_body(f'x{value}')
-    return None if not value.strip() else normalize_body(value)
+    normalize_body(f'{value}x')
+    return None
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f'bundle must not contain nonstandard JSON constants: {value}.')
 
 
 def _read_bundle(path: Path) -> Mapping[str, Any]:
@@ -109,7 +122,7 @@ def _read_bundle(path: Path) -> Mapping[str, Any]:
     except OSError as exc:
         raise ValueError('bundle could not be read.') from exc
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
     except json.JSONDecodeError as exc:
         raise ValueError('bundle must contain valid JSON.') from exc
     bundle = _require_mapping('bundle', parsed)
