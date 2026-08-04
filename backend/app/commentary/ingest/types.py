@@ -79,11 +79,12 @@ def _contains_commentary_markup(value: str) -> bool:
         if start + 1 >= length:
             return False
         next_character = value[start + 1]
+        if not (_is_name_start(next_character) or next_character in '/!?'):
+            index = start + 1
+            continue
         if next_character in '!?':
             return True
-        if next_character.isspace() or (
-            next_character == '/' and start + 2 < length and value[start + 2].isspace()
-        ):
+        if next_character == '/' and start + 2 < length and value[start + 2].isspace():
             index = start + 1
             continue
 

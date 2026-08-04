@@ -318,6 +318,16 @@ def test_body_rejects_markup_hidden_after_comparison_syntax(payload):
 
 
 @pytest.mark.parametrize('payload', [
+    'x <1 and <img>z', 'x <= y and <script>alert', 'x <$ and <!DOCTYPE html>',
+])
+def test_body_rescans_non_markup_comparison_openers(payload):
+    from app.commentary.ingest.types import normalize_body
+
+    with pytest.raises(ValueError, match='markup'):
+        normalize_body(payload)
+
+
+@pytest.mark.parametrize('payload', [
     '<img src=x onerror=alert(1)>', '<svg/>', '<note/>', '<note>', '<hr>', '<h1>heading',
     '<note key="value">', '<unknown>text</unknown>',
 ])
