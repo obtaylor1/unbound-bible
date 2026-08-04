@@ -2301,17 +2301,6 @@ def get_scripture_comparison_baseline(book: str, chapter: int, verse: int, db: S
             ethiopian_text = t
             break
             
-    # Fallback to KJV if no Ethiopian text in database, or a default placeholder
-    if not ethiopian_text:
-        # Create a sample placeholder for the baseline
-        ethiopian_text = BiblicalText(
-            book=book,
-            chapter=chapter,
-            verse=verse,
-            text=f"[Awaiting full Ge'ez source text for {book} {chapter}:{verse}]",
-            translation="ETH81"
-        )
-        
     translations_list = {}
     for t in texts:
         # Map word differences or textual additions
@@ -2340,7 +2329,12 @@ def get_scripture_comparison_baseline(book: str, chapter: int, verse: int, db: S
         "book": book,
         "chapter": chapter,
         "verse": verse,
-        "ethiopian_baseline": ethiopian_text.text,
+        "ethiopian_baseline": ethiopian_text.text if ethiopian_text else None,
+        "ethiopian_availability": {
+            "available": ethiopian_text is not None,
+            "status": "available" if ethiopian_text else "unavailable",
+            "translation": ethiopian_text.translation if ethiopian_text else None,
+        },
         "comparisons": translations_list
     }
 
@@ -2355,14 +2349,16 @@ def get_ethiopian_reference(book: str, chapter: int, verse: int, db: Session = D
     ).first()
     
     if not t:
-        return {
-            "book": book,
-            "chapter": chapter,
-            "verse": verse,
-            "text": f"This book ({book}) is preserved in the ancient Ethiopian Orthodox Tewahedo canon, but the full Ge'ez translation text for this chapter is currently awaiting source verification.",
-            "translation": "ETHIO81",
-            "is_sample_placeholder": True
-        }
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "status": "unavailable",
+                "book": book,
+                "chapter": chapter,
+                "verse": verse,
+                "translation": None,
+            },
+        )
         
     return {
         "book": t.book,

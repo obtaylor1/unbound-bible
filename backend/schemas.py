@@ -1,6 +1,6 @@
 # Liberation Bible Project - Pydantic Schemas
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from enum import Enum
@@ -87,15 +87,52 @@ class SermonAnalysisRequest(BaseModel):
     """Request schema for sermon analysis with audio file"""
     pass  # File will be handled by FastAPI's UploadFile
 
+class TranscriptSegment(BaseModel):
+    text: str
+    timestamp: Optional[str] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
+    speaker: Optional[str] = None
+
+class SermonSummary(BaseModel):
+    topic: str
+    theme: Optional[str] = None
+    main_theme: Optional[str] = None
+    short_summary: Optional[str] = None
+    detailed_summary: Optional[str] = None
+    key_points: List[str] = Field(default_factory=list)
+    conclusion: Optional[str] = None
+    theological_framework: Optional[str] = None
+
+class AccuracyClaim(BaseModel):
+    statement: Optional[str] = None
+    timestamp: Optional[str] = None
+    claim_text: Optional[str] = None
+    status: Optional[str] = None
+    category: Optional[str] = None
+    details: Optional[str] = None
+    corrective_notes: Optional[str] = None
+    issue_type: str
+    severity: str
+    explanation: str
+    correction: str
+    references: List[str] = Field(default_factory=list)
+
+class VisualDashboardMetrics(BaseModel):
+    accuracy_score: int
+    scripture_usage_score: int
+    context_score: int
+    theology_consistency_score: int
+    confidence_level: int
+
 class SermonAnalysisResponse(BaseModel):
     """Response schema for sermon analysis results"""
     transcription: str
-    biblical_themes: List[str]
-    referenced_passages: List[str]
-    historical_connections: List[str]
-    cultural_significance: str
-    accuracy_assessment: str
-    suggestions: List[str]
+    transcript_segments: List[TranscriptSegment]
+    summary: SermonSummary
+    metrics: VisualDashboardMetrics
+    claims: List[AccuracyClaim]
+    further_study: List[str]
     processing_time: float
 
 class CulturalContextRequest(BaseModel):
@@ -111,6 +148,40 @@ class CulturalContextResponse(BaseModel):
     liberation_perspective: str
     additional_resources: List[str]
 
+class TranslationBiasResponse(BaseModel):
+    id: int
+    book: str
+    chapter: int
+    verse: int
+    severity: str
+    title: str
+    original: Optional[str] = None
+    literal: Optional[str] = None
+    target_translation: Optional[str] = None
+    target_text: Optional[str] = None
+    explanation: str
+    scholar: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class DynamicBiasAuditRequest(BaseModel):
+    book: str
+    chapter: int
+    verse: int
+
+class DynamicBiasAuditResponse(BaseModel):
+    detected: bool
+    severity: str
+    title: str
+    original: Optional[str] = None
+    literal: Optional[str] = None
+    target_translation: Optional[str] = None
+    target_text: Optional[str] = None
+    explanation: str
+    scholar: Optional[str] = None
+    translations: Optional[Dict[str, str]] = None
+
 class VerseDetailsResponse(BaseModel):
     """Complete verse details with all translations, historical context, and cross-references"""
     book: str
@@ -119,10 +190,13 @@ class VerseDetailsResponse(BaseModel):
     translations: Dict[str, str]  # translation_name -> verse_text
     verse_meaning: str
     translation_comparison: str
+    critical_analysis: Optional[str] = ""
     historical_context: List[HistoricalNoteResponse]
     geographical_context: List[GeographicalLocationResponse]
     original_language_insights: List[OriginalWordResponse]
     cross_references: List[Dict[str, str]]  # [{"book": "Matthew", "chapter": "5", "verse": "16", "text": "..."}]
+    translation_bias_alerts: List[TranslationBiasResponse] = Field(default_factory=list)
+    race_misuse_records: List[Dict[str, Any]] = Field(default_factory=list)
     
     class Config:
         from_attributes = True
@@ -130,10 +204,13 @@ class VerseDetailsResponse(BaseModel):
 # Chat request and response schemas
 class ChatRequest(BaseModel):
     question: str
+    history: Optional[List[Dict[str, str]]] = None
+    study_mode: Optional[str] = "scholarly"
 
 class ChatResponse(BaseModel):
     answer: str
     context_used: List[str]
+    follow_ups: List[str]
 
 # Abstract Verse ID Architecture Schemas
 class AbstractVerseResponse(BaseModel):
@@ -304,3 +381,101 @@ class QuerySuggestionsResponse(BaseModel):
     conceptual_queries: List[str]
     historical_queries: List[str]
     featured_query: str
+
+class UserNoteBase(BaseModel):
+    book: Optional[str] = None
+    chapter: Optional[int] = None
+    verse: Optional[int] = None
+    text: str
+    tags: List[str] = Field(default_factory=list)
+
+class UserNoteCreate(UserNoteBase):
+    pass
+
+class UserNoteUpdate(BaseModel):
+    text: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class UserNoteResponse(UserNoteBase):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class CanonCompareItem(BaseModel):
+    book_id: str
+    name: str
+    testament: str
+    in_canons: List[str]
+    notes: Optional[str] = None
+    significance: Optional[str] = None
+
+class CanonCompareResponse(BaseModel):
+    books: List[CanonCompareItem]
+
+class BookDetailResponse(BaseModel):
+    id: str
+    name: str
+    testament: str
+    description: Optional[str] = None
+    geez_name: Optional[str] = None
+    canonical_order: int
+    canon_inclusions: List[str]
+
+class RaceMisuseRecordResponse(BaseModel):
+    id: int
+    book: str
+    chapter: int
+    verse: int
+    severity: str
+    title: str
+    historical_misuse: str
+    harm_caused: Optional[str] = None
+    corrective_interpretation: str
+    decolonial_perspective: Optional[str] = None
+    ethiopian_perspective: Optional[str] = None
+    study_notes: Optional[str] = None
+
+class FactbookEntrySummary(BaseModel):
+    slug: str
+    title: str
+    summary: str
+    geographical_region: Optional[str] = None
+
+class ManuscriptWitnessResponse(BaseModel):
+    id: int
+    name: str
+    type: Optional[str] = None
+    date: Optional[str] = None
+    language: Optional[str] = None
+    significance: Optional[str] = None
+
+class FactbookEntryDetailResponse(BaseModel):
+    slug: str
+    title: str
+    summary: str
+    content: Optional[str] = None
+    geographical_region: Optional[str] = None
+    ethiopian_canon_relevance: Optional[str] = None
+    manuscripts_attestations: Optional[str] = None
+    western_interpretation: Optional[str] = None
+    ethiopian_interpretation: Optional[str] = None
+    decolonial_interpretation: Optional[str] = None
+    witnesses: List[ManuscriptWitnessResponse] = Field(default_factory=list)
+
+class StudySessionResponse(BaseModel):
+    id: int
+    title: str
+    notes: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class StudySessionCreate(BaseModel):
+    title: str
+    notes: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None

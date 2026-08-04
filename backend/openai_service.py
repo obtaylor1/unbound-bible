@@ -156,3 +156,43 @@ async def suggest_cultural_context(biblical_passage: str) -> Dict[str, Any]:
         
     except Exception as e:
         raise Exception(f"Failed to get cultural context: {e}")
+
+
+async def generate_verse_details_ai(
+    book: str,
+    chapter: int,
+    verse: int,
+    translations: Dict[str, str],
+) -> Optional[Dict[str, str]]:
+    """Generate optional AI commentary for a verse without altering scripture text."""
+    try:
+        translations_text = "\n".join(
+            f'- {code}: "{translation_text}"'
+            for code, translation_text in translations.items()
+        )
+        prompt = f"""
+        Provide historical context and a translation comparison for {book} {chapter}:{verse}.
+
+        TRANSLATIONS:
+        {translations_text}
+
+        Return JSON with verse_meaning, translation_comparison, and critical_analysis.
+        Commentary must be clearly analytical and must never invent or replace scripture text.
+        """
+        response = openai_client.chat.completions.create(
+            model="gpt-5",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a biblical scholar providing clearly labeled commentary.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=1000,
+        )
+        content = response.choices[0].message.content
+        return json.loads(content) if content else None
+    except Exception as error:
+        print(f"Error generating AI verse details: {error}")
+        return None

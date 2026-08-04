@@ -6,10 +6,41 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, Session
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import ARRAY
-from pgvector.sqlalchemy import Vector
 from datetime import datetime
+import json
+import os
+from sqlalchemy.types import Text as SQLText, TypeDecorator
 import enum
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+is_sqlite = not DATABASE_URL or DATABASE_URL.startswith("sqlite")
+
+if is_sqlite:
+    class SQLiteVector(TypeDecorator):
+        impl = SQLText
+        cache_ok = True
+
+        def process_bind_param(self, value, dialect):
+            if isinstance(value, list):
+                return json.dumps(value)
+            return value
+
+        def process_result_value(self, value, dialect):
+            if value is None:
+                return None
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return value
+
+    EmbeddingType = SQLiteVector
+    ArrayType = lambda _base_type: JSON
+else:
+    from pgvector.sqlalchemy import Vector
+    from sqlalchemy.dialects.postgresql import ARRAY
+
+    EmbeddingType = Vector(1536)
+    ArrayType = lambda base_type: ARRAY(base_type)
 
 Base = declarative_base()
 
@@ -28,7 +59,7 @@ class BiblicalText(Base):
     abstract_verse_id = Column(Integer, ForeignKey("abstract_verses.id"), nullable=True, index=True)
     
     # Vector search capabilities for semantic search
-    text_embedding = Column(Vector(1536))  # OpenAI text-embedding-ada-002 (1536 dimensions)
+    text_embedding = Column(EmbeddingType)  # OpenAI text-embedding-ada-002 (1536 dimensions)
     
     # Versioning support for immutable revisions
     version = Column(Integer, default=1)
@@ -60,10 +91,13 @@ class BiblicalText(Base):
     textual_variants = relationship("TextualVariant", back_populates="biblical_text")
     
     # Index for vector similarity search
-    __table_args__ = (
-        Index("ix_biblical_texts_embedding", text_embedding, postgresql_using="ivfflat", postgresql_with={"lists": 100}),
-        Index("ix_biblical_texts_abstract_verse", abstract_verse_id),
-    )
+    if is_sqlite:
+        __table_args__ = (Index("ix_biblical_texts_abstract_verse", abstract_verse_id),)
+    else:
+        __table_args__ = (
+            Index("ix_biblical_texts_embedding", text_embedding, postgresql_using="ivfflat", postgresql_with={"lists": 100}),
+            Index("ix_biblical_texts_abstract_verse", abstract_verse_id),
+        )
 
 class HistoricalNote(Base):
     __tablename__ = "historical_notes"
@@ -94,7 +128,7 @@ class GeographicalLocation(Base):
     # Multi-candidate support with confidence scoring
     confidence_score = Column(Float, default=0.5)  # 0.0 to 1.0 confidence level
     identification_source = Column(String(200))  # Academic source for this identification
-    alternative_names = Column(ARRAY(String))  # Multiple name possibilities
+    alternative_names = Column(ArrayType(String))  # Multiple name possibilities
     archaeological_evidence = Column(Text)  # Supporting archaeological data
     scholarly_debate = Column(Text)  # Notes on academic disagreements
     
@@ -103,6 +137,24 @@ class GeographicalLocation(Base):
     
     # Relationships
     biblical_text = relationship("BiblicalText", back_populates="geographical_locations")
+
+class TranslationBias(Base):
+    __tablename__ = "translation_biases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book = Column(String(50), nullable=False, index=True)
+    chapter = Column(Integer, nullable=False)
+    verse = Column(Integer, nullable=False)
+    severity = Column(String(20), nullable=False)
+    title = Column(String(200), nullable=False)
+    original = Column(String(200))
+    literal = Column(Text)
+    target_translation = Column(String(50))
+    target_text = Column(Text)
+    explanation = Column(Text, nullable=False)
+    scholar = Column(String(200))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 class LanguageEnum(enum.Enum):
     hebrew = "hebrew"
@@ -257,8 +309,8 @@ class AbstractVerse(Base):
     id = Column(Integer, primary_key=True, index=True)
     
     # Content identification
-    canonical_key = Column(String(200), nullable=False, index=True)  # e.g., "genesis.1.1", "meqabyan1.1.1"
-    content_hash = Column(String(64), nullable=True, index=True)  # SHA256 for deduplication
+    canonical_key = Column(String(200), nullable=False)  # e.g., "genesis.1.1", "meqabyan1.1.1"
+    content_hash = Column(String(64), nullable=True)  # SHA256 for deduplication
     
     # Metadata
     notes = Column(JSON)  # Additional metadata for research
@@ -387,7 +439,7 @@ class CrossReference(Base):
     # Rich metadata for research
     description = Column(Text)  # Explanation of the connection
     linguistic_markers = Column(JSON)  # Language patterns that indicate connection
-    thematic_keywords = Column(ARRAY(String))  # Shared themes or concepts
+    thematic_keywords = Column(ArrayType(String))  # Shared themes or concepts
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
@@ -459,7 +511,7 @@ class PersonPlaceNetwork(Base):
     # Entity identification
     entity_name = Column(String(200), nullable=False)
     entity_type = Column(String(50), nullable=False)  # person, place, nation, tribe, etc.
-    alternative_names = Column(ARRAY(String))  # Multiple name forms
+    alternative_names = Column(ArrayType(String))  # Multiple name forms
     
     # Network properties
     centrality_score = Column(Float)  # Graph centrality measure
@@ -476,4 +528,135 @@ class PersonPlaceNetwork(Base):
     scholarly_notes = Column(Text)  # Academic commentary
     related_entities = Column(JSON)  # Connected people/places with relationship types
     
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class UserNote(Base):
+    __tablename__ = "user_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book = Column(String(50))
+    chapter = Column(Integer)
+    verse = Column(Integer)
+    text = Column(Text, nullable=False)
+    tags = Column(JSON, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class Book(Base):
+    __tablename__ = "books"
+
+    id = Column(String(50), primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    testament = Column(String(20))
+    description = Column(Text)
+    geez_name = Column(String(100))
+    canonical_order = Column(Integer)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    canons = relationship("CanonBook", back_populates="book")
+
+class CanonBook(Base):
+    __tablename__ = "canon_books"
+
+    id = Column(Integer, primary_key=True, index=True)
+    canon_id = Column(Integer, ForeignKey("canons.id"), nullable=False)
+    book_id = Column(String(50), ForeignKey("books.id"), nullable=False)
+    section = Column(String(100))
+    is_canonical = Column(Boolean, default=True)
+    notes = Column(Text)
+    canon = relationship("Canon")
+    book = relationship("Book", back_populates="canons")
+
+class RaceMisuseRecord(Base):
+    __tablename__ = "race_misuse_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book = Column(String(50), nullable=False, index=True)
+    chapter = Column(Integer, nullable=False)
+    verse = Column(Integer, nullable=False)
+    severity = Column(String(20), nullable=False)
+    title = Column(String(200), nullable=False)
+    historical_misuse = Column(Text, nullable=False)
+    harm_caused = Column(Text)
+    corrective_interpretation = Column(Text, nullable=False)
+    decolonial_perspective = Column(Text)
+    ethiopian_perspective = Column(Text)
+    study_notes = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class FactbookEntry(Base):
+    __tablename__ = "factbook_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String(100), nullable=False, unique=True, index=True)
+    title = Column(String(200), nullable=False)
+    summary = Column(Text, nullable=False)
+    content = Column(Text)
+    geographical_region = Column(String(100))
+    ethiopian_canon_relevance = Column(Text)
+    manuscripts_attestations = Column(Text)
+    western_interpretation = Column(Text)
+    ethiopian_interpretation = Column(Text)
+    decolonial_interpretation = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    witnesses = relationship("ManuscriptWitness", back_populates="factbook_entry")
+
+class ManuscriptWitness(Base):
+    __tablename__ = "manuscript_witnesses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factbook_entry_id = Column(Integer, ForeignKey("factbook_entries.id"))
+    name = Column(String(200), nullable=False)
+    type = Column(String(100))
+    date = Column(String(100))
+    language = Column(String(100))
+    significance = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    factbook_entry = relationship("FactbookEntry", back_populates="witnesses")
+
+class SermonAnalysis(Base):
+    __tablename__ = "sermon_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), default="Untitled Sermon")
+    speaker = Column(String(100))
+    transcript = Column(Text, nullable=False)
+    summary = Column(Text)
+    accuracy_score = Column(Integer)
+    misuse_warnings = Column(JSON)
+    race_power_concerns = Column(JSON)
+    corrective_notes = Column(Text)
+    suggested_study_path = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    claims = relationship("SermonClaim", back_populates="sermon_analysis")
+
+class SermonClaim(Base):
+    __tablename__ = "sermon_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sermon_analysis_id = Column(Integer, ForeignKey("sermon_analyses.id"), nullable=False)
+    claim_text = Column(Text, nullable=False)
+    status = Column(String(50))
+    category = Column(String(50))
+    details = Column(Text)
+    corrective_notes = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    sermon_analysis = relationship("SermonAnalysis", back_populates="claims")
+
+class StudySession(Base):
+    __tablename__ = "study_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), default="Study Session")
+    notes = Column(Text)
+    meta_data = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AISource(Base):
+    __tablename__ = "ai_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    author = Column(String(200))
+    source_type = Column(String(100))
+    content_reference = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
