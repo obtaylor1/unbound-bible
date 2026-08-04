@@ -75,38 +75,27 @@ RESTful API design with:
 
 ## Recent Changes
 
-### Adam and Eve PDF Processing and AI Integration (September 18, 2025)
+### Scripture Ingestion Safety (August 2026)
 
-Successfully implemented comprehensive PDF processing capabilities for pseudepigraphal texts with full AI integration:
+Scripture is published only through the reviewed stage, validate, and confirmed-publish workflow.
+Legacy direct writers, sample loaders, network downloaders, and embedding mutators are retired and
+exit without touching the network or database. Their filenames remain only to direct operators to
+the safe replacement.
 
-**PDF Processing Implementation**:
-- **PyMuPDF Integration**: Added Python library for robust PDF text extraction and processing
-- **Structured Content Extraction**: Created `ingest_adam_eve.py` script that processes 289-page "Book of Adam and Eve" PDF into 51 structured sections
-- **Text Cleaning Pipeline**: Implemented regex-based cleaning to remove "Digitized by Google" artifacts and format headers properly
-- **Database Integration**: Successfully inserted 26 biblical text records with proper book/chapter/verse structure
+Run the following commands from the `backend` directory and target the intended migrated database
+explicitly on every command:
 
-**AI Integration and Vector Search**:
-- **Vector Embeddings**: Generated OpenAI embeddings for all 26 Adam and Eve texts using `generate_embeddings_adameve.py` batch script
-- **Semantic Search Fixes**: Resolved critical SQL parameter binding issues in `vector_search.py` affecting pgvector operations
-- **High-Relevance Results**: Integration testing confirms semantic search returns 0.8-0.9 similarity scores for queries like "Adam and Eve leaving the garden" and "Satan tempting Adam"
-- **Translation Filtering**: Successfully implemented filtering to search specific translations including "ADAMEVE" code
+```text
+python -m app.library.ingest.cli stage --manifest <reviewed-manifest> --database-url <migrated-database-url>
+python -m app.library.ingest.cli validate --run-id <run-id> --database-url <migrated-database-url>
+python -m app.library.ingest.cli publish --run-id <run-id> --confirm --database-url <migrated-database-url>
+```
 
-**Database Schema Updates**:
-- **Translation Record**: Created translation entry (ID: 9, code: "ADAMEVE") for proper provenance tracking
-- **Content Structure**: Biblical texts stored as "Adam and Eve 2", "Adam and Eve 3" with proper chapter/verse mapping
-- **Vector Storage**: All texts now have 1536-dimensional embeddings for AI chat functionality
-
-**Technical Achievements**:
-- **SQL Parameter Issues**: Fixed pgvector binding problems by using direct string substitution for vector literals
-- **Batch Processing**: Safe embedding generation with progress tracking and commit batching every 5 records
-- **Integration Testing**: Created comprehensive test suite verifying database content, embedding presence, and search functionality
-
-**Mission Alignment**:
-The Adam and Eve integration expands the decolonizing biblical study mission by:
-- Providing access to pseudepigraphal texts often excluded from Western canon
-- Enabling AI-powered exploration of Satan's conflicts and Adam's trials
-- Supporting semantic search across diverse biblical traditions
-- Making ancient texts discoverable through modern AI technology
+An explicitly set `DATABASE_URL` is supported, but `--database-url` is recommended so the target is
+visible in each command. Do not publish unreviewed, sample, placeholder, or prose content as Scripture.
+Adapters for KJV, public English editions, original-language texts, Ethiopian critical texts, and
+Adam and Eve are not installed yet; those editions remain unavailable until their source manifests,
+licensing, checksums, and adapters complete review.
 
 ### Comprehensive UX & Feature Polish (April 2026)
 
@@ -163,48 +152,12 @@ Successfully updated navigation branding to reflect the application's clean, acc
 - Fixed "searchTerm is not defined" error in InteractiveMap component by removing unused variable references
 - Cleaned up unused search handling functions following UI simplification
 
-### Comprehensive Biblical Data Ingestion Implementation (September 15, 2025)
+### Historical Direct-Ingestion Work (September 2025)
 
-Successfully implemented production-ready biblical data ingestion system with complete public domain sources:
-
-**Database Population** (46,640+ total records):
-- **31,102 KJV verses**: Complete King James Version Bible (all 66 books) from Project Gutenberg File #30
-- **14,197 Strong's entries**: Complete Hebrew (8,674) + Greek (5,523) lexicon from secure HTTPS sources  
-- **1,340 geographical locations**: Comprehensive biblical geography with accurate coordinates from OpenBible.info
-- **Translation metadata**: KJV translation record with proper provenance and licensing
-
-**Enhanced Database Schema**:
-- **LexiconEntry model**: Complete Strong's Exhaustive Concordance integration
-- **Translation model**: Support for multiple biblical translations and original languages
-- **Enhanced relationships**: Proper foreign key constraints linking biblical texts, lexicon, and geography
-- **Original language support**: Schema ready for Hebrew/Greek text integration
-
-**Security Implementation**:
-- **HTTPS-only data sources**: Eliminated HTTP vulnerabilities with secure GitHub repositories
-- **Cryptographic verification**: SHA256 checksum validation for data integrity
-- **Fail-closed security**: Secure-by-default behavior with proper error handling
-- **SSL certificate validation**: MITM attack prevention for all downloads
-
-**Data Ingestion Scripts**:
-- `ingest_kjv.py`: Complete KJV Bible text parser handling Project Gutenberg's structured format
-- `ingest_strongs.py`: Secure Strong's Concordance ingestion with XML/CSV parsing capabilities
-- `ingest_geography.py`: OpenBible.info JSONL data parser with coordinate validation
-- `ingest_all_data.py`: Master orchestration script for complete data population
-- `ethiopian_canon_placeholder.json`: Framework for future Ethiopian Orthodox canon integration
-
-**Data Sources & Provenance**:
-- **KJV Bible**: Project Gutenberg File #30 (public domain, complete 31,102 verses)
-- **Strong's Concordance**: MorphGNT GitHub repository (public domain, cryptographically verified)
-- **Biblical Geography**: OpenBible.info (Creative Commons Attribution 4.0, 1,340 verified locations)
-- **Ethiopian Canon**: Academic placeholder awaiting authentic Ge'ez manuscript sources
-
-**Mission Alignment**:
-The system now provides authentic biblical sources supporting the decolonization mission through:
-- Complete public domain biblical texts free from modern copyright restrictions
-- Original language lexical data enabling Hebrew/Greek word studies
-- Geographical context connecting biblical narratives to authentic historical locations  
-- Framework for non-Western canonical traditions (Ethiopian Orthodox placeholder)
-- Transparent provenance and licensing documentation
+Earlier direct-ingestion experiments are retained in project history, not as production procedures.
+They did not meet the current requirements for reviewed manifests, deterministic validation,
+transactional publication, provenance, and explicit database targeting. Do not run the legacy
+filenames described in older notes or commits. Use the Scripture Ingestion Safety workflow above.
 
 ### Authentication and Forum System Implementation (September 15, 2025)
 

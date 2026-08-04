@@ -32,35 +32,6 @@ class VectorSearchService:
             print(f"Error generating embedding: {e}")
             return [0.0] * self.embedding_dim
     
-    async def populate_embeddings(self, db: Session, batch_size: int = 100):
-        """Populate embeddings for all biblical texts without embeddings"""
-        texts_without_embeddings = db.query(BiblicalText).filter(
-            BiblicalText.text_embedding.is_(None)
-        ).limit(batch_size).all()
-        
-        for text in texts_without_embeddings:
-            try:
-                # Create embedding text with context
-                embedding_text = f"{text.book} {text.chapter}:{text.verse} - {text.text}"
-                embedding = await self.generate_embedding(embedding_text)
-                
-                # Update text with embedding using proper pgvector format
-                # Convert embedding to proper vector format for PostgreSQL
-                embedding_str = '[' + ','.join(map(str, embedding)) + ']'
-                db.execute(
-                    text("UPDATE biblical_texts SET text_embedding = :embedding::vector WHERE id = :text_id"),
-                    {"embedding": embedding_str, "text_id": text.id}
-                )
-                
-                print(f"Generated embedding for {text.book} {text.chapter}:{text.verse}")
-                
-            except Exception as e:
-                print(f"Error processing {text.book} {text.chapter}:{text.verse}: {e}")
-                continue
-        
-        db.commit()
-        return len(texts_without_embeddings)
-    
     async def semantic_search(
         self, 
         db: Session, 

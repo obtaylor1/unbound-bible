@@ -23,6 +23,46 @@ COMMON_WORKFLOW = (
     'explicitly set database_url is permitted',
 )
 LEGACY_INGESTERS = {
+    REPOSITORY_ROOT / 'add_popular_verse_translations.py': (
+        'popular verse translation writer is retired',
+        'reviewed manifest and installed adapter are unavailable',
+    ),
+    REPOSITORY_ROOT / 'backend/ingest_all_data.py': (
+        'master direct ingestion launcher is retired',
+        'does not run legacy ingestion scripts',
+    ),
+    REPOSITORY_ROOT / 'backend/ingest_kjv.py': (
+        'direct kjv ingester is retired',
+        'reviewed kjv manifest and installed adapter are unavailable',
+    ),
+    REPOSITORY_ROOT / 'backend/ingest_public_translations.py': (
+        'direct public translation ingester is retired',
+        'reviewed public translation manifests and installed adapters are unavailable',
+    ),
+    REPOSITORY_ROOT / 'backend/add_sample_translations.py': (
+        'sample scripture writer is retired',
+        'sample or placeholder scripture must not be published',
+    ),
+    REPOSITORY_ROOT / 'backend/data/ingest_adam_eve.py': (
+        'direct adam and eve ingester is retired',
+        'reviewed adam and eve manifest and installed adapter are unavailable',
+    ),
+    REPOSITORY_ROOT / 'backend/data/generate_embeddings_adameve.py': (
+        'direct adam and eve embedding writer is retired',
+        'published scripture rows are immutable outside the verified publisher',
+    ),
+    REPOSITORY_ROOT / 'server/data/ingest_core_originals.py': (
+        'direct original-language ingester is retired',
+        'reviewed original-language manifests and installed adapters are unavailable',
+    ),
+    REPOSITORY_ROOT / 'server/data/ingest_english_texts.py': (
+        'direct english scripture ingester is retired',
+        'reviewed english manifests and installed adapters are unavailable',
+    ),
+    REPOSITORY_ROOT / 'server/data/ingest_ethiopian_critical_texts.py': (
+        'direct ethiopian critical-text ingester is retired',
+        'reviewed ethiopian manifests and installed adapters are unavailable',
+    ),
     REPOSITORY_ROOT / 'server/data/ingest_ertale_canon.py': (
         'legacy direct ertale ingester path is retired',
         'reviewed `ertale` adapter is planned for phase 3 and unavailable today',
@@ -54,6 +94,50 @@ LEGACY_INGESTERS = {
         'publish --run-id <run-id> --confirm',
     ),
 }
+
+
+def test_only_verified_publisher_writes_scripture_rows():
+    allowed_writer = REPOSITORY_ROOT / 'backend/app/library/ingest/publish.py'
+    migration_paths = {
+        REPOSITORY_ROOT / 'backend/migration_service.py',
+    }
+    violations = []
+
+    for path in sorted(REPOSITORY_ROOT.rglob('*.py')):
+        relative = path.relative_to(REPOSITORY_ROOT)
+        if (
+            path == allowed_writer
+            or path in migration_paths
+            or 'tests' in relative.parts
+            or 'alembic' in relative.parts
+            or '.worktrees' in relative.parts
+        ):
+            continue
+
+        source = path.read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
+            constructs_scripture = any(
+                isinstance(call.func, ast.Name) and call.func.id == 'BiblicalText'
+                for call in calls
+            )
+            writes_session = any(
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr in {'add', 'add_all', 'bulk_save_objects', 'commit', 'execute'}
+                for call in calls
+            )
+            if constructs_scripture and writes_session:
+                violations.append(f'{relative}:{node.name}: ORM scripture write')
+
+        normalized = ' '.join(source.casefold().split())
+        for operation in ('insert into', 'update', 'delete from'):
+            if f'{operation} biblical_texts' in normalized:
+                violations.append(f'{relative}: raw SQL scripture write')
+
+    assert violations == []
 
 
 def _assert_inert_notice_structure(source, required_notice):
@@ -163,7 +247,8 @@ def test_exact_structure_rejects_an_extra_main_print_expression():
 
 
 def test_exact_structure_rejects_inaccurate_ertale_guidance():
-    script, required_notice = next(iter(LEGACY_INGESTERS.items()))
+    script = REPOSITORY_ROOT / 'server/data/ingest_ertale_canon.py'
+    required_notice = LEGACY_INGESTERS[script]
     inaccurate = script.read_text(encoding='utf-8').replace(
         'reviewed `ertale` adapter is planned for Phase 3 and unavailable today',
         'reviewed `ertale` adapter is ready today',
