@@ -1,0 +1,23 @@
+{
+  "commentary": {"id": "matthew-henry"},
+  "books": [
+    {
+      "id": "GEN",
+      "name": "Genesis",
+      "commonName": "Genesis",
+      "introduction": "An introduction to Genesis.",
+      "order": 1,
+      "numberOfChapters": 1,
+      "chapters": [
+        {
+          "number": 1,
+          "introduction": "An introduction to the first chapter.",
+          "content": [
+            {"type": "verse", "number": 1, "content": ["In the beginning."]},
+            {"type": "verse", "number": "2-3", "content": ["First paragraph.", "Second   paragraph."]}
+          ]
+        }
+      ]
+    }
+  ]
+}
