@@ -14,7 +14,7 @@
 
 This plan delivers the approved first release: trusted ingestion, five-source import, public read APIs, the core Commentary tool, citations, accessible verse selection, text sizing, in-entry search, copy actions, and expanded reading. Two-source comparison and AI grounding remain separate milestones because neither is required to publish a complete, testable commentary reader; plan them only after this release passes its acceptance gate.
 
-Preserve all unrelated working-tree changes. At execution time, create an isolated worktree from the intended base or confirm every overlapping dirty file with the user before editing. The repository currently has an Alembic chain ending at `0006_platform_integrity`; the commentary revision below must use that exact head as its `down_revision`.
+Preserve all unrelated working-tree changes. At execution time, create an isolated worktree from the intended base or confirm every overlapping dirty file with the user before editing. This feature branch's committed Alembic chain ends at `0007_verified_ingest`; the commentary revision below must use that exact head as its `down_revision`. If another migration is merged first, rebase and update the revision dependency before running migrations.
 
 ## File structure
 
@@ -372,7 +372,7 @@ class CommentaryPublication(Base):
 
 Add named checks for allowed statuses/types, positive coordinates, paired verse bounds, `verse_end >= verse_start`, 64-character checksums, and nonnegative counts. Add a partial unique index for one active publication per source and a lookup index on `(edition_id, work_id, chapter, verse_start, verse_end)`.
 
-Create the Alembic revision with `revision = '0008_commentary_library'` and `down_revision = '0006_platform_integrity'`. Its upgrade and downgrade must mirror every model constraint and index. Import the model module in `backend/app/application.py` beside the existing library imports.
+Create the Alembic revision with `revision = '0008_commentary_library'` and `down_revision = '0007_verified_ingest'`. Its upgrade and downgrade must mirror every model constraint and index. Import the model module in `backend/app/application.py` beside the existing library imports.
 
 - [ ] **Step 4: Run model and application tests**
 
