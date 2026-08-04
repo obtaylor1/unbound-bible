@@ -307,6 +307,17 @@ def test_body_rejects_complete_standard_tag_set_even_when_embedded(tag):
 
 
 @pytest.mark.parametrize('payload', [
+    'x < y and <img>z', 'x < y and <script>alert', 'x < y <!DOCTYPE html>',
+    'x < y <?xml version="1.0"?>', 'x </ y </script>z', 'a<my-widget>b', 'a<svg:path>b',
+])
+def test_body_rejects_markup_hidden_after_comparison_syntax(payload):
+    from app.commentary.ingest.types import normalize_body
+
+    with pytest.raises(ValueError, match='markup'):
+        normalize_body(payload)
+
+
+@pytest.mark.parametrize('payload', [
     '<img src=x onerror=alert(1)>', '<svg/>', '<note/>', '<note>', '<hr>', '<h1>heading',
     '<note key="value">', '<unknown>text</unknown>',
 ])

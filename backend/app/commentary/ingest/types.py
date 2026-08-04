@@ -81,6 +81,11 @@ def _contains_commentary_markup(value: str) -> bool:
         next_character = value[start + 1]
         if next_character in '!?':
             return True
+        if next_character.isspace() or (
+            next_character == '/' and start + 2 < length and value[start + 2].isspace()
+        ):
+            index = start + 1
+            continue
 
         end = value.find('>', start + 1)
         if end < 0:
@@ -111,6 +116,8 @@ def _contains_commentary_markup(value: str) -> bool:
                 name_end += 1
             name = token[:name_end].lower()
             remainder = token[name_end:]
+            if '-' in name or ':' in name:
+                return True
             if name in _STANDARD_HTML_TAGS:
                 return True
             if '=' in remainder or '"' in remainder or "'" in remainder:
