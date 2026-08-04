@@ -16,6 +16,14 @@ EntryType = Literal['book_intro', 'chapter_intro', 'verse', 'verse_range']
 _ENTRY_TYPES = frozenset({'book_intro', 'chapter_intro', 'verse', 'verse_range'})
 _HORIZONTAL_WHITESPACE = re.compile(r'[^\S\n]+')
 _EXCESS_LINE_BREAKS = re.compile(r'\n{3,}')
+_KNOWN_MARKUP_TAG = re.compile(
+    r'<\s*/?\s*(?:p|br|div|span|em|strong|i|b|a|ul|ol|li|blockquote|script|style)\b[^>]*>',
+    re.IGNORECASE,
+)
+_BALANCED_TAG = re.compile(
+    r'<\s*([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s+[^<>]*)?\s*>.*?</\s*\1\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _require_string(name: str, value: object) -> str:
@@ -43,15 +51,23 @@ def _normalize_scalar(name: str, value: object, *, maximum: int, allow_empty: bo
     return normalized
 
 
+def _contains_commentary_markup(value: str) -> bool:
+    """Detect executable/renderable markup without treating mathematical prose as tags."""
+    return '<!' in value or '<?' in value or bool(
+        _KNOWN_MARKUP_TAG.search(value) or _BALANCED_TAG.search(value),
+    )
+
+
 def normalize_body(value: object) -> str:
     """Normalize commentary prose while retaining intentional paragraphs."""
     source = _require_string('body', value)
     # ``normalize_string`` rejects lone surrogates before we reshape whitespace.
     normalized = unicodedata.normalize('NFC', source)
+    normalized = normalized.replace('\u2028', '\n').replace('\u2029', '\n\n')
     if any(unicodedata.category(character) == 'Cs' for character in normalized):
         raise ValueError('body must not contain lone Unicode surrogate code points.')
     _reject_controls('body', normalized, allow_line_feed=True)
-    if contains_markup(normalized):
+    if _contains_commentary_markup(normalized):
         raise ValueError('body must not contain HTML or XML markup.')
 
     lines = [_HORIZONTAL_WHITESPACE.sub(' ', line).strip() for line in normalized.split('\n')]
@@ -88,7 +104,7 @@ class NormalizedCommentaryEntry:
             raise ValueError('work_id must identify a known canonical work.')
         object.__setattr__(self, 'work_id', work_id)
 
-        if self.entry_type not in _ENTRY_TYPES:
+        if type(self.entry_type) is not str or self.entry_type not in _ENTRY_TYPES:
             raise ValueError('entry_type must be book_intro, chapter_intro, verse, or verse_range.')
         if type(self.position) is not int or self.position < 0:
             raise ValueError('position must be a nonnegative integer.')
@@ -120,6 +136,8 @@ class NormalizedCommentaryEntry:
             if valid and verse_end < verse_start:
                 valid = False
             if valid and self.entry_type == 'verse' and verse_start != verse_end:
+                valid = False
+            if valid and self.entry_type == 'verse_range' and verse_start == verse_end:
                 valid = False
         if not valid:
             raise ValueError(f'Coordinates are invalid for entry_type {self.entry_type!r}.')

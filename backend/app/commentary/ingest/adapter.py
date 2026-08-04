@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -21,6 +22,10 @@ _BOOK_KEYS = frozenset({
 _CHAPTER_KEYS = frozenset({'number', 'introduction', 'content'})
 _CONTENT_KEYS = frozenset({'type', 'number', 'content'})
 _RANGE = re.compile(r'([1-9][0-9]*)-([1-9][0-9]*)\Z')
+_READ_CHUNK_BYTES = 64 * 1024
+_DUPLICATE_JSON_KEY_ERROR = 'bundle contains a duplicate JSON key.'
+_JSON_CONSTANT_ERROR = 'bundle must not contain nonstandard JSON constants.'
+_JSON_ERROR = 'bundle must contain valid JSON.'
 
 
 def _require_mapping(name: str, value: object) -> Mapping[str, Any]:
@@ -73,7 +78,10 @@ def _parse_verse_number(value: object) -> tuple[int, int, str]:
     match = _RANGE.fullmatch(value)
     if match is None:
         raise ValueError('content number must be a positive integer or an ASCII N-M range.')
-    start, end = int(match.group(1)), int(match.group(2))
+    try:
+        start, end = int(match.group(1)), int(match.group(2))
+    except ValueError as exc:
+        raise ValueError('content number must be a positive integer or an ASCII N-M range.') from exc
     if end < start:
         raise ValueError('content number range must end at or after its start.')
     return start, end, 'verse' if start == end else 'verse_range'
@@ -101,30 +109,77 @@ def _optional_body(name: str, value: object) -> str | None:
 
 
 def _reject_json_constant(value: str) -> None:
-    raise ValueError(f'bundle must not contain nonstandard JSON constants: {value}.')
+    raise ValueError(_JSON_CONSTANT_ERROR)
+
+
+def _reject_duplicate_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(_DUPLICATE_JSON_KEY_ERROR)
+        result[key] = value
+    return result
+
+
+def _read_bundle_bytes(path: Path) -> bytes:
+    if not isinstance(path, Path):
+        raise ValueError('path must be a Path to a regular file.')
+    no_follow = getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow)
+    except OSError as exc:
+        raise ValueError('path must be a readable regular file.') from exc
+
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise ValueError('path must be a regular file.')
+        if not no_follow:
+            path_stat = os.lstat(path)
+            if (
+                not stat.S_ISREG(path_stat.st_mode)
+                or path_stat.st_dev != descriptor_stat.st_dev
+                or path_stat.st_ino != descriptor_stat.st_ino
+            ):
+                raise ValueError('path must be a regular file.')
+
+        chunks: list[bytes] = []
+        size = 0
+        while size <= _MAX_BUNDLE_BYTES:
+            chunk = os.read(descriptor, min(_READ_CHUNK_BYTES, _MAX_BUNDLE_BYTES + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        if size > _MAX_BUNDLE_BYTES:
+            raise ValueError('bundle must be no larger than 5 MiB.')
+        return b''.join(chunks)
+    except OSError as exc:
+        raise ValueError('bundle could not be read.') from exc
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 def _read_bundle(path: Path) -> Mapping[str, Any]:
-    if not isinstance(path, Path):
-        raise ValueError('path must be a Path to a regular file.')
     try:
-        mode = path.lstat().st_mode
-    except OSError as exc:
-        raise ValueError('path must be a regular file.') from exc
-    if not stat.S_ISREG(mode):
-        raise ValueError('path must be a regular file.')
-    if path.stat().st_size > _MAX_BUNDLE_BYTES:
-        raise ValueError('bundle must be no larger than 5 MiB.')
-    try:
-        text = path.read_text(encoding='utf-8', errors='strict')
+        text = _read_bundle_bytes(path).decode('utf-8', errors='strict')
     except UnicodeDecodeError as exc:
         raise ValueError('bundle must be valid UTF-8.') from exc
-    except OSError as exc:
-        raise ValueError('bundle could not be read.') from exc
     try:
-        parsed = json.loads(text, parse_constant=_reject_json_constant)
-    except json.JSONDecodeError as exc:
-        raise ValueError('bundle must contain valid JSON.') from exc
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_members,
+        )
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(_JSON_ERROR) from exc
+    except ValueError as exc:
+        if str(exc) in {_DUPLICATE_JSON_KEY_ERROR, _JSON_CONSTANT_ERROR}:
+            raise ValueError(str(exc)) from exc
+        raise ValueError(_JSON_ERROR) from exc
     bundle = _require_mapping('bundle', parsed)
     if set(bundle) != {'commentary', 'books'}:
         raise ValueError('bundle must have exactly the top-level keys commentary and books.')
@@ -132,7 +187,7 @@ def _read_bundle(path: Path) -> Mapping[str, Any]:
 
 
 def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[NormalizedCommentaryEntry]:
-    """Yield normalized entries from one checked, local HelloAO JSON bundle."""
+    """Return an iterator over one completely validated local HelloAO JSON bundle."""
     bundle = _read_bundle(path)
     source_to_work = _normalize_book_map(book_map)
 
@@ -145,9 +200,9 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
         raise ValueError('books must be a list.')
 
     position = 0
+    entries: list[NormalizedCommentaryEntry] = []
     seen_book_ids: set[str] = set()
     seen_verse_identities: set[tuple[str, int, int, int, str]] = set()
-    seen_entry_identities: set[tuple[str, int | None, int | None, int | None, str, int]] = set()
 
     def emit(
         work_id: str,
@@ -159,10 +214,6 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
         locator: str,
     ) -> NormalizedCommentaryEntry:
         nonlocal position
-        identity = (work_id, chapter, verse_start, verse_end, entry_type, position)
-        if identity in seen_entry_identities:
-            raise ValueError('duplicate normalized commentary entry identity.')
-        seen_entry_identities.add(identity)
         if entry_type in {'verse', 'verse_range'}:
             verse_identity = (work_id, chapter, verse_start, verse_end, entry_type)  # type: ignore[arg-type]
             if verse_identity in seen_verse_identities:
@@ -204,7 +255,9 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
 
         prefix = f'helloao:{commentary_id}:{book_id}'
         if book_introduction is not None:
-            yield emit(work_id, None, None, None, 'book_intro', book_introduction, f'{prefix}:book-intro')
+            entries.append(
+                emit(work_id, None, None, None, 'book_intro', book_introduction, f'{prefix}:book-intro'),
+            )
 
         seen_chapter_numbers: set[int] = set()
         for chapter_index, raw_chapter in enumerate(chapters):
@@ -227,10 +280,10 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
 
             chapter_prefix = f'{prefix}:chapter:{chapter_number}'
             if chapter_introduction is not None:
-                yield emit(
+                entries.append(emit(
                     work_id, chapter_number, None, None, 'chapter_intro', chapter_introduction,
                     f'{chapter_prefix}:intro',
-                )
+                ))
             for content_index, raw_content in enumerate(content):
                 content_item = _require_mapping(f'content[{content_index}]', raw_content)
                 _require_exact_keys(f'content[{content_index}]', content_item, _CONTENT_KEYS)
@@ -239,7 +292,9 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
                 verse_start, verse_end, entry_type = _parse_verse_number(content_item['number'])
                 body = _content_body(content_item['content'])
                 reference = str(verse_start) if verse_start == verse_end else f'{verse_start}-{verse_end}'
-                yield emit(
+                entries.append(emit(
                     work_id, chapter_number, verse_start, verse_end, entry_type, body,
                     f'{chapter_prefix}:verse:{reference}',
-                )
+                ))
+
+    return iter(tuple(entries))

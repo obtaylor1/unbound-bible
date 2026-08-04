@@ -16,6 +16,11 @@ def _write_bundle(path, bundle=None):
     return path
 
 
+def _write_raw_bundle(path, text):
+    path.write_text(text, encoding='utf-8')
+    return path
+
+
 def _load(path, book_map=None):
     from app.commentary.ingest.adapter import load_helloao_bundle
 
@@ -64,6 +69,14 @@ def test_rejects_malformed_or_noncanonical_verse_numbers(tmp_path, number):
         _load(_write_bundle(tmp_path / 'bundle.json', bundle))
 
 
+def test_normalizes_oversized_range_integer_errors(tmp_path):
+    bundle = _bundle()
+    bundle['books'][0]['chapters'][0]['content'][0]['number'] = f"1-{'9' * 10_000}"
+
+    with pytest.raises(ValueError, match='content number'):
+        _load(_write_bundle(tmp_path / 'bundle.json', bundle))
+
+
 def test_single_value_range_is_normalized_to_a_verse(tmp_path):
     bundle = _bundle()
     bundle['books'][0]['chapters'][0]['content'][0]['number'] = '1-1'
@@ -82,6 +95,31 @@ def test_single_value_range_is_normalized_to_a_verse(tmp_path):
 def test_rejects_nonexact_top_level_keys(tmp_path, replacement):
     with pytest.raises(ValueError, match='top-level'):
         _load(_write_bundle(tmp_path / 'bundle.json', replacement))
+
+
+@pytest.mark.parametrize(
+    'mutate',
+    [
+        lambda text: text.replace(
+            '"commentary": {"id": "matthew-henry"}',
+            '"commentary": {"id": "matthew-henry"}, "commentary": {"id": "duplicate"}',
+            1,
+        ),
+        lambda text: text.replace('"id": "GEN",', '"id": "GEN", "id": "GEN",', 1),
+        lambda text: text.replace(
+            '"number": 1,\n          "introduction"',
+            '"number": 1, "number": 1,\n          "introduction"',
+            1,
+        ),
+        lambda text: text.replace('"type": "verse", "number": 1,', '"type": "verse", "type": "verse", "number": 1,', 1),
+    ],
+    ids=['top-level', 'book', 'chapter', 'content'],
+)
+def test_rejects_duplicate_json_object_members_at_every_nesting_level(tmp_path, mutate):
+    text = FIXTURE.read_text(encoding='utf-8')
+
+    with pytest.raises(ValueError, match='duplicate JSON key'):
+        _load(_write_raw_bundle(tmp_path / 'duplicate.json', mutate(text)))
 
 
 @pytest.mark.parametrize('field, value', [
@@ -188,6 +226,22 @@ def test_rejects_duplicate_verse_identity_even_when_positions_differ(tmp_path):
         _load(_write_bundle(tmp_path / 'bundle.json', bundle))
 
 
+def test_rejects_invalid_later_record_before_any_rows_are_observable(tmp_path):
+    from app.commentary.ingest.adapter import load_helloao_bundle
+
+    bundle = _bundle()
+    bundle['books'][0]['chapters'][0]['content'].append(
+        {'type': 'verse', 'number': 4, 'content': ['<em>invalid final row</em>']},
+    )
+    observed = []
+
+    with pytest.raises(ValueError, match='markup'):
+        for row in load_helloao_bundle(_write_bundle(tmp_path / 'invalid-later.json', bundle), {'GEN': 'genesis'}):
+            observed.append(row)
+
+    assert observed == []
+
+
 def test_rejects_book_labels_that_do_not_match_the_mapped_work(tmp_path):
     with pytest.raises(ValueError, match='does not match'):
         _load(_write_bundle(tmp_path / 'bundle.json'), {'GEN': 'exodus'})
@@ -219,6 +273,22 @@ def test_normalized_entry_enforces_coordinates_string_limits_and_checksum():
         NormalizedCommentaryEntry('genesis', None, None, None, 'book_intro', None, 'body', 'x' * 2049, 0)
     with pytest.raises(ValueError):
         NormalizedCommentaryEntry('genesis', None, None, None, 'book_intro', None, 'body', 'source', True)
+    with pytest.raises(ValueError):
+        NormalizedCommentaryEntry('genesis', 1, 1, 1, 'verse_range', None, 'body', 'source', 0)
+    with pytest.raises(ValueError):
+        NormalizedCommentaryEntry('genesis', None, None, None, [], None, 'body', 'source', 0)
+
+
+def test_body_allows_comparison_prose_that_is_not_markup():
+    from app.commentary.ingest.types import normalize_body
+
+    assert normalize_body('both 1<x and y>0 comparisons hold') == 'both 1<x and y>0 comparisons hold'
+
+
+def test_body_preserves_unicode_line_and_paragraph_separators():
+    from app.commentary.ingest.types import normalize_body
+
+    assert normalize_body('One\u2028Two\u2029Three') == 'One\nTwo\n\nThree'
 
 
 def test_rejects_invalid_files_json_and_utf8(tmp_path):
@@ -235,6 +305,37 @@ def test_rejects_invalid_files_json_and_utf8(tmp_path):
     invalid_utf8.write_bytes(b'\x80')
     with pytest.raises(ValueError, match='UTF-8'):
         _load(invalid_utf8)
+
+
+def test_rejects_symlink_and_nonregular_bundle_paths(tmp_path):
+    source = _write_bundle(tmp_path / 'source.json')
+    link = tmp_path / 'bundle-link.json'
+    link.symlink_to(source)
+
+    with pytest.raises(ValueError, match='regular file'):
+        _load(link)
+    with pytest.raises(ValueError, match='regular file'):
+        _load(tmp_path)
+
+
+def test_accepts_a_bundle_exactly_at_the_size_limit(tmp_path):
+    from app.commentary.ingest.adapter import _MAX_BUNDLE_BYTES
+
+    payload = json.dumps(_bundle()).encode('utf-8')
+    path = tmp_path / 'exact.json'
+    path.write_bytes(payload + b' ' * (_MAX_BUNDLE_BYTES - len(payload)))
+
+    assert len(_load(path)) == 4
+
+
+def test_rejects_growth_observed_while_reading(tmp_path, monkeypatch):
+    from app.commentary.ingest import adapter
+
+    path = _write_bundle(tmp_path / 'bundle.json')
+    monkeypatch.setattr(adapter.os, 'read', lambda _fd, _size: b'x' * (adapter._MAX_BUNDLE_BYTES + 1))
+
+    with pytest.raises(ValueError, match='5 MiB'):
+        _load(path)
 
 
 @pytest.mark.parametrize('constant', [float('nan'), float('inf')], ids=['NaN', 'Infinity'])
