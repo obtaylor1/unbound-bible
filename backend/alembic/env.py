@@ -8,6 +8,7 @@ from app.database import Base
 from app.auth import models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
 from app.library.ingest import models as ingest_models  # noqa: F401
+from app.commentary import models as commentary_models  # noqa: F401
 
 
 config = context.config

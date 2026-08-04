@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 
@@ -176,8 +176,6 @@ def test_each_checksum_length_constraint_is_isolated(
     ('record_count', -1),
     ('position', -1),
     ('chapter', 0),
-    ('verse_start', 0),
-    ('verse_end', 0),
     ('version', 0),
 ])
 def test_negative_counts_positions_and_nonpositive_coordinates_are_rejected(
@@ -196,6 +194,56 @@ def test_negative_counts_positions_and_nonpositive_coordinates_are_rejected(
     with commentary_session.begin_nested():
         commentary_session.add(row)
         with pytest.raises(IntegrityError):
+            commentary_session.flush()
+
+
+@pytest.mark.parametrize(
+    ('model_name', 'owner_name', 'constraint_name'),
+    [
+        ('CommentaryEntry', 'edition_id', 'ck_commentary_entries_verse_start_positive'),
+        ('StagedCommentaryEntry', 'run_id', 'ck_staged_commentary_entries_verse_start_positive'),
+    ],
+)
+def test_verse_start_positivity_isolated_from_range_checks(
+    commentary_session, commentary_source, genesis, make_commentary_edition,
+    model_name, owner_name, constraint_name,
+):
+    from app.commentary.models import CommentaryEntry, StagedCommentaryEntry
+
+    edition = make_commentary_edition()
+    run = _make_import_run(commentary_session, commentary_source.id)
+    model = {'CommentaryEntry': CommentaryEntry, 'StagedCommentaryEntry': StagedCommentaryEntry}[model_name]
+    owner_id = edition.id if owner_name == 'edition_id' else run.id
+    with commentary_session.begin_nested():
+        commentary_session.add(model(**_entry_values(
+            owner_name, owner_id, genesis, entry_type='verse_range', verse_start=0, verse_end=1,
+        )))
+        with pytest.raises(IntegrityError, match=constraint_name):
+            commentary_session.flush()
+
+
+@pytest.mark.parametrize(
+    ('model_name', 'owner_name', 'constraint_name'),
+    [
+        ('CommentaryEntry', 'edition_id', 'ck_commentary_entries_verse_end_positive'),
+        ('StagedCommentaryEntry', 'run_id', 'ck_staged_commentary_entries_verse_end_positive'),
+    ],
+)
+def test_verse_end_positivity_uses_its_named_constraint(
+    commentary_session, commentary_source, genesis, make_commentary_edition,
+    model_name, owner_name, constraint_name,
+):
+    from app.commentary.models import CommentaryEntry, StagedCommentaryEntry
+
+    edition = make_commentary_edition()
+    run = _make_import_run(commentary_session, commentary_source.id)
+    model = {'CommentaryEntry': CommentaryEntry, 'StagedCommentaryEntry': StagedCommentaryEntry}[model_name]
+    owner_id = edition.id if owner_name == 'edition_id' else run.id
+    with commentary_session.begin_nested():
+        commentary_session.add(model(**_entry_values(
+            owner_name, owner_id, genesis, entry_type='verse_range', verse_start=1, verse_end=0,
+        )))
+        with pytest.raises(IntegrityError, match=constraint_name):
             commentary_session.flush()
 
 
@@ -325,6 +373,126 @@ def test_only_one_active_publication_per_source_allows_inactive_history(
         source_id=commentary_source.id, edition_id=commentary_editions[0].id, version=2, active=False,
     ))
     commentary_session.flush()
+
+
+def test_publication_requires_an_edition_from_its_own_source(
+    commentary_session, commentary_source, make_commentary_edition, make_commentary_source,
+):
+    from app.commentary.models import CommentaryPublication
+
+    edition = make_commentary_edition()
+    other_source = make_commentary_source('other-commentary')
+    commentary_session.add(CommentaryPublication(
+        source_id=commentary_source.id, edition_id=edition.id, version=1,
+    ))
+    commentary_session.flush()
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryPublication(
+            source_id=other_source.id, edition_id=edition.id, version=1,
+        ))
+        with pytest.raises(IntegrityError, match='FOREIGN KEY'):
+            commentary_session.flush()
+
+
+def test_publication_schema_has_named_same_source_composite_foreign_key(commentary_session):
+    inspector = inspect(commentary_session.get_bind())
+
+    assert 'uq_commentary_editions_id_source' in {
+        item['name'] for item in inspector.get_unique_constraints('commentary_editions')
+    }
+    foreign_keys = {
+        item['name']: (item['constrained_columns'], item['referred_columns'], item['options'].get('ondelete'))
+        for item in inspector.get_foreign_keys('commentary_publications')
+    }
+    assert foreign_keys['fk_commentary_publications_edition_source'] == (
+        ['edition_id', 'source_id'], ['id', 'source_id'], 'RESTRICT'
+    )
+    assert all(columns != ['edition_id'] for columns, _, _ in foreign_keys.values())
+
+
+def test_deleting_a_work_sets_validation_finding_work_to_null(
+    commentary_session, commentary_source,
+):
+    from app.commentary.models import CommentaryValidationFinding
+    from app.library.models import LibraryWork
+
+    run = _make_import_run(commentary_session, commentary_source.id)
+    work = LibraryWork(id='finding-set-null-work', title='Finding work')
+    commentary_session.add(work)
+    commentary_session.flush()
+    finding = CommentaryValidationFinding(
+        run_id=run.id, severity='warning', code='set-null', work_id=work.id, message='Retain finding',
+    )
+    commentary_session.add(finding)
+    commentary_session.flush()
+    commentary_session.execute(delete(LibraryWork).where(LibraryWork.id == work.id))
+    commentary_session.flush()
+    commentary_session.expire(finding)
+
+    retained = commentary_session.scalar(select(CommentaryValidationFinding).where(
+        CommentaryValidationFinding.id == finding.id
+    ))
+    assert retained is not None
+    assert retained.work_id is None
+
+
+def test_deleting_an_edition_cascades_its_entries(
+    commentary_session, genesis, make_commentary_edition,
+):
+    from app.commentary.models import CommentaryEdition, CommentaryEntry
+
+    edition = make_commentary_edition()
+    entry = CommentaryEntry(**_entry_values('edition_id', edition.id, genesis))
+    commentary_session.add(entry)
+    commentary_session.flush()
+    commentary_session.execute(delete(CommentaryEdition).where(CommentaryEdition.id == edition.id))
+    commentary_session.flush()
+
+    assert commentary_session.scalar(select(CommentaryEntry.id).where(CommentaryEntry.id == entry.id)) is None
+
+
+def test_deleting_distinct_works_cascades_published_and_staged_entries(
+    commentary_session, commentary_source, make_commentary_edition,
+):
+    from app.commentary.models import CommentaryEntry, StagedCommentaryEntry
+    from app.library.models import LibraryWork
+
+    edition = make_commentary_edition()
+    run = _make_import_run(commentary_session, commentary_source.id)
+    published_work = LibraryWork(id='published-entry-work', title='Published entry work')
+    staged_work = LibraryWork(id='staged-entry-work', title='Staged entry work')
+    commentary_session.add_all([published_work, staged_work])
+    commentary_session.flush()
+    published_entry = CommentaryEntry(**_entry_values('edition_id', edition.id, published_work.id))
+    staged_entry = StagedCommentaryEntry(**_entry_values('run_id', run.id, staged_work.id))
+    commentary_session.add_all([published_entry, staged_entry])
+    commentary_session.flush()
+    commentary_session.execute(delete(LibraryWork).where(LibraryWork.id == published_work.id))
+    commentary_session.execute(delete(LibraryWork).where(LibraryWork.id == staged_work.id))
+    commentary_session.flush()
+
+    assert commentary_session.scalar(select(CommentaryEntry.id).where(CommentaryEntry.id == published_entry.id)) is None
+    assert commentary_session.scalar(select(StagedCommentaryEntry.id).where(StagedCommentaryEntry.id == staged_entry.id)) is None
+
+
+def test_deleting_a_source_cascades_editions_and_import_runs(commentary_session, make_commentary_source):
+    from app.commentary.models import CommentaryEdition, CommentaryImportRun, CommentarySource
+
+    source = make_commentary_source('cascade-commentary')
+    edition = CommentaryEdition(
+        source_id=source.id, dataset_version='cascade-1.0.0', source_checksum='c' * 64,
+        status='staged', coverage={},
+    )
+    run = CommentaryImportRun(
+        source_id=source.id, source_checksum='d' * 64, metadata_snapshot={}, status='staged',
+    )
+    commentary_session.add_all([edition, run])
+    commentary_session.flush()
+    commentary_session.execute(delete(CommentarySource).where(CommentarySource.id == source.id))
+    commentary_session.flush()
+
+    assert commentary_session.scalar(select(CommentaryEdition.id).where(CommentaryEdition.id == edition.id)) is None
+    assert commentary_session.scalar(select(CommentaryImportRun.id).where(CommentaryImportRun.id == run.id)) is None
 
 
 def test_foreign_key_cascade_and_restrict_behavior(commentary_session, commentary_source, genesis, published_edition):

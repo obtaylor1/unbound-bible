@@ -64,6 +64,7 @@ def upgrade() -> None:
         sa.CheckConstraint('record_count >= 0', name='ck_commentary_editions_record_count_nonnegative'),
         sa.ForeignKeyConstraint(['source_id'], ['commentary_sources.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('id', 'source_id', name='uq_commentary_editions_id_source'),
         sa.UniqueConstraint('source_id', 'dataset_version', name='uq_commentary_editions_source_dataset_version'),
     )
     op.create_index('ix_commentary_editions_source_status', 'commentary_editions', ['source_id', 'status'])
@@ -187,7 +188,12 @@ def upgrade() -> None:
         sa.Column('published_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint('version > 0', name='ck_commentary_publications_version_positive'),
         sa.ForeignKeyConstraint(['source_id'], ['commentary_sources.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['edition_id'], ['commentary_editions.id'], ondelete='RESTRICT'),
+        sa.ForeignKeyConstraint(
+            ['edition_id', 'source_id'],
+            ['commentary_editions.id', 'commentary_editions.source_id'],
+            name='fk_commentary_publications_edition_source',
+            ondelete='RESTRICT',
+        ),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('source_id', 'version', name='uq_commentary_publications_source_version'),
     )

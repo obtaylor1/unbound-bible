@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -100,6 +101,7 @@ class CommentarySource(Base):
 class CommentaryEdition(Base):
     __tablename__ = 'commentary_editions'
     __table_args__ = (
+        UniqueConstraint('id', 'source_id', name='uq_commentary_editions_id_source'),
         UniqueConstraint('source_id', 'dataset_version', name='uq_commentary_editions_source_dataset_version'),
         CheckConstraint(
             "status IN ('staged', 'verified', 'published', 'superseded', 'rejected')",
@@ -237,6 +239,12 @@ class CommentaryValidationFinding(Base):
 class CommentaryPublication(Base):
     __tablename__ = 'commentary_publications'
     __table_args__ = (
+        ForeignKeyConstraint(
+            ['edition_id', 'source_id'],
+            ['commentary_editions.id', 'commentary_editions.source_id'],
+            name='fk_commentary_publications_edition_source',
+            ondelete='RESTRICT',
+        ),
         UniqueConstraint('source_id', 'version', name='uq_commentary_publications_source_version'),
         CheckConstraint('version > 0', name='ck_commentary_publications_version_positive'),
         Index(
@@ -253,9 +261,7 @@ class CommentaryPublication(Base):
     source_id: Mapped[str] = mapped_column(
         ForeignKey('commentary_sources.id', ondelete='CASCADE'), nullable=False
     )
-    edition_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey('commentary_editions.id', ondelete='RESTRICT'), nullable=False
-    )
+    edition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     active: Mapped[bool] = mapped_column(
         Boolean(create_constraint=True), nullable=False, default=True, server_default='1'
