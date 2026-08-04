@@ -1,0 +1,18 @@
+[
+  {
+    "work_id": "genesis",
+    "source_book": "Genesis",
+    "chapter": 1,
+    "verse": 1,
+    "text": "Alpha records the revised verified line.",
+    "source_locator": "quality-gate-v2:Genesis.1.1"
+  },
+  {
+    "work_id": "genesis",
+    "source_book": "Genesis",
+    "chapter": 1,
+    "verse": 2,
+    "text": "Beta records the second verified line.",
+    "source_locator": "quality-gate-v2:Genesis.1.2"
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "edition_code": "PHASE2-FIXTURE",
+  "name": "Phase 2 Quality Gate Fixture v2",
+  "reading_language": "English",
+  "source_language": "English",
+  "script": "Latin",
+  "translator": "Unbound Bible test suite",
+  "publisher": "Unbound Bible Test Fixtures v2",
+  "published_year": 2026,
+  "license_spdx": "LicenseRef-Public-Domain",
+  "attribution": "Committed deterministic Phase 2 fixture version 2.",
+  "provenance_url": "https://example.invalid/unbound-bible/phase-2-fixture-v2",
+  "source_tradition": "Synthetic test fixture",
+  "relationship": "general_reading",
+  "versification": "Phase2-Test-1",
+  "expected_works": {
+    "genesis": {
+      "chapters": 1,
+      "verse_counts": {
+        "1": 2
+      }
+    }
+  },
+  "source_files": [
+    {
+      "path": "verses-v2.json",
+      "sha256": "38791fcf6e0f90e18a9744d92e8ca223dbe045870b50eb49a27ebfe5b61b22f8",
+      "source_url": null
+    }
+  ],
+  "adapter": "usfm",
+  "adapter_options": {}
+}
