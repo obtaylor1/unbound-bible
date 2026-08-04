@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -285,6 +287,31 @@ def test_body_allows_comparison_prose_that_is_not_markup():
     assert normalize_body('both 1<x and y>0 comparisons hold') == 'both 1<x and y>0 comparisons hold'
 
 
+@pytest.mark.parametrize('payload', [
+    '<img src=x onerror=alert(1)>', '<svg/>', '<note/>', '<note>', '<hr>', '<h1>heading',
+    '<note key="value">', '<unknown>text</unknown>',
+])
+def test_body_rejects_standard_and_arbitrary_angle_token_markup(payload):
+    from app.commentary.ingest.types import normalize_body
+
+    with pytest.raises(ValueError, match='markup'):
+        normalize_body(payload)
+
+
+def test_body_rejects_many_unknown_angle_tokens_without_repeated_suffix_searches():
+    from app.commentary.ingest.types import normalize_body
+
+    with pytest.raises(ValueError, match='markup'):
+        normalize_body('<note>' * 2_000)
+
+
+def test_body_applies_raw_safety_ceiling_before_markup_scanning():
+    from app.commentary.ingest.types import _MAX_RAW_BODY_CHARS, normalize_body
+
+    with pytest.raises(ValueError, match='raw input safety'):
+        normalize_body('<note>' * (_MAX_RAW_BODY_CHARS // 2))
+
+
 def test_body_preserves_unicode_line_and_paragraph_separators():
     from app.commentary.ingest.types import normalize_body
 
@@ -318,6 +345,44 @@ def test_rejects_symlink_and_nonregular_bundle_paths(tmp_path):
         _load(tmp_path)
 
 
+def test_rejects_fifo_without_waiting_for_a_writer(tmp_path):
+    if not hasattr(os, 'mkfifo'):
+        pytest.skip('mkfifo is unavailable on this platform')
+    fifo = tmp_path / 'bundle.fifo'
+    os.mkfifo(fifo)
+    result = []
+
+    def load_fifo():
+        try:
+            _load(fifo)
+        except ValueError:
+            result.append('rejected')
+
+    worker = threading.Thread(target=load_fifo, daemon=True)
+    worker.start()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert result == ['rejected']
+
+
+def test_rejects_path_replaced_between_lstat_and_open(tmp_path, monkeypatch):
+    from app.commentary.ingest import adapter
+
+    path = _write_bundle(tmp_path / 'bundle.json')
+    replacement = _write_bundle(tmp_path / 'replacement.json')
+    original_open = os.open
+
+    def replace_then_open(target, flags):
+        os.replace(replacement, path)
+        return original_open(target, flags)
+
+    monkeypatch.setattr(adapter.os, 'open', replace_then_open)
+
+    with pytest.raises(ValueError, match='regular file'):
+        _load(path)
+
+
 def test_accepts_a_bundle_exactly_at_the_size_limit(tmp_path):
     from app.commentary.ingest.adapter import _MAX_BUNDLE_BYTES
 
@@ -345,6 +410,26 @@ def test_rejects_nonstandard_json_constants_even_in_ignored_metadata(tmp_path, c
 
     with pytest.raises(ValueError, match='JSON constant'):
         _load(_write_bundle(tmp_path / 'constant.json', bundle))
+
+
+def test_normalizes_deep_json_recursion_errors(tmp_path):
+    nested = '[' * 100_000 + ']' * 100_000
+    path = _write_raw_bundle(
+        tmp_path / 'deep.json', '{"commentary":{"id":"x"},"books":' + nested + '}',
+    )
+
+    with pytest.raises(ValueError, match='valid JSON'):
+        _load(path)
+
+
+def test_normalizes_raw_oversized_json_integer_errors(tmp_path):
+    path = _write_raw_bundle(
+        tmp_path / 'huge-integer.json',
+        '{"commentary":{"id":"x"},"books":' + '9' * 10_000 + '}',
+    )
+
+    with pytest.raises(ValueError, match='valid JSON'):
+        _load(path)
 
 
 def test_accepts_an_optional_introduction_at_the_exact_body_limit(tmp_path):

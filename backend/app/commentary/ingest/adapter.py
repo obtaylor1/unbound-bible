@@ -124,24 +124,27 @@ def _reject_duplicate_json_members(pairs: list[tuple[str, Any]]) -> dict[str, An
 def _read_bundle_bytes(path: Path) -> bytes:
     if not isinstance(path, Path):
         raise ValueError('path must be a Path to a regular file.')
-    no_follow = getattr(os, 'O_NOFOLLOW', 0)
     try:
-        descriptor = os.open(path, os.O_RDONLY | no_follow)
+        path_stat = os.lstat(path)
+    except OSError as exc:
+        raise ValueError('path must be a readable regular file.') from exc
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError('path must be a regular file.')
+    no_follow = getattr(os, 'O_NOFOLLOW', 0)
+    non_block = getattr(os, 'O_NONBLOCK', 0)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow | non_block)
     except OSError as exc:
         raise ValueError('path must be a readable regular file.') from exc
 
     try:
         descriptor_stat = os.fstat(descriptor)
-        if not stat.S_ISREG(descriptor_stat.st_mode):
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or path_stat.st_dev != descriptor_stat.st_dev
+            or path_stat.st_ino != descriptor_stat.st_ino
+        ):
             raise ValueError('path must be a regular file.')
-        if not no_follow:
-            path_stat = os.lstat(path)
-            if (
-                not stat.S_ISREG(path_stat.st_mode)
-                or path_stat.st_dev != descriptor_stat.st_dev
-                or path_stat.st_ino != descriptor_stat.st_ino
-            ):
-                raise ValueError('path must be a regular file.')
 
         chunks: list[bytes] = []
         size = 0

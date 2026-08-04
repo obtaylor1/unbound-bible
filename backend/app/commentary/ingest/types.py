@@ -16,14 +16,18 @@ EntryType = Literal['book_intro', 'chapter_intro', 'verse', 'verse_range']
 _ENTRY_TYPES = frozenset({'book_intro', 'chapter_intro', 'verse', 'verse_range'})
 _HORIZONTAL_WHITESPACE = re.compile(r'[^\S\n]+')
 _EXCESS_LINE_BREAKS = re.compile(r'\n{3,}')
-_KNOWN_MARKUP_TAG = re.compile(
-    r'<\s*/?\s*(?:p|br|div|span|em|strong|i|b|a|ul|ol|li|blockquote|script|style)\b[^>]*>',
-    re.IGNORECASE,
-)
-_BALANCED_TAG = re.compile(
-    r'<\s*([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s+[^<>]*)?\s*>.*?</\s*\1\s*>',
-    re.IGNORECASE | re.DOTALL,
-)
+_MAX_RAW_BODY_CHARS = 200_000
+_STANDARD_HTML_TAGS = frozenset({
+    'a', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base', 'blockquote', 'body', 'br',
+    'button', 'canvas', 'caption', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd',
+    'del', 'details', 'dialog', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 'figure',
+    'footer', 'form', 'frame', 'frameset', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe',
+    'img', 'input', 'ins', 'label', 'legend', 'li', 'link', 'main', 'map', 'mark', 'media', 'menu',
+    'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output', 'p', 'picture',
+    'pre', 'progress', 'q', 'script', 'section', 'select', 'slot', 'small', 'source', 'span', 'strong',
+    'style', 'sub', 'summary', 'sup', 'svg', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot',
+    'th', 'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'video', 'wbr',
+}) | frozenset(f'h{level}' for level in range(1, 7))
 
 
 def _require_string(name: str, value: object) -> str:
@@ -51,16 +55,62 @@ def _normalize_scalar(name: str, value: object, *, maximum: int, allow_empty: bo
     return normalized
 
 
+def _is_name_start(character: str) -> bool:
+    return character.isalpha() or character in '_:'
+
+
+def _is_name_character(character: str) -> bool:
+    return character.isalnum() or character in '_.:-'
+
+
 def _contains_commentary_markup(value: str) -> bool:
-    """Detect executable/renderable markup without treating mathematical prose as tags."""
-    return '<!' in value or '<?' in value or bool(
-        _KNOWN_MARKUP_TAG.search(value) or _BALANCED_TAG.search(value),
-    )
+    """Scan angle tokens once, retaining comparison prose but rejecting markup forms."""
+    index = 0
+    length = len(value)
+    while index < length:
+        start = value.find('<', index)
+        if start < 0:
+            return False
+        if start + 1 >= length:
+            return False
+        next_character = value[start + 1]
+        if next_character in '!?':
+            return True
+
+        end = value.find('>', start + 1)
+        if end < 0:
+            tail = value[start + 1:].lstrip()
+            name_end = 0
+            while name_end < len(tail) and _is_name_character(tail[name_end]):
+                name_end += 1
+            return bool(name_end and tail[:name_end].lower() in _STANDARD_HTML_TAGS)
+
+        token = value[start + 1:end].strip()
+        before = value[start - 1] if start else ''
+        after = value[end + 1] if end + 1 < length else ''
+        if token.startswith('/') or token.endswith('/'):
+            return True
+        if token and _is_name_start(token[0]):
+            name_end = 1
+            while name_end < len(token) and _is_name_character(token[name_end]):
+                name_end += 1
+            name = token[:name_end].lower()
+            remainder = token[name_end:]
+            if name in _STANDARD_HTML_TAGS:
+                return True
+            if '=' in remainder or '"' in remainder or "'" in remainder:
+                return True
+            if not (before.isalnum() and after.isalnum()):
+                return True
+        index = end + 1
+    return False
 
 
 def normalize_body(value: object) -> str:
     """Normalize commentary prose while retaining intentional paragraphs."""
     source = _require_string('body', value)
+    if len(source) > _MAX_RAW_BODY_CHARS:
+        raise ValueError('body exceeds the raw input safety limit.')
     # ``normalize_string`` rejects lone surrogates before we reshape whitespace.
     normalized = unicodedata.normalize('NFC', source)
     normalized = normalized.replace('\u2028', '\n').replace('\u2029', '\n\n')
