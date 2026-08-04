@@ -32,13 +32,16 @@ from app.library.ingest.models import (
 )
 from app.library.ingest.publish import publish_run, rollback_edition
 from app.library.ingest.types import NormalizedVerse
+from app.library.ingest.adapters.weahadu_bundle import parse_weahadu_bundle
 from app.library.ingest.validate import validate_edition
 from app.library.models import EditionCoverage, TextEdition
 from app.library.seed import seed_ethiopian_canon
 
 
 StageAdapter = Callable[[SourceManifest, Path], Sequence[NormalizedVerse]]
-ADAPTERS: dict[str, StageAdapter] = {}
+ADAPTERS: dict[str, StageAdapter] = {
+    'weahadu_bundle': parse_weahadu_bundle,
+}
 
 app = typer.Typer(
     no_args_is_help=True,

@@ -189,6 +189,27 @@ describe('ScriptureReaderPage', () => {
     expect(getChapter).toHaveBeenCalledTimes(1)
   })
 
+  it('labels a verified Ge\'ez edition by its human name', async () => {
+    getChapter.mockResolvedValue([{
+      id: 10,
+      verse: 1,
+      translation: 'GEEZ1980-RESEARCH',
+      text: 'በቀዳሚ',
+      edition: {
+        code: 'GEEZ1980-RESEARCH',
+        name: "Ge'ez Bible (1980 EC) — Research Use",
+      },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=GEEZ1980-RESEARCH&canon=ETHIO81'
+
+    renderReader()
+
+    expect(await screen.findByText('በቀዳሚ')).toBeInTheDocument()
+    expect(screen.getByRole('option', {
+      name: "Ge'ez Bible (1980 EC) — Research Use",
+    })).toHaveValue('GEEZ1980-RESEARCH')
+  })
+
   it('selects a verse in the hash without refetching the chapter', async () => {
     renderReader()
     await screen.findByText('In the beginning.')

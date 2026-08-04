@@ -55,6 +55,47 @@ def test_replit_backend_launcher_module_imports_with_safe_settings(tmp_path):
     assert 'Liberation Bible Project API' in result.stdout
 
 
+def test_legacy_launcher_exposes_only_migrated_private_study_routes(tmp_path):
+    result = _run_legacy_python(
+        '''
+        import main
+
+        route_methods = [
+            (route.path, method)
+            for route in main.app.routes
+            for method in getattr(route, 'methods', set())
+            if route.path in {'/api/v1/notes', '/api/v1/studies', '/api/v1/study-sessions'}
+        ]
+        assert sorted(route_methods) == [
+            ('/api/v1/notes', 'GET'),
+            ('/api/v1/notes', 'POST'),
+            ('/api/v1/studies', 'GET'),
+            ('/api/v1/studies', 'POST'),
+        ]
+
+        schema = main.app.openapi()
+        assert '/api/v1/admin/embeddings/populate' not in schema['paths']
+        ''',
+        tmp_path / 'routes.db',
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_legacy_launcher_does_not_register_incompatible_study_tables(tmp_path):
+    result = _run_legacy_python(
+        '''
+        import main
+
+        assert 'user_notes' not in main.Base.metadata.tables
+        assert 'study_sessions' not in main.Base.metadata.tables
+        ''',
+        tmp_path / 'metadata.db',
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_reconciled_legacy_routes_serialize_empty_database_responses(tmp_path):
     result = _run_legacy_python(
         '''
@@ -148,6 +189,69 @@ def test_ethiopian_endpoints_return_verified_database_text_unchanged(tmp_path):
         }}
         ''',
         tmp_path / 'verified.db',
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_chapter_content_exposes_verified_edition_metadata(tmp_path):
+    result = _run_legacy_python(
+        '''
+        from fastapi.testclient import TestClient
+        import main
+        from app.database import Base as AppBase
+        from app.library.models import TextEdition
+        from database import SessionLocal
+
+        AppBase.metadata.create_all(main.engine)
+
+        with main.app.state.session_factory() as session:
+            session.add(TextEdition(
+                edition_code='GEEZ-TEST',
+                name="Ge'ez Test Edition",
+                reading_language="Ge'ez",
+                source_language="Ge'ez",
+                script='Ethiopic',
+                publisher='Test Publisher',
+                license_spdx='CC-BY-NC-ND-4.0',
+                attribution='Test attribution',
+                provenance_url='https://example.org/geez',
+                source_tradition='Ethiopian Orthodox Tewahedo',
+                relationship='exact_ethiopian',
+                versification='Test versification',
+                expected_coverage={'genesis': {'chapters': 1}},
+                verification_status='verified',
+            ))
+            session.commit()
+
+        with SessionLocal() as session:
+            session.add(main.BiblicalText(
+                book='Genesis', chapter=1, verse=1,
+                text='በቀዳሚ', translation='GEEZ-TEST',
+            ))
+            session.commit()
+
+        response = TestClient(main.app).get(
+            '/api/biblical-texts/chapter-content?book=Genesis&chapter=1'
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()['content'][0]['edition'] == {
+            'code': 'GEEZ-TEST',
+            'name': "Ge'ez Test Edition",
+            'language': "Ge'ez",
+            'source_language': "Ge'ez",
+            'script': 'Ethiopic',
+            'publisher': 'Test Publisher',
+            'license': 'CC-BY-NC-ND-4.0',
+            'attribution': 'Test attribution',
+            'provenance_url': 'https://example.org/geez',
+            'source_tradition': 'Ethiopian Orthodox Tewahedo',
+            'relationship': 'exact_ethiopian',
+            'versification': 'Test versification',
+            'verification_status': 'verified',
+        }
+        ''',
+        tmp_path / 'edition-metadata.db',
     )
 
     assert result.returncode == 0, result.stderr

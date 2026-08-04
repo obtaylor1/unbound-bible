@@ -3,6 +3,7 @@ import builtins
 import http.client
 import io
 from pathlib import Path
+import re
 import runpy
 import socket
 import sqlite3
@@ -96,48 +97,126 @@ LEGACY_INGESTERS = {
 }
 
 
-def test_only_verified_publisher_writes_scripture_rows():
-    allowed_writer = REPOSITORY_ROOT / 'backend/app/library/ingest/publish.py'
-    migration_paths = {
-        REPOSITORY_ROOT / 'backend/migration_service.py',
-    }
-    violations = []
+_CODE_SUFFIXES = {'.py', '.sql', '.js', '.jsx', '.ts', '.tsx', '.sh'}
+_SESSION_MUTATIONS = {
+    'add', 'add_all', 'bulk_insert_mappings', 'bulk_save_objects', 'commit',
+    'delete', 'execute', 'flush', 'merge', 'update',
+}
+_RAW_SCRIPTURE_WRITE = re.compile(
+    r'(?is)\b(?:insert\s+into|delete\s+from|update)\s+["`\[]?biblical_texts["`\]]?\b'
+)
 
-    for path in sorted(REPOSITORY_ROOT.rglob('*.py')):
-        relative = path.relative_to(REPOSITORY_ROOT)
+
+def _constructs_biblical_text(tree: ast.AST) -> bool:
+    constructor_names = {'BiblicalText'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == 'BiblicalText':
+                    constructor_names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr == 'BiblicalText':
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                constructor_names.update(
+                    target.id for target in targets if isinstance(target, ast.Name)
+                )
+
+    return any(
+        isinstance(node, ast.Call)
+        and (
+            isinstance(node.func, ast.Name) and node.func.id in constructor_names
+            or isinstance(node.func, ast.Attribute) and node.func.attr == 'BiblicalText'
+        )
+        for node in ast.walk(tree)
+    )
+
+
+def _mutates_session(tree: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _SESSION_MUTATIONS
+        for node in ast.walk(tree)
+    )
+
+
+def _approved_metadata_backfill(path: Path, source: str, match: re.Match[str]) -> bool:
+    if path.name != 'migration_service.py' or not match.group(0).lstrip().lower().startswith('update'):
+        return False
+    statement = source[match.start():source.find(')', match.end()) + 1]
+    normalized = ' '.join(statement.casefold().replace('"', '').split())
+    return (
+        'update biblical_texts set abstract_verse_id = :abstract_id' in normalized
+        and ' text =' not in normalized
+    )
+
+
+def _find_scripture_write_violations(root: Path) -> list[str]:
+    root = root.resolve()
+    allowed_writer = (
+        root / 'backend/app/library/ingest/publish.py'
+        if (root / 'backend').is_dir()
+        else None
+    )
+    violations: list[str] = []
+    for path in sorted(candidate for candidate in root.rglob('*') if candidate.is_file()):
+        relative = path.relative_to(root)
         if (
             path == allowed_writer
-            or path in migration_paths
-            or 'tests' in relative.parts
-            or 'alembic' in relative.parts
-            or '.worktrees' in relative.parts
+            or path.suffix.lower() not in _CODE_SUFFIXES
+            or any(part in {
+                '.git', '.worktrees', 'alembic', 'node_modules', 'tests', 'venv',
+            } for part in relative.parts)
         ):
             continue
+        try:
+            source = path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            violations.append(f'{relative}: non-UTF-8 executable source was not inspected')
+            continue
 
-        source = path.read_text(encoding='utf-8')
-        tree = ast.parse(source)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            calls = [child for child in ast.walk(node) if isinstance(child, ast.Call)]
-            constructs_scripture = any(
-                isinstance(call.func, ast.Name) and call.func.id == 'BiblicalText'
-                for call in calls
-            )
-            writes_session = any(
-                isinstance(call.func, ast.Attribute)
-                and call.func.attr in {'add', 'add_all', 'bulk_save_objects', 'commit', 'execute'}
-                for call in calls
-            )
-            if constructs_scripture and writes_session:
-                violations.append(f'{relative}:{node.name}: ORM scripture write')
+        if path.suffix.lower() == '.py':
+            tree = ast.parse(source)
+            if _constructs_biblical_text(tree) and _mutates_session(tree):
+                violations.append(f'{relative}: ORM scripture write')
 
-        normalized = ' '.join(source.casefold().split())
-        for operation in ('insert into', 'update', 'delete from'):
-            if f'{operation} biblical_texts' in normalized:
+        for match in _RAW_SCRIPTURE_WRITE.finditer(source):
+            if not _approved_metadata_backfill(path, source, match):
                 violations.append(f'{relative}: raw SQL scripture write')
+    return violations
 
-    assert violations == []
+
+def test_writer_guard_detects_attribute_alias_and_split_helper_writes(tmp_path):
+    candidate = tmp_path / 'writer.py'
+    candidate.write_text(
+        '''
+import models
+
+def make_row():
+    return models.BiblicalText(book='Genesis', chapter=1, verse=1, text='unsafe')
+
+def save(session, row):
+    session.merge(row)
+    session.flush()
+''',
+        encoding='utf-8',
+    )
+
+    assert _find_scripture_write_violations(tmp_path)
+
+
+def test_writer_guard_detects_raw_writes_in_non_python_files(tmp_path):
+    (tmp_path / 'writer.sql').write_text(
+        'UPDATE "biblical_texts" SET text = \'unsafe\' WHERE id = 1;',
+        encoding='utf-8',
+    )
+
+    assert _find_scripture_write_violations(tmp_path)
+
+
+def test_only_verified_publisher_writes_scripture_rows():
+    assert _find_scripture_write_violations(REPOSITORY_ROOT) == []
 
 
 def _assert_inert_notice_structure(source, required_notice):

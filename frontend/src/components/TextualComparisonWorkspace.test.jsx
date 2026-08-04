@@ -52,7 +52,7 @@ describe('TextualComparisonWorkspace', () => {
     expect(await screen.findByRole('heading', { name: 'Compare translations' })).toBeInTheDocument()
     expect(screen.getByTestId('comparison-workspace')).toBeInTheDocument()
     expect(screen.getByText('Comparing 2 translations')).toBeInTheDocument()
-    expect(screen.getByRole('article', { name: 'Ethiopian Orthodox Critical Text' })).toBeInTheDocument()
+    expect(screen.getByRole('article', { name: "Ge'ez Bible (1980 EC) — Research Use" })).toBeInTheDocument()
     expect(screen.getByRole('article', { name: 'King James Version' })).toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'American Standard Version' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Study Tools' })).not.toBeInTheDocument()
@@ -64,8 +64,35 @@ describe('TextualComparisonWorkspace', () => {
     const kjvCard = await screen.findByRole('article', { name: 'King James Version' })
     expect(kjvCard).toHaveTextContent('In the beginning God created the heaven and the earth.')
     expect(screen.getByText('Text unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/has not yet been added to the Ethiopian Critical Text database/)).toBeInTheDocument()
+    expect(screen.getByText(/not yet available in the verified Ge'ez research edition/)).toBeInTheDocument()
     expect(screen.queryByText('Canon Exclusion')).not.toBeInTheDocument()
+  })
+
+  it('renders the verified Ge\'ez Genesis source when the API provides it', async () => {
+    installFetch({ rows: [
+      ...genesisRows,
+      {
+        id: 10,
+        book: 'Genesis',
+        chapter: 1,
+        verse: 1,
+        translation: 'GEEZ1980-RESEARCH',
+        text: 'በቀዳሚ ገብረ እግዚአብሔር።',
+        edition: {
+          code: 'GEEZ1980-RESEARCH',
+          name: "Ge'ez Bible (1980 EC) — Research Use",
+          relationship: 'exact_ethiopian',
+        },
+      },
+    ] })
+
+    render(<TextualComparisonWorkspace />)
+
+    const geezCard = await screen.findByRole('article', {
+      name: "Ge'ez Bible (1980 EC) — Research Use",
+    })
+    expect(geezCard).toHaveTextContent('በቀዳሚ ገብረ እግዚአብሔር።')
+    expect(geezCard).not.toHaveTextContent('Text unavailable')
   })
 
   it('opens Study Tools from the explicit toolbar action', async () => {
@@ -86,7 +113,7 @@ describe('TextualComparisonWorkspace', () => {
 
     await user.click(screen.getByRole('checkbox', { name: /American Standard Version/ }))
     expect(screen.getByRole('article', { name: 'American Standard Version' })).toBeInTheDocument()
-    await user.click(screen.getByRole('checkbox', { name: /Ethiopian Orthodox Critical Text/ }))
+    await user.click(screen.getByRole('checkbox', { name: /Ge'ez Bible \(1980 EC\)/ }))
     expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('kjv')
   })
 

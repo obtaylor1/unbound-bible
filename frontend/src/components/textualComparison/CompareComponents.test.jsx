@@ -87,7 +87,7 @@ describe('TranslationSelector', () => {
     expect(screen.getByText('Comparing 2 translations')).toBeInTheDocument()
     expect(screen.getByText('Add up to 2 more')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('checkbox', { name: /Ethiopian Orthodox Critical Text/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Ge'ez Bible \(1980 EC\)/ })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: /King James Version/ })).toBeChecked()
   })
 
@@ -107,7 +107,7 @@ describe('TranslationSelector', () => {
 
     await user.type(screen.getByRole('searchbox', { name: 'Search translations' }), 'enoch')
     expect(screen.getByRole('checkbox', { name: /1 Enoch, R. H. Charles/ })).toBeInTheDocument()
-    expect(screen.queryByRole('checkbox', { name: /Ethiopian Orthodox Critical Text/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /Ge'ez Bible \(1980 EC\)/ })).not.toBeInTheDocument()
   })
 
   it('calls onToggle and disables unselected rows at the four-source limit', async () => {
@@ -197,7 +197,7 @@ describe('TranslationComparisonCard', () => {
     )
 
     expect(screen.getByText('Text unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/has not yet been added/)).toBeInTheDocument()
+    expect(screen.getByText(/not yet available in the verified Ge'ez research edition/)).toBeInTheDocument()
     expect(screen.queryByText('Canon Exclusion')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Learn more about text availability' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Choose another source' })).toBeInTheDocument()

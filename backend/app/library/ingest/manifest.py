@@ -50,7 +50,7 @@ WorkId = Annotated[
 SourcePath = Annotated[
     StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
 ]
-AdapterId = Literal['usfm', 'ertale', 'wikisource']
+AdapterId = Literal['usfm', 'ertale', 'wikisource', 'weahadu_bundle']
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
 VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
@@ -62,6 +62,7 @@ _LICENSES = Literal[
     'CC0-1.0',
     'CC-BY-4.0',
     'CC-BY-SA-4.0',
+    'CC-BY-NC-ND-4.0',
 ]
 _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_reading']
 _CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
@@ -212,11 +213,40 @@ class WikisourceAdapterOptions(BaseModel):
         return _normalize_mapping_keys(value, case_insensitive=False)
 
 
-AdapterOptions = UsfmAdapterOptions | ErtaleAdapterOptions | WikisourceAdapterOptions
+class WeahaduBundleAdapterOptions(BaseModel):
+    """Select one edition and an explicit work allowlist from a frozen bundle."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    edition: SourceBookCode
+    book_map: dict[SourceBookCode, WorkId]
+
+    @field_validator('book_map', mode='before')
+    @classmethod
+    def normalize_book_map_keys(cls, value: Any) -> Any:
+        return _normalize_mapping_keys(value, case_insensitive=True)
+
+    @field_validator('book_map')
+    @classmethod
+    def book_map_is_not_empty(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value:
+            raise ValueError('book_map must contain at least one reviewed source book.')
+        if len(value.values()) != len(set(value.values())):
+            raise ValueError('book_map may not map multiple source books to one work.')
+        return value
+
+
+AdapterOptions = (
+    UsfmAdapterOptions
+    | ErtaleAdapterOptions
+    | WikisourceAdapterOptions
+    | WeahaduBundleAdapterOptions
+)
 _ADAPTER_OPTIONS_MODELS: dict[AdapterId, type[BaseModel]] = {
     'usfm': UsfmAdapterOptions,
     'ertale': ErtaleAdapterOptions,
     'wikisource': WikisourceAdapterOptions,
+    'weahadu_bundle': WeahaduBundleAdapterOptions,
 }
 _ADAPTER_SCHEMA_CORRELATIONS = [
     {

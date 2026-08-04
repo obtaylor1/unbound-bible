@@ -530,18 +530,6 @@ class PersonPlaceNetwork(Base):
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class UserNote(Base):
-    __tablename__ = "user_notes"
-
-    id = Column(Integer, primary_key=True, index=True)
-    book = Column(String(50))
-    chapter = Column(Integer)
-    verse = Column(Integer)
-    text = Column(Text, nullable=False)
-    tags = Column(JSON, default=list)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
 class Book(Base):
     __tablename__ = "books"
 
@@ -641,15 +629,6 @@ class SermonClaim(Base):
     corrective_notes = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     sermon_analysis = relationship("SermonAnalysis", back_populates="claims")
-
-class StudySession(Base):
-    __tablename__ = "study_sessions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String(200), default="Study Session")
-    notes = Column(Text)
-    meta_data = Column(JSON)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class AISource(Base):
     __tablename__ = "ai_sources"

@@ -9,7 +9,7 @@ import {
 } from './comparisonModel'
 
 describe('comparisonModel', () => {
-  it('starts with the Ethiopian Critical Text and KJV', () => {
+  it("starts with the verified Ge'ez research edition and KJV", () => {
     expect(DEFAULT_TRANSLATIONS).toEqual(['eth81', 'kjv'])
   })
 

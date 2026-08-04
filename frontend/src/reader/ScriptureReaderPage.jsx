@@ -34,12 +34,18 @@ function abortError(error) {
 function normalizedTranslations(rows) {
   const seen = new Set()
   return (Array.isArray(rows) ? rows : []).flatMap((row) => {
-    const code = typeof row?.translation === 'string'
-      ? row.translation.trim().toUpperCase()
+    const rawCode = typeof row?.edition?.code === 'string'
+      ? row.edition.code
+      : row?.translation
+    const code = typeof rawCode === 'string'
+      ? rawCode.trim().toUpperCase()
       : ''
     if (!code || seen.has(code)) return []
     seen.add(code)
-    return [{ code, name: code }]
+    const suppliedName = typeof row?.edition?.name === 'string'
+      ? row.edition.name.trim()
+      : ''
+    return [{ code, name: suppliedName || code }]
   })
 }
 

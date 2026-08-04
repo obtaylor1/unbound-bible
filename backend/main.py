@@ -17,9 +17,9 @@ from database import engine, get_db
 from models import (
     Base, BiblicalText, HistoricalNote, GeographicalLocation, OriginalWord, CrossReference, 
     TextualVariant, InternationalizedText, PersonPlaceNetwork, AbstractVerse, Canon, 
-    Versification, CanonicalPosition, TranslationBias as TranslationBiasModel, UserNote,
+    Versification, CanonicalPosition, TranslationBias as TranslationBiasModel,
     Book, CanonBook, RaceMisuseRecord, FactbookEntry, ManuscriptWitness, 
-    SermonAnalysis, SermonClaim, StudySession, AISource
+    SermonAnalysis, SermonClaim, AISource
 )
 from schemas import (
     BiblicalTextResponse, HistoricalNoteResponse, GeographicalLocationResponse,
@@ -30,10 +30,9 @@ from schemas import (
     CrossVersificationMappingResponse, MultiCanonSearchResponse, RAGRequest, RAGResponse,
     QuestionTypeEnum, BiblicalPassageResult, HistoricalContextResult, GeographicalResult,
     LexiconResult, QuerySuggestionsResponse, TranslationBiasResponse,
-    UserNoteCreate, UserNoteUpdate, UserNoteResponse,
     DynamicBiasAuditRequest, DynamicBiasAuditResponse,
     CanonCompareResponse, BookDetailResponse, RaceMisuseRecordResponse,
-    FactbookEntrySummary, FactbookEntryDetailResponse, StudySessionResponse, StudySessionCreate,
+    FactbookEntrySummary, FactbookEntryDetailResponse,
     AccuracyClaim, SermonSummary, TranscriptSegment, VisualDashboardMetrics
 )
 from resolve_service import get_resolution_service
@@ -47,6 +46,7 @@ import tiktoken
 from app.api.router import api_router as versioned_api_router
 from app.application_state import wire_application_state
 from app.config import get_settings
+from app.library.models import TextEdition
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -197,17 +197,43 @@ def get_chapter_content(book: str, chapter: int, db: Session = Depends(get_db)):
         ).order_by(
             BiblicalText.verse.asc()
         ).all()
+
+        translation_codes = {
+            text.translation for text in texts if isinstance(text.translation, str)
+        }
+        editions = {
+            edition.edition_code: edition
+            for edition in db.query(TextEdition).filter(
+                TextEdition.edition_code.in_(translation_codes)
+            ).all()
+        } if translation_codes else {}
         
         # Convert to response format
         content = []
         for text in texts:
+            edition = editions.get(text.translation)
             content.append({
                 "id": text.id,
                 "book": text.book,
                 "chapter": text.chapter,
                 "verse": text.verse,
                 "text": text.text,
-                "translation": text.translation
+                "translation": text.translation,
+                "edition": ({
+                    "code": edition.edition_code,
+                    "name": edition.name,
+                    "language": edition.reading_language,
+                    "source_language": edition.source_language,
+                    "script": edition.script,
+                    "publisher": edition.publisher,
+                    "license": edition.license_spdx,
+                    "attribution": edition.attribution,
+                    "provenance_url": edition.provenance_url,
+                    "source_tradition": edition.source_tradition,
+                    "relationship": edition.relationship,
+                    "versification": edition.versification,
+                    "verification_status": edition.verification_status,
+                } if edition is not None else None),
             })
             
         return {
@@ -1763,26 +1789,6 @@ def get_person_place_network(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get entity network: {str(e)}")
 
-@app.post("/api/v1/admin/embeddings/populate")
-@limiter.limit("5/minute")
-async def populate_embeddings(
-    request: Request,
-    batch_size: int = 100,
-    db: Session = Depends(get_db)
-):
-    """Admin endpoint to populate embeddings for texts without them - RATE LIMITED"""
-    try:
-        processed_count = await vector_search_service.populate_embeddings(db, batch_size)
-        
-        return {
-            "message": f"Processed {processed_count} texts",
-            "batch_size": batch_size,
-            "status": "completed" if processed_count < batch_size else "partial"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to populate embeddings: {str(e)}")
-
 # ===============================================================================
 # ABSTRACT VERSE ID ARCHITECTURE API ENDPOINTS
 # ===============================================================================
@@ -2168,56 +2174,6 @@ async def get_query_suggestions(request: Request, db: Session = Depends(get_db))
         print(f"Error generating suggestions: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate suggestions: {str(e)}")
 
-@app.get("/api/v1/notes", response_model=List[UserNoteResponse])
-async def get_user_notes(book: Optional[str] = None, db: Session = Depends(get_db)):
-    """Retrieve all user notes, optionally filtering by book name"""
-    query = db.query(UserNote)
-    if book:
-        query = query.filter(UserNote.book == book)
-    return query.all()
-
-@app.post("/api/v1/notes", response_model=UserNoteResponse)
-async def create_user_note(request: UserNoteCreate, db: Session = Depends(get_db)):
-    """Create a new user note linked to scripture or general topic"""
-    db_note = UserNote(
-        book=request.book,
-        chapter=request.chapter,
-        verse=request.verse,
-        text=request.text,
-        tags=request.tags
-    )
-    db.add(db_note)
-    db.commit()
-    db.refresh(db_note)
-    return db_note
-
-@app.put("/api/v1/notes/{note_id}", response_model=UserNoteResponse)
-async def update_user_note(note_id: int, request: UserNoteUpdate, db: Session = Depends(get_db)):
-    """Update note text and tags"""
-    db_note = db.query(UserNote).filter(UserNote.id == note_id).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    
-    if request.text is not None:
-        db_note.text = request.text
-    if request.tags is not None:
-        db_note.tags = request.tags
-        
-    db.commit()
-    db.refresh(db_note)
-    return db_note
-
-@app.delete("/api/v1/notes/{note_id}")
-async def delete_user_note(note_id: int, db: Session = Depends(get_db)):
-    """Delete a user note from database"""
-    db_note = db.query(UserNote).filter(UserNote.id == note_id).first()
-    if not db_note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    
-    db.delete(db_note)
-    db.commit()
-    return {"status": "success", "message": "Note deleted successfully"}
-
 # 1. Canon Comparison Grid Matrix
 from schemas import CanonCompareItem
 
@@ -2580,24 +2536,6 @@ async def sermon_analyze_custom(request: SermonAnalyzeRequest, db: Session = Dep
         further_study=["Genesis 9 (Ham's Curse study)", "Song of Solomon 1:5 (Colorism study)", "Ephesians 6:5 (Slavery study)"],
         processing_time=0.45
     )
-
-# 10. GET study sessions
-@app.get("/api/v1/study-sessions", response_model=List[StudySessionResponse])
-def get_study_sessions(db: Session = Depends(get_db)):
-    return db.query(StudySession).order_by(StudySession.created_at.desc()).all()
-
-# 11. POST study session
-@app.post("/api/v1/study-sessions", response_model=StudySessionResponse)
-def create_study_session(request: StudySessionCreate, db: Session = Depends(get_db)):
-    session = StudySession(
-        title=request.title,
-        notes=request.notes,
-        meta_data=request.meta_data
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return session
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

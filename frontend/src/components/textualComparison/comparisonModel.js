@@ -2,7 +2,7 @@ export const DEFAULT_TRANSLATIONS = ['eth81', 'kjv']
 export const MAX_TRANSLATIONS = 4
 
 export const TRANSLATIONS = [
-  { key: 'eth81', code: 'ETH81', name: 'Ethiopian Orthodox Critical Text', tradition: "Ancient Orthodox / Ge'ez Canon", year: 'Critical edition', language: "Amharic / Ge'ez", categories: ['ethiopian'] },
+  { key: 'eth81', code: 'GEEZ1980-RESEARCH', name: "Ge'ez Bible (1980 EC) — Research Use", tradition: 'Ethiopian Orthodox Tewahedo', year: '1980 EC', language: "Ge'ez", categories: ['ethiopian'] },
   { key: 'kjv', code: 'KJV', name: 'King James Version', tradition: 'Protestant', year: '1611 / 1769', language: 'English', categories: ['protestant'] },
   { key: 'asv', code: 'ASV', name: 'American Standard Version', tradition: 'Protestant', year: '1901', language: 'English', categories: ['protestant'] },
   { key: 'web', code: 'WEB', name: 'World English Bible', tradition: 'Protestant / Ecumenical', year: '2001', language: 'English', categories: ['protestant'] },
@@ -109,7 +109,7 @@ export function buildSourceState({ key, book, text }) {
     return {
       kind: 'database-missing',
       title: 'Text unavailable',
-      message: 'This passage has not yet been added to the Ethiopian Critical Text database.',
+      message: "This passage is not yet available in the verified Ge'ez research edition.",
     }
   }
   return {

@@ -360,6 +360,7 @@ def test_manifest_schema_correlates_adapters_with_option_definitions():
         'usfm': 'UsfmAdapterOptions',
         'ertale': 'ErtaleAdapterOptions',
         'wikisource': 'WikisourceAdapterOptions',
+        'weahadu_bundle': 'WeahaduBundleAdapterOptions',
     }
 
     correlations = {
