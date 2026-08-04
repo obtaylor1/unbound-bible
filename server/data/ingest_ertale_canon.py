@@ -7,12 +7,13 @@ import sys
 NOTICE = """This legacy direct Ertale ingester path is retired and performs no data operation.
 
 The reviewed `ertale` adapter is planned for Phase 3 and unavailable today.
-Once it is available, use the verified ingestion workflow:
-  PYTHONPATH=backend python -m app.library.ingest.cli stage --manifest <reviewed-manifest>
-  PYTHONPATH=backend python -m app.library.ingest.cli validate --run-id <run-id>
-  PYTHONPATH=backend python -m app.library.ingest.cli publish --run-id <run-id> --confirm
+Once it is available, run from the backend directory:
+  python -m app.library.ingest.cli stage --manifest <reviewed-manifest> --database-url <migrated-database-url>
+  python -m app.library.ingest.cli validate --run-id <run-id> --database-url <migrated-database-url>
+  python -m app.library.ingest.cli publish --run-id <run-id> --confirm --database-url <migrated-database-url>
 
 Do not bypass stage, validation, or publish --confirm.
+An explicitly set DATABASE_URL is permitted instead of --database-url.
 """
 
 

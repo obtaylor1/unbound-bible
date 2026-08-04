@@ -15,6 +15,13 @@ import sqlalchemy.orm
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+COMMON_WORKFLOW = (
+    'run from the backend directory',
+    'python -m app.library.ingest.cli stage --manifest <reviewed-manifest> --database-url <migrated-database-url>',
+    'python -m app.library.ingest.cli validate --run-id <run-id> --database-url <migrated-database-url>',
+    'python -m app.library.ingest.cli publish --run-id <run-id> --confirm --database-url <migrated-database-url>',
+    'explicitly set database_url is permitted',
+)
 LEGACY_INGESTERS = {
     REPOSITORY_ROOT / 'server/data/ingest_ertale_canon.py': (
         'legacy direct ertale ingester path is retired',
@@ -25,6 +32,7 @@ LEGACY_INGESTERS = {
     ),
     REPOSITORY_ROOT / 'server/data/ingest_ethiopian_canon.py': (
         'seed-canon',
+        'python -m app.library.ingest.cli seed-canon --database-url <migrated-database-url>',
         'catalog only',
         'does not import verse text',
         'phase 3',
@@ -64,7 +72,11 @@ def _assert_inert_notice_structure(source, required_notice):
     assert notice.targets[0].id == 'NOTICE'
     assert isinstance(notice.value, ast.Constant)
     assert isinstance(notice.value.value, str)
-    assert all(text in notice.value.value.casefold() for text in required_notice)
+    notice_text = notice.value.value.casefold()
+    assert all(
+        text.casefold() in notice_text for text in (*COMMON_WORKFLOW, *required_notice)
+    )
+    assert 'pythonpath=' not in notice_text
 
     main = tree.body[3]
     assert main.name == 'main'
