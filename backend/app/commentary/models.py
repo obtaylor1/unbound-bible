@@ -1,5 +1,5 @@
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -110,7 +110,7 @@ class CommentaryEdition(Base):
         Index('ix_commentary_editions_source_status', 'source_id', 'status'),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[str] = mapped_column(
         ForeignKey('commentary_sources.id', ondelete='CASCADE'), nullable=False
     )
@@ -164,7 +164,7 @@ class CommentaryImportRun(Base):
         Index('ix_commentary_import_runs_source_status', 'source_id', 'status'),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_id: Mapped[str] = mapped_column(
         ForeignKey('commentary_sources.id', ondelete='CASCADE'), nullable=False
     )

@@ -1,6 +1,4 @@
 from collections.abc import Generator
-from uuid import uuid4
-
 import pytest
 from sqlalchemy.orm import Session
 
@@ -65,7 +63,6 @@ def make_commentary_edition(commentary_session, commentary_source):
 
     def make(dataset_version: str = '1.0.0', **overrides) -> CommentaryEdition:
         values = {
-            'id': uuid4(),
             'source_id': commentary_source.id,
             'dataset_version': dataset_version,
             'source_checksum': 'a' * 64,

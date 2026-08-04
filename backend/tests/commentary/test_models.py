@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +19,25 @@ def _entry_values(owner_name, owner_id, work_id, **overrides):
     }
     values.update(overrides)
     return values
+
+
+def test_edition_and_import_run_generate_uuid_ids(
+    commentary_session, commentary_source, make_commentary_edition,
+):
+    from app.commentary.models import CommentaryImportRun
+
+    edition = make_commentary_edition()
+    run = CommentaryImportRun(
+        source_id=commentary_source.id,
+        source_checksum='a' * 64,
+        metadata_snapshot={},
+        status='staged',
+    )
+    commentary_session.add(run)
+    commentary_session.flush()
+
+    assert edition.id is not None
+    assert run.id is not None
 
 
 def test_reversed_verse_range_is_rejected(commentary_session, genesis, make_commentary_edition):
@@ -55,27 +72,104 @@ def test_coordinate_type_mismatches_are_rejected(
             commentary_session.flush()
 
 
-def test_invalid_status_severity_and_checksum_lengths_are_rejected(
-    commentary_session, commentary_source, genesis, make_commentary_edition,
+def _make_import_run(commentary_session, source_id, **overrides):
+    from app.commentary.models import CommentaryImportRun
+
+    values = {
+        'source_id': source_id,
+        'source_checksum': 'd' * 64,
+        'metadata_snapshot': {},
+        'status': 'staged',
+    }
+    values.update(overrides)
+    run = CommentaryImportRun(**values)
+    commentary_session.add(run)
+    commentary_session.flush()
+    return run
+
+
+def test_invalid_import_run_status_is_rejected_with_a_valid_source(commentary_session, commentary_source):
+    from app.commentary.models import CommentaryImportRun
+
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryImportRun(
+            source_id=commentary_source.id, source_checksum='a' * 64, metadata_snapshot={}, status='invalid',
+        ))
+        with pytest.raises(IntegrityError, match='ck_commentary_import_runs_status'):
+            commentary_session.flush()
+
+
+def test_invalid_edition_status_is_rejected_with_a_valid_source(commentary_session, commentary_source):
+    from app.commentary.models import CommentaryEdition
+
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryEdition(
+            source_id=commentary_source.id, dataset_version='bad-status', source_checksum='a' * 64,
+            status='invalid', coverage={},
+        ))
+        with pytest.raises(IntegrityError, match='ck_commentary_editions_status'):
+            commentary_session.flush()
+
+
+def test_invalid_finding_severity_is_rejected_with_a_valid_run(commentary_session, commentary_source, genesis):
+    from app.commentary.models import CommentaryValidationFinding
+
+    run = _make_import_run(commentary_session, commentary_source.id)
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryValidationFinding(
+            run_id=run.id, severity='info', code='bad-severity', work_id=genesis, message='not allowed',
+        ))
+        with pytest.raises(IntegrityError, match='ck_commentary_validation_findings_severity'):
+            commentary_session.flush()
+
+
+def test_invalid_entry_type_is_rejected_with_valid_references(
+    commentary_session, genesis, make_commentary_edition,
 ):
-    from app.commentary.models import CommentaryEdition, CommentaryImportRun, CommentaryValidationFinding
+    from app.commentary.models import CommentaryEntry
 
     edition = make_commentary_edition()
-    invalid_rows = [
-        CommentaryEdition(id=uuid4(), source_id=commentary_source.id, dataset_version='bad-status',
-                          source_checksum='a' * 64, status='bad', coverage={}),
-        CommentaryEdition(id=uuid4(), source_id=commentary_source.id, dataset_version='bad-checksum',
-                          source_checksum='a' * 63, status='staged', coverage={}),
-        CommentaryImportRun(id=uuid4(), source_id=commentary_source.id, source_checksum='a' * 63,
-                            metadata_snapshot={}, status='staged'),
-        CommentaryValidationFinding(run_id=uuid4(), severity='info', code='bad', work_id=genesis,
-                                    message='not allowed'),
-    ]
-    for row in invalid_rows:
-        with commentary_session.begin_nested():
-            commentary_session.add(row)
-            with pytest.raises(IntegrityError):
-                commentary_session.flush()
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryEntry(**_entry_values(
+            'edition_id', edition.id, genesis, entry_type='section',
+        )))
+        with pytest.raises(IntegrityError, match='ck_commentary_entries_entry_type'):
+            commentary_session.flush()
+
+
+@pytest.mark.parametrize(
+    ('kind', 'constraint_name'),
+    [
+        ('edition', 'ck_commentary_editions_source_checksum_length'),
+        ('run', 'ck_commentary_import_runs_source_checksum_length'),
+        ('entry', 'ck_commentary_entries_row_checksum_length'),
+        ('staged_entry', 'ck_staged_commentary_entries_row_checksum_length'),
+    ],
+)
+def test_each_checksum_length_constraint_is_isolated(
+    commentary_session, commentary_source, genesis, make_commentary_edition, kind, constraint_name,
+):
+    from app.commentary.models import CommentaryEdition, CommentaryEntry, CommentaryImportRun, StagedCommentaryEntry
+
+    edition = make_commentary_edition()
+    run = _make_import_run(commentary_session, commentary_source.id)
+    if kind == 'edition':
+        row = CommentaryEdition(
+            source_id=commentary_source.id, dataset_version='bad-edition-checksum',
+            source_checksum='a' * 63, status='staged', coverage={},
+        )
+    elif kind == 'run':
+        row = CommentaryImportRun(
+            source_id=commentary_source.id, source_checksum='a' * 63, metadata_snapshot={}, status='staged',
+        )
+    elif kind == 'entry':
+        row = CommentaryEntry(**_entry_values('edition_id', edition.id, genesis, row_checksum='a' * 63))
+    else:
+        row = StagedCommentaryEntry(**_entry_values('run_id', run.id, genesis, row_checksum='a' * 63))
+    with commentary_session.begin_nested():
+        commentary_session.add(row)
+        with pytest.raises(IntegrityError, match=constraint_name):
+            commentary_session.flush()
 
 
 @pytest.mark.parametrize('field, value', [
@@ -93,7 +187,7 @@ def test_negative_counts_positions_and_nonpositive_coordinates_are_rejected(
 
     edition = make_commentary_edition()
     if field == 'record_count':
-        row = CommentaryEdition(id=uuid4(), source_id=edition.source_id, dataset_version='negative-count',
+        row = CommentaryEdition(source_id=edition.source_id, dataset_version='negative-count',
                                 source_checksum='c' * 64, status='staged', coverage={}, record_count=value)
     elif field == 'version':
         row = CommentaryPublication(source_id=edition.source_id, edition_id=edition.id, version=value)
@@ -102,6 +196,74 @@ def test_negative_counts_positions_and_nonpositive_coordinates_are_rejected(
     with commentary_session.begin_nested():
         commentary_session.add(row)
         with pytest.raises(IntegrityError):
+            commentary_session.flush()
+
+
+@pytest.mark.parametrize(
+    ('field', 'constraint_name'),
+    [
+        ('staged_count', 'ck_commentary_import_runs_staged_count_nonnegative'),
+        ('error_count', 'ck_commentary_import_runs_error_count_nonnegative'),
+        ('warning_count', 'ck_commentary_import_runs_warning_count_nonnegative'),
+    ],
+)
+def test_negative_import_run_counts_are_rejected_independently(
+    commentary_session, commentary_source, field, constraint_name,
+):
+    from app.commentary.models import CommentaryImportRun
+
+    values = {
+        'source_id': commentary_source.id,
+        'source_checksum': 'c' * 64,
+        'metadata_snapshot': {},
+        'status': 'staged',
+        field: -1,
+    }
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryImportRun(**values))
+        with pytest.raises(IntegrityError, match=constraint_name):
+            commentary_session.flush()
+
+
+def test_negative_staged_entry_position_is_rejected_with_valid_references(
+    commentary_session, commentary_source, genesis,
+):
+    from app.commentary.models import StagedCommentaryEntry
+
+    run = _make_import_run(commentary_session, commentary_source.id)
+    with commentary_session.begin_nested():
+        commentary_session.add(StagedCommentaryEntry(**_entry_values(
+            'run_id', run.id, genesis, position=-1,
+        )))
+        with pytest.raises(IntegrityError, match='ck_staged_commentary_entries_position_nonnegative'):
+            commentary_session.flush()
+
+
+@pytest.mark.parametrize(
+    ('field', 'value', 'constraint_name'),
+    [
+        ('chapter', 0, 'ck_commentary_validation_findings_chapter_positive'),
+        ('chapter', -1, 'ck_commentary_validation_findings_chapter_positive'),
+        ('verse', 0, 'ck_commentary_validation_findings_verse_positive'),
+        ('verse', -1, 'ck_commentary_validation_findings_verse_positive'),
+    ],
+)
+def test_nonpositive_finding_coordinates_are_rejected_with_valid_references(
+    commentary_session, commentary_source, genesis, field, value, constraint_name,
+):
+    from app.commentary.models import CommentaryValidationFinding
+
+    run = _make_import_run(commentary_session, commentary_source.id)
+    with commentary_session.begin_nested():
+        commentary_session.add(CommentaryValidationFinding(
+            run_id=run.id,
+            severity='warning',
+            code='bad-coordinate',
+            work_id=genesis,
+            message='not allowed',
+            **{field: value},
+        ))
+        with pytest.raises(IntegrityError, match=constraint_name):
             commentary_session.flush()
 
 
@@ -115,7 +277,7 @@ def test_duplicate_entry_identities_include_nullable_coordinates(
     from app.commentary.models import CommentaryImportRun, CommentaryEntry, StagedCommentaryEntry
 
     edition = make_commentary_edition()
-    run = CommentaryImportRun(id=uuid4(), source_id=commentary_source.id, source_checksum='d' * 64,
+    run = CommentaryImportRun(source_id=commentary_source.id, source_checksum='d' * 64,
                               metadata_snapshot={}, status='staged')
     commentary_session.add(run)
     commentary_session.flush()
@@ -137,7 +299,7 @@ def test_duplicate_source_dataset_version_is_rejected(commentary_session, make_c
     edition = make_commentary_edition()
     with commentary_session.begin_nested():
         commentary_session.add(CommentaryEdition(
-            id=uuid4(), source_id=edition.source_id, dataset_version=edition.dataset_version,
+            source_id=edition.source_id, dataset_version=edition.dataset_version,
             source_checksum='e' * 64, status='staged', coverage={},
         ))
         with pytest.raises(IntegrityError):
@@ -170,7 +332,7 @@ def test_foreign_key_cascade_and_restrict_behavior(commentary_session, commentar
         CommentaryImportRun, CommentaryPublication, CommentaryValidationFinding, StagedCommentaryEntry,
     )
 
-    run = CommentaryImportRun(id=uuid4(), source_id=commentary_source.id, source_checksum='f' * 64,
+    run = CommentaryImportRun(source_id=commentary_source.id, source_checksum='f' * 64,
                               metadata_snapshot={}, status='staged')
     commentary_session.add(run)
     commentary_session.flush()
@@ -197,10 +359,11 @@ def test_valid_commentary_rows_flush(commentary_session, commentary_source, gene
     )
 
     edition = make_commentary_edition()
-    run = CommentaryImportRun(id=uuid4(), source_id=commentary_source.id, source_checksum='f' * 64,
+    run = CommentaryImportRun(source_id=commentary_source.id, source_checksum='f' * 64,
                               metadata_snapshot={'format': 'test'}, status='validated')
+    commentary_session.add(run)
+    commentary_session.flush()
     commentary_session.add_all([
-        run,
         CommentaryEntry(**_entry_values('edition_id', edition.id, genesis, entry_type='book_intro',
                                         chapter=None, verse_start=None, verse_end=None, position=0)),
         CommentaryEntry(**_entry_values('edition_id', edition.id, genesis, entry_type='chapter_intro',
