@@ -7,7 +7,8 @@ never downloads source material and never guesses a database target.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from hashlib import sha256
 import json
 import os
@@ -25,6 +26,7 @@ from app.database import create_database_engine, create_session_factory
 from app.library.ingest.manifest import SourceManifest
 from app.library.ingest.models import (
     ScriptureIngestRun,
+    ScripturePublication,
     ScriptureValidationFinding,
     StagedScriptureVerse,
 )
@@ -74,6 +76,24 @@ def _database(database_url: str) -> tuple[Engine, sessionmaker[Session]]:
         environment='development', database_url=database_url
     ))
     return engine, create_session_factory(engine)
+
+
+@contextmanager
+def _database_context(
+    database_url: str | None,
+) -> Iterator[sessionmaker[Session]]:
+    """Translate setup/operation failures and always release a created engine."""
+    engine: Engine | None = None
+    try:
+        engine, session_factory = _database(_database_url(database_url))
+        yield session_factory
+    except typer.Exit:
+        raise
+    except Exception as error:
+        _fail(str(error))
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def _emit(
@@ -145,8 +165,7 @@ def _get_run(session: Session, run_id: UUID) -> ScriptureIngestRun:
 @app.command('seed-canon')
 def seed_canon(database_url: DatabaseOption = None) -> None:
     """Seed the immutable Ethiopian 81-book catalog into a migrated database."""
-    engine, session_factory = _database(_database_url(database_url))
-    try:
+    with _database_context(database_url) as session_factory:
         with session_factory() as session:
             result = seed_ethiopian_canon(session)
         _emit(
@@ -156,10 +175,6 @@ def seed_canon(database_url: DatabaseOption = None) -> None:
             canon_entries=result.entry_count,
             navigation_works=result.navigation_work_count,
         )
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 @app.command()
@@ -168,29 +183,27 @@ def stage(
     database_url: DatabaseOption = None,
 ) -> None:
     """Stage normalized rows from an installed, reviewed local adapter."""
-    selected_database_url = _database_url(database_url)
-    source_manifest = _load_manifest(manifest)
-    adapter = ADAPTERS.get(source_manifest.adapter)
-    if adapter is None:
-        _fail(
-            f'Adapter {source_manifest.adapter!r} is not installed. '
-            'Install the reviewed Phase 3 adapter; remote acquisition is a separate step.'
-        )
-    try:
-        rows = tuple(adapter(source_manifest, manifest.parent))
-    except Exception as error:
-        _fail(f'Adapter {source_manifest.adapter!r} failed: {error}')
-    if not rows:
-        _fail(f'Adapter {source_manifest.adapter!r} returned no scripture rows.')
-    if not all(isinstance(row, NormalizedVerse) for row in rows):
-        _fail(f'Adapter {source_manifest.adapter!r} returned a non-normalized row.')
-    if any(row.source_locator is None for row in rows):
-        _fail(f'Adapter {source_manifest.adapter!r} returned a row without a source locator.')
+    with _database_context(database_url) as session_factory:
+        source_manifest = _load_manifest(manifest)
+        adapter = ADAPTERS.get(source_manifest.adapter)
+        if adapter is None:
+            _fail(
+                f'Adapter {source_manifest.adapter!r} is not installed. '
+                'Install the reviewed Phase 3 adapter; remote acquisition is a separate step.'
+            )
+        try:
+            rows = tuple(adapter(source_manifest, manifest.parent))
+        except Exception as error:
+            _fail(f'Adapter {source_manifest.adapter!r} failed: {error}')
+        if not rows:
+            _fail(f'Adapter {source_manifest.adapter!r} returned no scripture rows.')
+        if not all(isinstance(row, NormalizedVerse) for row in rows):
+            _fail(f'Adapter {source_manifest.adapter!r} returned a non-normalized row.')
+        if any(row.source_locator is None for row in rows):
+            _fail(f'Adapter {source_manifest.adapter!r} returned a row without a source locator.')
 
-    checksum = _source_checksum(source_manifest)
-    run_id = uuid4()
-    engine, session_factory = _database(selected_database_url)
-    try:
+        checksum = _source_checksum(source_manifest)
+        run_id = uuid4()
         with session_factory() as session, session.begin():
             _ensure_edition_foreign_key(session, source_manifest)
             session.flush()
@@ -220,10 +233,6 @@ def stage(
             staged_count=len(rows),
             next_action='validate',
         )
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 @app.command()
@@ -232,8 +241,7 @@ def validate(
     database_url: DatabaseOption = None,
 ) -> None:
     """Validate one staged run and persist deterministic findings."""
-    engine, session_factory = _database(_database_url(database_url))
-    try:
+    with _database_context(database_url) as session_factory:
         with session_factory() as session, session.begin():
             run = _get_run(session, run_id)
             if run.status in {'published', 'rolled_back'}:
@@ -295,10 +303,6 @@ def validate(
                 else 'fix source and stage a new run'
             ),
         )
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 @app.command()
@@ -310,8 +314,7 @@ def publish(
     """Atomically publish one verified, error-free staged run."""
     if not confirm:
         _fail('Publication requires the explicit --confirm flag.')
-    engine, session_factory = _database(_database_url(database_url))
-    try:
+    with _database_context(database_url) as session_factory:
         with session_factory() as session:
             result = publish_run(session, run_id)
             run = _get_run(session, result.run_id)
@@ -327,10 +330,6 @@ def publish(
                 'publication_version': result.publication_version,
             }
         _emit(**output, next_action='coverage-report')
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 @app.command()
@@ -339,8 +338,7 @@ def rollback(
     database_url: DatabaseOption = None,
 ) -> None:
     """Atomically restore an edition's immediate distinct predecessor."""
-    engine, session_factory = _database(_database_url(database_url))
-    try:
+    with _database_context(database_url) as session_factory:
         with session_factory() as session:
             result = rollback_edition(session, edition)
             run = _get_run(session, result.restored_run_id)
@@ -356,10 +354,6 @@ def rollback(
                 'displaced_run_id': str(result.displaced_run_id),
             }
         _emit(**output, next_action='coverage-report')
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 @app.command('coverage-report')
@@ -369,8 +363,7 @@ def coverage_report(
     database_url: DatabaseOption = None,
 ) -> None:
     """Report persisted run counts and edition coverage without mutating data."""
-    engine, session_factory = _database(_database_url(database_url))
-    try:
+    with _database_context(database_url) as session_factory:
         with session_factory() as session:
             run: ScriptureIngestRun | None = None
             if run_id is not None:
@@ -394,15 +387,24 @@ def coverage_report(
                     )
                 ]
             if run is None and edition is not None:
-                run = session.scalar(
-                    select(ScriptureIngestRun)
-                    .where(ScriptureIngestRun.edition_code == edition)
-                    .order_by(ScriptureIngestRun.created_at.desc(), ScriptureIngestRun.id.desc())
-                    .limit(1)
+                active = session.scalar(
+                    select(ScripturePublication).where(
+                        ScripturePublication.edition_code == edition,
+                        ScripturePublication.active.is_(True),
+                    )
                 )
+                run = _get_run(session, active.run_id) if active is not None else None
             if run is None and edition is None:
                 run_count = session.scalar(select(func.count()).select_from(ScriptureIngestRun))
                 _emit(next_action='stage', runs=run_count, coverage=[])
+                return
+            if run is None:
+                _emit(
+                    edition_code=edition,
+                    next_action='validate or publish a candidate',
+                    status='unpublished',
+                    coverage=coverage,
+                )
                 return
             _emit(
                 run_id=run.id if run else None,
@@ -416,10 +418,6 @@ def coverage_report(
                 status=run.status if run else None,
                 coverage=coverage,
             )
-    except Exception as error:
-        _fail(str(error))
-    finally:
-        engine.dispose()
 
 
 if __name__ == '__main__':

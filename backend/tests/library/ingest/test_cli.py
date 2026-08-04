@@ -449,3 +449,140 @@ def test_rollback_reports_when_no_predecessor_exists(cli_database):
 
     assert result.exit_code != 0
     assert 'not found' in result.output.lower()
+
+
+def test_coverage_report_by_edition_uses_active_run_not_newer_candidates(cli_database):
+    from app.library.ingest import cli
+    from app.library.ingest.publish import publish_run
+    from sqlalchemy import text
+    from .conftest import make_ingest_run
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text('''
+                CREATE TABLE biblical_texts (
+                    id INTEGER PRIMARY KEY, book TEXT NOT NULL, chapter INTEGER NOT NULL,
+                    verse INTEGER NOT NULL, text TEXT NOT NULL, translation TEXT
+                )
+            '''))
+        with session_factory() as session:
+            active = make_ingest_run(session, 'REPORT', 'Active text')
+            publish_run(session, active.id)
+            candidate = make_ingest_run(session, 'REPORT', 'Candidate text', status='staged')
+            session.commit()
+            active_id = str(active.id)
+            candidate_id = candidate.id
+    finally:
+        engine.dispose()
+
+    staged_report = _json(runner.invoke(cli.app, [
+        'coverage-report', '--edition', 'REPORT', '--database-url', cli_database,
+    ]))
+    assert staged_report['run_id'] == active_id
+    assert staged_report['status'] == 'published'
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session, session.begin():
+            session.get(type(candidate), candidate_id).status = 'verified'
+    finally:
+        engine.dispose()
+    verified_report = _json(runner.invoke(cli.app, [
+        'coverage-report', '--edition', 'REPORT', '--database-url', cli_database,
+    ]))
+    assert verified_report['run_id'] == active_id
+    assert verified_report['status'] == 'published'
+
+    engine, session_factory = cli._database(cli_database)
+    try:
+        with session_factory() as session:
+            unchanged = make_ingest_run(session, 'REPORT', 'Active text')
+            unchanged.source_checksum = session.get(type(active), UUID(active_id)).source_checksum
+            no_op = publish_run(session, unchanged.id)
+            assert no_op.changed is False
+            session.commit()
+    finally:
+        engine.dispose()
+    no_op_report = _json(runner.invoke(cli.app, [
+        'coverage-report', '--edition', 'REPORT', '--database-url', cli_database,
+    ]))
+    assert no_op_report['run_id'] == active_id
+    assert no_op_report['status'] == 'published'
+
+
+def test_coverage_report_clearly_reports_edition_without_active_publication(
+    cli_database, tmp_path, monkeypatch
+):
+    from app.library.ingest import cli
+    from app.library.ingest.types import NormalizedVerse
+
+    monkeypatch.setitem(cli.ADAPTERS, 'usfm', lambda *_: (
+        NormalizedVerse('genesis', 'Genesis', 1, 1, 'Staged only.', 'genesis.usfm:1:1'),
+    ))
+    _json(runner.invoke(cli.app, [
+        'stage', '--manifest', str(_manifest(tmp_path / 'manifest.json')),
+        '--database-url', cli_database,
+    ]))
+
+    report = _json(runner.invoke(cli.app, [
+        'coverage-report', '--edition', 'CLI_TEST', '--database-url', cli_database,
+    ]))
+
+    assert report['run_id'] is None
+    assert report['status'] == 'unpublished'
+    assert report['next_action'] == 'validate or publish a candidate'
+
+
+@pytest.mark.parametrize(
+    'command,args',
+    [
+        ('seed-canon', []),
+        ('stage', ['--manifest', '{manifest}']),
+        ('validate', ['--run-id', '00000000-0000-0000-0000-000000000001']),
+        ('publish', [
+            '--run-id', '00000000-0000-0000-0000-000000000001', '--confirm',
+        ]),
+        ('rollback', ['--edition', 'CLI_TEST']),
+        ('coverage-report', ['--edition', 'CLI_TEST']),
+    ],
+)
+def test_all_commands_translate_invalid_database_urls_without_tracebacks(
+    command, args, tmp_path
+):
+    from app.library.ingest.cli import app
+
+    manifest = _manifest(tmp_path / 'manifest.json')
+    resolved_args = [str(manifest) if value == '{manifest}' else value for value in args]
+    result = runner.invoke(app, [
+        command, *resolved_args, '--database-url', 'unsupported+driver://example/db',
+    ])
+
+    assert result.exit_code == 1
+    assert result.output.startswith('Error:')
+    assert 'Traceback' not in result.output
+
+
+def test_database_context_disposes_created_engine_when_command_fails(monkeypatch):
+    from app.library.ingest import cli
+
+    class EngineProbe:
+        disposed = False
+
+        def dispose(self):
+            self.disposed = True
+
+    engine = EngineProbe()
+
+    def failing_factory():
+        raise RuntimeError('session factory failed')
+
+    monkeypatch.setattr(cli, '_database', lambda _url: (engine, failing_factory))
+
+    result = runner.invoke(cli.app, [
+        'coverage-report', '--database-url', 'sqlite:///explicit.db',
+    ])
+
+    assert result.exit_code == 1
+    assert result.output == 'Error: session factory failed\n'
+    assert engine.disposed is True

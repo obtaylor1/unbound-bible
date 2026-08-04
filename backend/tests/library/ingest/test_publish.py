@@ -211,14 +211,14 @@ def test_publish_replaces_only_target_edition_with_canonical_books_and_coverage(
     assert run.status == 'published' and run.published_count == 1
 
 
-def test_publish_is_checksum_idempotent_without_mutating_requested_run(ingest_session):
+def test_publish_is_full_fingerprint_idempotent_without_mutating_requested_run(ingest_session):
     from app.library.ingest.publish import publish_run
     from .conftest import make_ingest_run
 
     create_legacy_texts(ingest_session)
     first = make_ingest_run(ingest_session, 'target', 'First text')
     publish_run(ingest_session, first.id)
-    requested = make_ingest_run(ingest_session, 'target', 'Different staged rows')
+    requested = make_ingest_run(ingest_session, 'target', 'First text')
     requested.source_checksum = first.source_checksum
     ingest_session.flush()
     original_rows = legacy_rows(ingest_session, 'target')
@@ -233,6 +233,60 @@ def test_publish_is_checksum_idempotent_without_mutating_requested_run(ingest_se
     assert ingest_session.scalars(select(ScripturePublication).where(
         ScripturePublication.edition_code == 'target'
     )).all() == [active_publication(ingest_session, 'target')]
+
+
+def test_same_source_checksum_with_changed_normalized_rows_publishes_new_version(
+    ingest_session
+):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    first = make_ingest_run(ingest_session, 'target', 'First text')
+    publish_run(ingest_session, first.id)
+    corrected = make_ingest_run(ingest_session, 'target', 'Corrected normalized text')
+    corrected.source_checksum = first.source_checksum
+    corrected.manifest_snapshot = first.manifest_snapshot
+    ingest_session.flush()
+
+    result = publish_run(ingest_session, corrected.id)
+
+    assert result.changed is True
+    assert result.publication_version == 2
+    assert result.run_id == corrected.id
+    assert legacy_rows(ingest_session, 'target')[0].text == 'Corrected normalized text'
+
+
+@pytest.mark.parametrize(
+    ('manifest_change', 'expected_field', 'expected_value'),
+    [
+        ({'name': 'Corrected Edition Name'}, 'name', 'Corrected Edition Name'),
+        ({'attribution': 'Corrected attribution.'}, 'attribution', 'Corrected attribution.'),
+        ({'license_spdx': 'CC-BY-4.0'}, 'license_spdx', 'CC-BY-4.0'),
+        ({'adapter_options': {'strip_notes': True}}, None, None),
+    ],
+)
+def test_same_source_checksum_with_changed_manifest_publishes_new_version(
+    ingest_session, manifest_change, expected_field, expected_value
+):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    first = make_ingest_run(ingest_session, 'target', 'Same rows')
+    publish_run(ingest_session, first.id)
+    corrected = make_ingest_run(ingest_session, 'target', 'Same rows')
+    corrected.source_checksum = first.source_checksum
+    set_run_manifest(corrected, **manifest_change)
+    ingest_session.flush()
+
+    result = publish_run(ingest_session, corrected.id)
+
+    assert result.changed is True
+    assert result.publication_version == 2
+    assert result.run_id == corrected.id
+    if expected_field is not None:
+        assert getattr(ingest_session.get(TextEdition, 'target'), expected_field) == expected_value
 
 
 def test_exact_active_run_retry_is_a_noop_after_run_is_published(ingest_session):
@@ -288,7 +342,7 @@ def test_matching_checksum_noop_rechecks_active_run_error_gate(ingest_session):
     active = make_ingest_run(ingest_session, 'target', 'Published once')
     publish_run(ingest_session, active.id)
     active.error_count = 1
-    requested = make_ingest_run(ingest_session, 'target', 'Different staged rows')
+    requested = make_ingest_run(ingest_session, 'target', 'Published once')
     requested.source_checksum = active.source_checksum
     ingest_session.flush()
 
@@ -570,6 +624,47 @@ def test_rollback_restores_immediately_previous_rows_and_refuses_to_oscillate(in
     with pytest.raises(RollbackUnavailable, match='distinct prior'):
         rollback_edition(ingest_session, 'target')
     assert active_publication(ingest_session, 'target').run_id == old.id
+
+
+@pytest.mark.parametrize('corruption', ['error_count', 'error_finding'])
+def test_rollback_rechecks_restored_run_error_gate_before_mutation(
+    ingest_session, corruption
+):
+    from app.library.ingest.models import ScriptureValidationFinding
+    from app.library.ingest.publish import PublicationBlocked, publish_run, rollback_edition
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    old = make_ingest_run(ingest_session, 'target', 'Old text')
+    set_run_manifest(old, name='Old edition')
+    publish_run(ingest_session, old.id)
+    new = make_ingest_run(ingest_session, 'target', 'New text')
+    set_run_manifest(new, name='New edition')
+    publish_run(ingest_session, new.id)
+    if corruption == 'error_count':
+        old.error_count = 1
+    else:
+        ingest_session.add(ScriptureValidationFinding(
+            run_id=old.id,
+            severity='error',
+            code='rollback_audit_error',
+            message='Restored run failed a later audit.',
+        ))
+    ingest_session.flush()
+    before_publication = active_publication(ingest_session, 'target')
+    before_coverage = ingest_session.scalar(select(EditionCoverage.note).where(
+        EditionCoverage.edition_code == 'target'
+    ))
+
+    with pytest.raises(PublicationBlocked, match='error'):
+        rollback_edition(ingest_session, 'target')
+
+    assert active_publication(ingest_session, 'target').id == before_publication.id
+    assert legacy_rows(ingest_session, 'target')[0].text == 'New text'
+    assert ingest_session.get(TextEdition, 'target').name == 'New edition'
+    assert ingest_session.scalar(select(EditionCoverage.note).where(
+        EditionCoverage.edition_code == 'target'
+    )) == before_coverage
 
 
 def test_rollback_uses_snapshot_after_old_staging_is_mutated_and_deleted(ingest_session):

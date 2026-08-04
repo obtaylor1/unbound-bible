@@ -318,6 +318,71 @@ def _promote_manifest_metadata(
     edition.source_checksum = run.source_checksum
 
 
+def _manifest_matches_promoted_edition(
+    manifest: SourceManifest,
+    edition: TextEdition,
+    source_checksum: str,
+) -> bool:
+    return (
+        edition.name == manifest.name
+        and edition.reading_language == manifest.reading_language
+        and edition.source_language == manifest.source_language
+        and edition.script == manifest.script
+        and edition.translator == manifest.translator
+        and edition.publisher == manifest.publisher
+        and edition.published_year == manifest.published_year
+        and edition.license_spdx == manifest.license_spdx
+        and edition.attribution == manifest.attribution
+        and edition.provenance_url == str(manifest.provenance_url)
+        and edition.source_tradition == manifest.source_tradition
+        and edition.relationship == manifest.relationship
+        and edition.versification == manifest.versification
+        and edition.expected_coverage == {
+            work_id: coverage.model_dump(mode='json')
+            for work_id, coverage in manifest.expected_works.items()
+        }
+        and edition.verification_status == 'verified'
+        and edition.source_checksum == source_checksum
+    )
+
+
+def _verse_fingerprint(
+    rows: Sequence[StagedScriptureVerse | ScripturePublicationVerse],
+) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        (
+            row.work_id,
+            row.source_book,
+            row.chapter,
+            row.verse,
+            row.normalized_text,
+            row.source_locator,
+            row.row_checksum,
+        )
+        for row in rows
+    )
+
+
+def _is_identical_to_active_publication(
+    session: Session,
+    edition: TextEdition,
+    active: ScripturePublication,
+    active_run: ScriptureIngestRun,
+    candidate_rows: Sequence[StagedScriptureVerse],
+    candidate_manifest: SourceManifest,
+) -> bool:
+    active_manifest = _manifest_for_run(active_run)
+    active_rows = _snapshot_rows(session, active.id)
+    return (
+        candidate_manifest.model_dump(mode='json')
+        == active_manifest.model_dump(mode='json')
+        and _verse_fingerprint(candidate_rows) == _verse_fingerprint(active_rows)
+        and _manifest_matches_promoted_edition(
+            active_manifest, edition, active_run.source_checksum
+        )
+    )
+
+
 def _insert_legacy_rows(
     session: Session,
     edition_code: str,
@@ -459,6 +524,14 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                 raise PublicationBlocked('Cannot publish a run for a different text edition.')
             if active is not None and active.run_id == run.id:
                 _ensure_error_free(session, run)
+                active_manifest = _manifest_for_run(run)
+                _snapshot_rows(session, active.id)
+                if not _manifest_matches_promoted_edition(
+                    active_manifest, edition, run.source_checksum
+                ):
+                    raise PublicationBlocked(
+                        'Cannot reuse active publication: promoted edition metadata differs.'
+                    )
                 return PublicationResult(
                     edition.edition_code,
                     run.id,
@@ -474,7 +547,17 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                     raise PublicationBlocked(
                         'Active publication belongs to a different text edition.'
                     )
-                if active_run.source_checksum == run.source_checksum:
+                if (
+                    active_run.source_checksum == run.source_checksum
+                    and _is_identical_to_active_publication(
+                        session,
+                        edition,
+                        active,
+                        active_run,
+                        rows,
+                        manifest,
+                    )
+                ):
                     _ensure_error_free(session, active_run)
                     return PublicationResult(
                         edition.edition_code,
@@ -574,6 +657,7 @@ def rollback_edition(session: Session, edition_code: str) -> RollbackResult:
                 )
             ):
                 raise PublicationBlocked('Publication history crosses text editions.')
+            _ensure_error_free(session, restored)
             rows = _snapshot_rows(session, target_publication.id)
             restored_manifest = _manifest_for_run(restored)
             active.active = False
