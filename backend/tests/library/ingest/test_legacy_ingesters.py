@@ -1,79 +1,148 @@
-import os
+import ast
+import builtins
+import io
 from pathlib import Path
 import runpy
-import subprocess
-import sys
+import socket
+import sqlite3
+import ssl
 
 import pytest
+import sqlalchemy
+import sqlalchemy.orm
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-LEGACY_INGESTERS = (
-    REPOSITORY_ROOT / 'server/data/ingest_ertale_canon.py',
-    REPOSITORY_ROOT / 'server/data/ingest_report_data.py',
-    REPOSITORY_ROOT / 'server/data/ingest_ethiopian_canon.py',
-)
-FORBIDDEN_SOURCE = (
-    '_create_unverified_context',
-    'verify=False',
-    'requests.',
-    'urllib.',
-    'sqlalchemy',
-    'sqlite3',
-    'delete from',
-    'insert into',
-    '.delete(',
-    '.add(',
-    '.commit(',
-    '.connect(',
-)
+LEGACY_INGESTERS = {
+    REPOSITORY_ROOT / 'server/data/ingest_ertale_canon.py': (
+        'adapter `ertale`',
+        'no reviewed ertale manifest ships until phase 3',
+        'unavailable',
+        'once it is available',
+        'stage --manifest <reviewed-manifest>',
+        'validate --run-id <run-id>',
+        'publish --run-id <run-id> --confirm',
+    ),
+    REPOSITORY_ROOT / 'server/data/ingest_ethiopian_canon.py': (
+        'seed-canon',
+        'catalog only',
+        'does not import verse text',
+        'phase 3',
+        'unavailable',
+        'reviewed manifest and installed adapter',
+        'once they are available',
+        'stage --manifest <reviewed-manifest>',
+        'validate --run-id <run-id>',
+        'publish --run-id <run-id> --confirm',
+    ),
+    REPOSITORY_ROOT / 'server/data/ingest_report_data.py': (
+        'mixed non-scripture auxiliary report data with unsafe ethiopian placeholders',
+        'no matching scripture manifest or adapter is available',
+        'unavailable',
+        'separately reviewed migration',
+        'ethiopian scripture uses the phase 3 safe cli',
+        'stage --manifest <reviewed-manifest>',
+        'validate --run-id <run-id>',
+        'publish --run-id <run-id> --confirm',
+    ),
+}
+FORBIDDEN_SYMBOLS = {
+    '_create_unverified_context', 'ssl', 'socket', 'http', 'requests', 'urllib', 'httpx',
+    'sqlalchemy', 'sqlite', 'database', 'get_db', 'create_engine', 'sessionmaker',
+    'connect', 'execute', 'delete', 'insert', 'commit', 'rollback', 'open', 'write',
+    'write_text', 'write_bytes', 'touch', 'unlink', 'mkdir', 'system', 'popen',
+    'subprocess', 'placeholder', 'generated', 'biblicaltext', 'textedition',
+}
+
+
+def _module_symbols(tree):
+    return {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    } | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+
+@pytest.mark.parametrize('script,required_notice', LEGACY_INGESTERS.items())
+def test_legacy_ingester_has_only_inert_notice_structure(script, required_notice):
+    tree = ast.parse(script.read_text(encoding='utf-8'), filename=str(script))
+
+    assert [type(node) for node in tree.body] == [
+        ast.Expr, ast.Import, ast.Assign, ast.FunctionDef, ast.If,
+    ]
+    assert isinstance(tree.body[0].value, ast.Constant)
+    assert [alias.name for alias in tree.body[1].names] == ['sys']
+    assert all(alias.asname is None for alias in tree.body[1].names)
+    notice = tree.body[2]
+    assert isinstance(notice.targets[0], ast.Name)
+    assert notice.targets[0].id == 'NOTICE'
+    assert isinstance(notice.value, ast.Constant)
+    assert isinstance(notice.value.value, str)
+    assert all(text in notice.value.value.casefold() for text in required_notice)
+    assert not (_module_symbols(tree) & FORBIDDEN_SYMBOLS)
+
+    main = tree.body[3]
+    assert main.name == 'main'
+    assert not main.args.args and not main.args.kwonlyargs and main.args.vararg is None
+    assert [type(node) for node in main.body] == [ast.Expr, ast.Return]
+    print_call = main.body[0].value
+    assert isinstance(print_call, ast.Call)
+    assert isinstance(print_call.func, ast.Name) and print_call.func.id == 'print'
+    assert isinstance(main.body[1].value, ast.Constant) and main.body[1].value.value == 1
+
+    guard = tree.body[4]
+    assert isinstance(guard.test, ast.Compare)
+    assert isinstance(guard.test.left, ast.Name) and guard.test.left.id == '__name__'
+    assert isinstance(guard.test.comparators[0], ast.Constant)
+    assert guard.test.comparators[0].value == '__main__'
+    assert len(guard.body) == 1 and isinstance(guard.body[0], ast.Raise)
+    raised = guard.body[0].exc
+    assert isinstance(raised, ast.Call)
+    assert isinstance(raised.func, ast.Name) and raised.func.id == 'SystemExit'
+    assert len(raised.args) == 1 and isinstance(raised.args[0], ast.Call)
+    assert isinstance(raised.args[0].func, ast.Name) and raised.args[0].func.id == 'main'
 
 
 @pytest.mark.parametrize('script', LEGACY_INGESTERS)
-def test_legacy_ingesters_are_inert_migration_notices(script):
-    source = script.read_text(encoding='utf-8').casefold()
-
-    assert 'python -m app.library.ingest.cli' in source
-    assert 'stage' in source
-    assert 'validate' in source
-    assert 'publish --confirm' in source
-    for forbidden in FORBIDDEN_SOURCE:
-        assert forbidden not in source
-
-
-@pytest.mark.parametrize('script', LEGACY_INGESTERS)
-def test_legacy_ingester_import_is_side_effect_free(script, tmp_path, monkeypatch, capsys):
+def test_legacy_ingester_import_is_silent_and_side_effect_free(script, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv('HOME', str(tmp_path))
     before = set(tmp_path.rglob('*'))
 
-    runpy.run_path(str(script), run_name='legacy_ingester_import')
+    namespace = runpy.run_path(str(script), run_name='legacy_ingester_import')
 
-    assert capsys.readouterr().out == ''
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == ''
+    assert namespace['main'].__name__ == 'main'
     assert set(tmp_path.rglob('*')) == before
 
 
 @pytest.mark.parametrize('script', LEGACY_INGESTERS)
-def test_legacy_ingester_execution_cannot_create_a_database_or_contact_a_service(script, tmp_path):
-    environment = {
-        'HOME': str(tmp_path),
-        'NO_PROXY': '*',
-        'PATH': os.environ['PATH'],
-    }
+def test_legacy_ingester_main_is_nonzero_notice_under_runtime_safety_guards(
+    script, tmp_path, monkeypatch, capsys
+):
+    namespace = runpy.run_path(str(script), run_name='legacy_ingester_import')
+    expected_notice = namespace['NOTICE'] + '\n'
+    before = set(tmp_path.rglob('*'))
 
-    result = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=tmp_path,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError('legacy ingester attempted a forbidden side effect')
 
-    message = result.stdout + result.stderr
-    assert result.returncode != 0
-    assert 'python -m app.library.ingest.cli' in message
-    assert 'stage' in message
-    assert 'validate' in message
-    assert 'publish --confirm' in message
-    assert not list(tmp_path.rglob('*.db'))
+    monkeypatch.setattr(builtins, 'open', forbidden)
+    monkeypatch.setattr(io, 'open', forbidden)
+    monkeypatch.setattr(Path, 'write_text', forbidden)
+    monkeypatch.setattr(Path, 'write_bytes', forbidden)
+    monkeypatch.setattr(Path, 'touch', forbidden)
+    monkeypatch.setattr(socket, 'socket', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(ssl, '_create_unverified_context', forbidden)
+    monkeypatch.setattr(sqlite3, 'connect', forbidden)
+    monkeypatch.setattr(sqlalchemy, 'create_engine', forbidden)
+    monkeypatch.setattr(sqlalchemy.orm, 'sessionmaker', forbidden)
+
+    assert namespace['main']() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == expected_notice
+    assert set(tmp_path.rglob('*')) == before
