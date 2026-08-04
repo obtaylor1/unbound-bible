@@ -4,9 +4,9 @@
 import sys
 
 
-NOTICE = """This legacy Ertale scripture ingester is retired and performs no data operation.
+NOTICE = """This legacy direct Ertale ingester path is retired and performs no data operation.
 
-Adapter `ertale` is retired. No reviewed Ertale manifest ships until Phase 3; it is unavailable.
+The reviewed `ertale` adapter is planned for Phase 3 and unavailable today.
 Once it is available, use the verified ingestion workflow:
   PYTHONPATH=backend python -m app.library.ingest.cli stage --manifest <reviewed-manifest>
   PYTHONPATH=backend python -m app.library.ingest.cli validate --run-id <run-id>
@@ -16,7 +16,7 @@ Do not bypass stage, validation, or publish --confirm.
 """
 
 
-def main() -> int:
+def main():
     print(NOTICE, file=sys.stderr)
     return 1
 

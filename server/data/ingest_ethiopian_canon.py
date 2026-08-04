@@ -17,7 +17,7 @@ Do not bypass stage, validation, or publish --confirm.
 """
 
 
-def main() -> int:
+def main():
     print(NOTICE, file=sys.stderr)
     return 1
 
