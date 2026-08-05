@@ -1,6 +1,4 @@
 import json
-import os
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -49,19 +47,51 @@ def test_valid_rows_have_exact_coverage_and_nonblocking_intro_warnings():
     ]
 
 
-@pytest.mark.parametrize('rows, expected, code', [
-    ([], {'genesis'}, 'no_rows'),
-    ([_row()], {'exodus'}, 'missing_expected_book'),
-    ([_row('exodus')], {'genesis'}, 'unexpected_book'),
-    ([_row(), _row(position=99)], {'genesis'}, 'duplicate_identity'),
-    ([_row(start=1, end=2, entry_type='verse_range'), _row(start=2, end=3, entry_type='verse_range', position=2)], {'genesis'}, 'overlapping_coverage'),
-])
-def test_blocking_validation_findings(rows, expected, code):
+def test_no_rows_blocks_publication():
     from app.commentary.ingest.validate import validate_commentary
 
-    result = validate_commentary(rows, expected)
+    result = validate_commentary([], {'genesis'})
 
-    assert code in {finding.code for finding in result.findings}
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'no_rows', 'missing_expected_book'}
+    assert result.publishable is False
+
+
+def test_missing_expected_book_is_the_only_blocking_coverage_finding():
+    from app.commentary.ingest.validate import validate_commentary
+
+    result = validate_commentary([_row()], {'genesis', 'exodus'})
+
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'missing_expected_book'}
+    assert result.publishable is False
+
+
+def test_unexpected_book_is_the_only_blocking_coverage_finding():
+    from app.commentary.ingest.validate import validate_commentary
+
+    result = validate_commentary([_row(), _row('exodus', position=1)], {'genesis'})
+
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'unexpected_book'}
+    assert result.publishable is False
+
+
+def test_duplicate_identity_is_the_only_blocking_identity_finding():
+    from app.commentary.ingest.validate import validate_commentary
+
+    result = validate_commentary([_intro(), _intro(position=99)], {'genesis'})
+
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'duplicate_identity'}
+    assert result.publishable is False
+
+
+def test_overlapping_coverage_is_the_only_blocking_range_finding():
+    from app.commentary.ingest.validate import validate_commentary
+
+    result = validate_commentary([
+        _row(start=1, end=2, entry_type='verse_range'),
+        _row(start=2, end=3, entry_type='verse_range', position=2),
+    ], {'genesis'})
+
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'overlapping_coverage'}
     assert result.publishable is False
 
 
@@ -128,6 +158,28 @@ def test_prior_full_coverage_mapping_is_accepted_for_regression_checks():
     assert validate_commentary([_row()], {'genesis'}, prior).publishable
 
 
+@pytest.mark.parametrize('previous', [
+    {'entries': 1, 'books': 1},
+    {'entries': 1, 'other': 1},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1, 'extra': 1}}},
+    {'books': True, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': -1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'entries': 1}}},
+    {'books': 0, 'chapters': 0, 'entries': 1, 'by_work': {'genesis': {'chapters': 0, 'entries': 1}}},
+    {'books': 1, 'chapters': 0, 'entries': 0, 'by_work': {'genesis': {'chapters': 0, 'entries': 0}}},
+    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 2, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+])
+def test_previous_coverage_requires_consistent_canonical_full_shape(previous):
+    from app.commentary.ingest.validate import validate_commentary
+
+    with pytest.raises(ValueError, match='previous_coverage'):
+        validate_commentary([_row()], {'genesis'}, previous)
+
+
 def test_result_is_deterministic_independent_of_input_order():
     from app.commentary.ingest.validate import validate_commentary
 
@@ -148,20 +200,67 @@ def test_findings_and_result_are_immutable_and_constrained():
         CommentaryValidationResult((), {})
 
 
+def test_result_coverage_is_deeply_copied_and_immutable():
+    from app.commentary.ingest.validate import CommentaryValidationResult, ValidationFinding, validate_commentary
+
+    source_coverage = {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}}
+    findings = (ValidationFinding('warning', 'safe_warning', 'Safe warning.'),)
+    result = CommentaryValidationResult(findings, source_coverage)
+    source_coverage['entries'] = 99
+    source_coverage['by_work']['genesis']['entries'] = 99
+
+    assert result.coverage['entries'] == 1
+    assert result.coverage['by_work']['genesis']['entries'] == 1
+    with pytest.raises(TypeError):
+        result.coverage['entries'] = 2
+    with pytest.raises(TypeError):
+        result.coverage['by_work']['genesis']['entries'] = 2
+    with pytest.raises(AttributeError):
+        result.findings.append(findings[0])
+    assert validate_commentary([_row()], {'genesis'}).coverage['entries'] == 1
+
+
 def test_source_registry_loads_exact_live_catalog_in_stable_order():
     from app.commentary.ingest.validate import load_source_registry
 
     registry = load_source_registry(REGISTRY)
 
-    assert list(registry) == [
-        'matthew-henry', 'john-gill', 'adam-clarke', 'jamieson-fausset-brown', 'keil-delitzsch',
-    ]
-    assert registry['matthew-henry'].source_checksum == 'ad2850450a1e5c0546c275f4bd09b9325ae47424d83311120ca7ced5724c4bc8'
-    assert registry['john-gill'].expected_book_count == 66
-    assert registry['adam-clarke'].expected_book_count == 57
-    assert registry['jamieson-fausset-brown'].abbreviation == 'JFB'
-    assert registry['keil-delitzsch'].expected_book_count == 39
-    assert registry['keil-delitzsch'].expected_source_books[-1] == 'MAL'
+    expected = {
+        'matthew-henry': {
+            'title': 'Matthew Henry Bible Commentary', 'abbreviation': 'MHC', 'author': 'Matthew Henry', 'publication_period': '1706–1710', 'tradition': 'Reformed Protestant', 'language': 'eng', 'attribution': 'Matthew Henry Bible Commentary by Matthew Henry. Provider-declared public-domain source distributed by the Free Use Bible API.', 'upstream_url': 'https://bible.helloao.org/api/c/matthew-henry/books.json', 'license_spdx': 'LicenseRef-Public-Domain', 'license_url': 'https://creativecommons.org/publicdomain/mark/1.0/', 'license_basis': 'Provider metadata marks this dataset with the Creative Commons Public Domain Mark 1.0.', 'license_reviewed_on': '2026-08-04', 'source_checksum': 'ad2850450a1e5c0546c275f4bd09b9325ae47424d83311120ca7ced5724c4bc8', 'expected_book_count': 65,
+            'expected_source_books': ('GEN','EXO','LEV','NUM','DEU','JOS','JDG','RUT','1SA','2SA','1KI','2KI','1CH','2CH','EZR','NEH','EST','JOB','PSA','PRO','ECC','ISA','JER','LAM','EZK','DAN','HOS','JOL','AMO','OBA','JON','MIC','NAM','HAB','ZEP','HAG','ZEC','MAL','MAT','MRK','LUK','JHN','ACT','ROM','1CO','2CO','GAL','EPH','PHP','COL','1TH','2TH','1TI','2TI','TIT','PHM','HEB','JAS','1PE','2PE','1JN','2JN','3JN','JUD','REV'),
+        },
+        'john-gill': {
+            'title': 'John Gill Bible Commentary', 'abbreviation': 'JGC', 'author': 'John Gill', 'publication_period': '1746–1763', 'tradition': 'Particular Baptist', 'language': 'eng', 'attribution': 'John Gill Bible Commentary by John Gill. Provider-declared public-domain source distributed by the Free Use Bible API.', 'upstream_url': 'https://bible.helloao.org/api/c/john-gill/books.json', 'license_spdx': 'LicenseRef-Public-Domain', 'license_url': 'https://creativecommons.org/publicdomain/mark/1.0/', 'license_basis': 'Provider metadata marks this dataset with the Creative Commons Public Domain Mark 1.0.', 'license_reviewed_on': '2026-08-04', 'source_checksum': 'f6fcfd6c3a726dc834cfaf1ae1cd0bf49bffb88c1246ac3500699e8af7be71a5', 'expected_book_count': 66,
+            'expected_source_books': ('GEN','EXO','LEV','NUM','DEU','JOS','JDG','RUT','1SA','2SA','1KI','2KI','1CH','2CH','EZR','NEH','EST','JOB','PSA','PRO','ECC','SNG','ISA','JER','LAM','EZK','DAN','HOS','JOL','AMO','OBA','JON','MIC','NAM','HAB','ZEP','HAG','ZEC','MAL','MAT','MRK','LUK','JHN','ACT','ROM','1CO','2CO','GAL','EPH','PHP','COL','1TH','2TH','1TI','2TI','TIT','PHM','HEB','JAS','1PE','2PE','1JN','2JN','3JN','JUD','REV'),
+        },
+        'adam-clarke': {
+            'title': 'Adam Clarke Bible Commentary', 'abbreviation': 'ACC', 'author': 'Adam Clarke', 'publication_period': '1810–1826', 'tradition': 'Wesleyan Methodist', 'language': 'eng', 'attribution': 'Adam Clarke Bible Commentary by Adam Clarke. Provider-declared public-domain source distributed by the Free Use Bible API.', 'upstream_url': 'https://bible.helloao.org/api/c/adam-clarke/books.json', 'license_spdx': 'LicenseRef-Public-Domain', 'license_url': 'https://creativecommons.org/publicdomain/mark/1.0/', 'license_basis': 'Provider metadata marks this dataset with the Creative Commons Public Domain Mark 1.0.', 'license_reviewed_on': '2026-08-04', 'source_checksum': '92e28c9363c876d215e296f2fe04abb3ab7e34a2aacebdf06bd62ae79c6e3dba', 'expected_book_count': 57,
+            'expected_source_books': ('GEN','EXO','LEV','NUM','JOS','RUT','1SA','2SA','1KI','2KI','1CH','2CH','EZR','NEH','EST','JOB','SNG','ISA','LAM','EZK','DAN','HOS','AMO','OBA','JON','MIC','NAM','HAB','ZEP','HAG','ZEC','MRK','LUK','JHN','ACT','ROM','1CO','2CO','GAL','EPH','PHP','COL','1TH','2TH','1TI','2TI','TIT','PHM','HEB','JAS','1PE','2PE','1JN','2JN','3JN','JUD','REV'),
+        },
+        'jamieson-fausset-brown': {
+            'title': 'Jamieson-Fausset-Brown Bible Commentary', 'abbreviation': 'JFB', 'author': 'Robert Jamieson, A. R. Fausset, and David Brown', 'publication_period': '1871', 'tradition': 'Protestant', 'language': 'eng', 'attribution': 'Jamieson-Fausset-Brown Bible Commentary by Robert Jamieson, A. R. Fausset, and David Brown. Provider-declared public-domain source distributed by the Free Use Bible API.', 'upstream_url': 'https://bible.helloao.org/api/c/jamieson-fausset-brown/books.json', 'license_spdx': 'LicenseRef-Public-Domain', 'license_url': 'https://creativecommons.org/publicdomain/mark/1.0/', 'license_basis': 'Provider metadata marks this dataset with the Creative Commons Public Domain Mark 1.0.', 'license_reviewed_on': '2026-08-04', 'source_checksum': 'db3d4c8b3c1f32ef9d1430a57392e02bda3a17aac1f9bbe398461de021a3cb13', 'expected_book_count': 66,
+            'expected_source_books': ('GEN','EXO','LEV','NUM','DEU','JOS','JDG','RUT','1SA','2SA','1KI','2KI','1CH','2CH','EZR','NEH','EST','JOB','PSA','PRO','ECC','SNG','ISA','JER','LAM','EZK','DAN','HOS','JOL','AMO','OBA','JON','MIC','NAM','HAB','ZEP','HAG','ZEC','MAL','MAT','MRK','LUK','JHN','ACT','ROM','1CO','2CO','GAL','EPH','PHP','COL','1TH','2TH','1TI','2TI','TIT','PHM','HEB','JAS','1PE','2PE','1JN','2JN','3JN','JUD','REV'),
+        },
+        'keil-delitzsch': {
+            'title': 'Carl Friedrich Keil and Franz Delitzsch Old Testament Commentary', 'abbreviation': 'KD', 'author': 'Carl Friedrich Keil and Franz Delitzsch', 'publication_period': '1861–1875', 'tradition': 'Lutheran Protestant', 'language': 'eng', 'attribution': 'Carl Friedrich Keil and Franz Delitzsch Old Testament Commentary by Carl Friedrich Keil and Franz Delitzsch. Provider-declared public-domain source distributed by the Free Use Bible API.', 'upstream_url': 'https://bible.helloao.org/api/c/keil-delitzsch/books.json', 'license_spdx': 'LicenseRef-Public-Domain', 'license_url': 'https://creativecommons.org/publicdomain/mark/1.0/', 'license_basis': 'Provider metadata marks this dataset with the Creative Commons Public Domain Mark 1.0.', 'license_reviewed_on': '2026-08-04', 'source_checksum': 'bb5cc0f9cfe0a93b3c903bb6972c6bc8c4e9f2bd3be6c2a6d276737cf9c5edce', 'expected_book_count': 39,
+            'expected_source_books': ('GEN','EXO','LEV','NUM','DEU','JOS','JDG','RUT','1SA','2SA','1KI','2KI','1CH','2CH','EZR','NEH','EST','JOB','PSA','PRO','ECC','SNG','ISA','JER','LAM','EZK','DAN','HOS','JOL','AMO','OBA','JON','MIC','NAM','HAB','ZEP','HAG','ZEC','MAL'),
+        },
+    }
+    assert list(registry) == list(expected)
+    assert {
+        source_id: {
+            'title': metadata.title, 'abbreviation': metadata.abbreviation, 'author': metadata.author,
+            'publication_period': metadata.publication_period, 'tradition': metadata.tradition,
+            'language': metadata.language, 'attribution': metadata.attribution,
+            'upstream_url': metadata.upstream_url, 'license_spdx': metadata.license_spdx,
+            'license_url': metadata.license_url, 'license_basis': metadata.license_basis,
+            'license_reviewed_on': metadata.license_reviewed_on, 'source_checksum': metadata.source_checksum,
+            'expected_book_count': metadata.expected_book_count,
+            'expected_source_books': metadata.expected_source_books,
+        }
+        for source_id, metadata in registry.items()
+    } == expected
 
 
 def _raw_registry(tmp_path, text):
@@ -239,6 +338,23 @@ def test_source_registry_rejects_missing_or_extra_ids_and_fields(tmp_path):
     'https://bible.helloao.org/api/c/matthew-henry/books.json#unsafe',
 ])
 def test_source_registry_rejects_upstream_url_queries_and_fragments(tmp_path, replacement):
+    from app.commentary.ingest.validate import load_source_registry
+
+    text = REGISTRY.read_text(encoding='utf-8').replace(
+        'https://bible.helloao.org/api/c/matthew-henry/books.json', replacement, 1,
+    )
+    with pytest.raises(ValueError):
+        load_source_registry(_raw_registry(tmp_path, text))
+
+
+@pytest.mark.parametrize('replacement', [
+    ' https://bible.helloao.org/api/c/matthew-henry/books.json',
+    'https://bible.helloao.org/api/c/matthew-henry/books.json\t',
+    'https://bible.helloao.org/api/c/matthew-henry/books.json\u00a0',
+    'https://bible.helloao.org:99999/api/c/matthew-henry/books.json',
+    'https://bible.helloao.org:not-a-port/api/c/matthew-henry/books.json',
+])
+def test_source_registry_rejects_whitespace_and_invalid_url_ports(tmp_path, replacement):
     from app.commentary.ingest.validate import load_source_registry
 
     text = REGISTRY.read_text(encoding='utf-8').replace(

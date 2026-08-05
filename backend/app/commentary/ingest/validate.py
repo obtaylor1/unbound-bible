@@ -203,21 +203,49 @@ def _coverage(rows: list[NormalizedCommentaryEntry]) -> Mapping[str, Any]:
 def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | None:
     if previous_coverage is None:
         return None
-    if not isinstance(previous_coverage, Mapping) or 'entries' not in previous_coverage:
-        raise ValueError('previous_coverage must be a mapping with positive integer entries.')
-    entries = previous_coverage['entries']
-    if type(entries) is not int or entries <= 0:
-        raise ValueError('previous_coverage entries must be a positive integer.')
+    if not isinstance(previous_coverage, Mapping):
+        raise ValueError('previous_coverage must be a mapping.')
     if set(previous_coverage) == {'entries'}:
+        entries = previous_coverage['entries']
+        if type(entries) is not int or entries <= 0:
+            raise ValueError('previous_coverage entries must be a positive integer.')
         return entries
     if set(previous_coverage) != {'books', 'chapters', 'entries', 'by_work'}:
         raise ValueError('previous_coverage must be an entries count or a complete coverage mapping.')
-    frozen = _freeze_coverage(previous_coverage)
-    by_work = frozen['by_work']
+    books = previous_coverage['books']
+    chapters = previous_coverage['chapters']
+    entries = previous_coverage['entries']
+    by_work = previous_coverage['by_work']
     if (
-        frozen['books'] != len(by_work)
-        or frozen['chapters'] != sum(value['chapters'] for value in by_work.values())
-        or frozen['entries'] != sum(value['entries'] for value in by_work.values())
+        type(books) is not int or type(chapters) is not int or type(entries) is not int
+        or books < 0 or chapters < 0 or entries < 0 or not isinstance(by_work, Mapping)
+    ):
+        raise ValueError('previous_coverage must contain nonnegative exact integer counts.')
+    work_chapters = 0
+    work_entries = 0
+    for work_id, work_coverage in by_work.items():
+        if type(work_id) is not str or work_id not in _KNOWN_WORK_IDS:
+            raise ValueError('previous_coverage by_work must use known canonical work IDs.')
+        if not isinstance(work_coverage, Mapping) or set(work_coverage) != {'chapters', 'entries'}:
+            raise ValueError('previous_coverage by_work values must contain chapters and entries only.')
+        work_chapter_count = work_coverage['chapters']
+        work_entry_count = work_coverage['entries']
+        if (
+            type(work_chapter_count) is not int or type(work_entry_count) is not int
+            or work_chapter_count < 0 or work_entry_count < 0
+            or work_chapter_count > work_entry_count
+            or (work_entry_count == 0 and work_chapter_count != 0)
+        ):
+            raise ValueError('previous_coverage by_work counts are inconsistent.')
+        work_chapters += work_chapter_count
+        work_entries += work_entry_count
+    if (
+        books != len(by_work)
+        or chapters != work_chapters
+        or entries != work_entries
+        or chapters > entries
+        or (entries > 0 and books > entries)
+        or (entries == 0 and (books != 0 or chapters != 0 or by_work))
     ):
         raise ValueError('previous_coverage counts must match by_work totals.')
     return entries
@@ -371,10 +399,18 @@ def _registry_string(name: str, value: object, maximum: int) -> str:
 
 def _https_url(name: str, value: object) -> str:
     url = _registry_string(name, value, 2048)
-    parsed = urlsplit(url)
+    if any(character.isspace() for character in url):
+        raise ValueError(f'{name} must be an HTTPS URL without credentials, query, or fragment.')
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f'{name} must be a valid HTTPS URL.') from exc
     if (
-        parsed.scheme != 'https' or not parsed.netloc or not parsed.hostname
+        parsed.scheme != 'https' or not parsed.netloc or not hostname
         or parsed.username or parsed.password or parsed.query or parsed.fragment
+        or port is not None and not 0 < port <= 65535
     ):
         raise ValueError(f'{name} must be an HTTPS URL without credentials, query, or fragment.')
     return url
