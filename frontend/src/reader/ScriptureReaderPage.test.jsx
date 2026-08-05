@@ -628,6 +628,40 @@ describe('ScriptureReaderPage', () => {
     expect(getChapter).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Commentary open and updates its reference without generic detail requests', async () => {
+    const user = userEvent.setup()
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=KJV&canon=ETHIO81&verse=1'
+    renderReader({
+      commentaryLoadSources: () => Promise.resolve([]),
+      commentaryLoadEntries: vi.fn(),
+    })
+    await screen.findByText('In the beginning.')
+    expect(screen.queryByRole('dialog', { name: 'Genesis 1:1' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Open study tools' }))
+    await waitFor(() => expect(getVerseDetails).toHaveBeenCalledTimes(1))
+    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    getVerseDetails.mockClear()
+    expect(screen.getByRole('status', { name: 'Commentary selection status' })).toBeEmptyDOMElement()
+
+    await user.click(screen.getByRole('button', { name: /Genesis 1 verse 2/ }))
+
+    expect(screen.getByRole('dialog', { name: 'Genesis 1:2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Commentary for Genesis 1:2')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Genesis 1 verse 2/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status', { name: 'Commentary selection status' })).toHaveTextContent(
+      'Commentary selected for Genesis 1 verse 2',
+    )
+    expect(getVerseDetails).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('tab', { name: 'Chapter overview' }))
+    expect(window.location.hash).not.toContain('verse=')
+    expect(screen.getByRole('dialog', { name: 'Genesis 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
+    expect(getVerseDetails).not.toHaveBeenCalled()
+  })
+
   it('reuses resolved chapter metadata when the picker opens the current book', async () => {
     const user = userEvent.setup()
     renderReader()

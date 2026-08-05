@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 function normalizedVerses(verses) {
   if (!Array.isArray(verses)) {
@@ -57,6 +57,7 @@ export default function ScripturePane({
   chapter,
   verses,
   selectedVerse,
+  commentaryActive = false,
   onSelectVerse,
 }) {
   const headingId = `scripture-pane-heading-${useId()}`
@@ -69,6 +70,31 @@ export default function ScripturePane({
     : ''
   const reference = `${displayBook}${displayChapter ? ` ${displayChapter}` : ''}`
   const canSelect = typeof onSelectVerse === 'function'
+  const normalizedSelectedVerse = Number.isSafeInteger(selectedVerse) && selectedVerse > 0
+    ? selectedVerse
+    : null
+  const [commentaryAnnouncement, setCommentaryAnnouncement] = useState('')
+  const commentaryStateRef = useRef({ active: false, verse: normalizedSelectedVerse })
+
+  useEffect(() => {
+    const previous = commentaryStateRef.current
+    if (!commentaryActive) {
+      commentaryStateRef.current = { active: false, verse: normalizedSelectedVerse }
+      setCommentaryAnnouncement((current) => current ? '' : current)
+      return
+    }
+    if (!previous.active) {
+      commentaryStateRef.current = { active: true, verse: normalizedSelectedVerse }
+      setCommentaryAnnouncement((current) => current ? '' : current)
+      return
+    }
+    if (previous.verse !== normalizedSelectedVerse) {
+      commentaryStateRef.current = { active: true, verse: normalizedSelectedVerse }
+      setCommentaryAnnouncement(normalizedSelectedVerse
+        ? `Commentary selected for ${reference} verse ${normalizedSelectedVerse}`
+        : '')
+    }
+  }, [commentaryActive, normalizedSelectedVerse, reference])
 
   return (
     <article className="scripture-pane" aria-labelledby={headingId}>
@@ -76,6 +102,18 @@ export default function ScripturePane({
         <p className="scripture-pane__eyebrow">Scripture Reader</p>
         <h1 id={headingId}>{reference}</h1>
       </header>
+
+      {commentaryActive ? (
+        <p
+          className="study-tools__visually-hidden"
+          role="status"
+          aria-label="Commentary selection status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {commentaryAnnouncement}
+        </p>
+      ) : null}
 
       <ol className="scripture-pane__verses" role="list">
         {normalizedVerses(verses).map((row) => {

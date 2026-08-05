@@ -193,6 +193,88 @@ describe('ScripturePane', () => {
     )
   })
 
+  it('preserves the native verse control and its focus when selection changes', () => {
+    const onSelectVerse = vi.fn()
+    const { rerender } = render(
+      <ScripturePane
+        book="John"
+        chapter={1}
+        verses={verses}
+        selectedVerse={1}
+        onSelectVerse={onSelectVerse}
+      />,
+    )
+    const secondVerse = screen.getByRole('button', { name: /^John 1 verse 2\b/ })
+    secondVerse.focus()
+
+    rerender(
+      <ScripturePane
+        book="John"
+        chapter={1}
+        verses={verses}
+        selectedVerse={2}
+        onSelectVerse={onSelectVerse}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /^John 1 verse 2\b/ })).toBe(secondVerse)
+    expect(secondVerse).toHaveFocus()
+    expect(secondVerse).toHaveAttribute('type', 'button')
+    expect(secondVerse).toHaveAttribute('aria-pressed', 'true')
+    expect(within(secondVerse).getByText('The same was in the beginning with God.')).toBeInTheDocument()
+  })
+
+  it('politely announces only verse changes made while Commentary is active', () => {
+    const { rerender } = render(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={verses}
+        selectedVerse={1}
+        commentaryActive={false}
+        onSelectVerse={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('status', { name: 'Commentary selection status' })).not.toBeInTheDocument()
+
+    rerender(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={verses}
+        selectedVerse={1}
+        commentaryActive
+        onSelectVerse={vi.fn()}
+      />,
+    )
+    const status = screen.getByRole('status', { name: 'Commentary selection status' })
+    expect(status).toBeEmptyDOMElement()
+
+    rerender(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={[...verses]}
+        selectedVerse={2}
+        commentaryActive
+        onSelectVerse={vi.fn()}
+      />,
+    )
+    expect(status).toHaveTextContent('Commentary selected for Genesis 1 verse 2')
+
+    rerender(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={[...verses]}
+        selectedVerse={2}
+        commentaryActive
+        onSelectVerse={vi.fn()}
+      />,
+    )
+    expect(status).toHaveTextContent('Commentary selected for Genesis 1 verse 2')
+  })
+
   it('keeps valid duplicate rows in source order and ignores malformed content', () => {
     const { container } = render(
       <ScripturePane

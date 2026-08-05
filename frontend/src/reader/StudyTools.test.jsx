@@ -55,6 +55,7 @@ describe('study tool registry', () => {
         label: 'Context',
         detailKeys: ['historical_context'],
       },
+      { id: 'commentary', kind: 'data', label: 'Commentary' },
       {
         id: 'compare',
         kind: 'inline',
@@ -179,6 +180,54 @@ describe('StudyTools', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'No verified compare translations information is available for this verse.',
     )
+  })
+
+  it('keeps Commentary active across verse changes and gives it normalized navigation data', async () => {
+    const user = userEvent.setup()
+    const onSelectVerse = vi.fn()
+    const onActiveToolChange = vi.fn()
+    const loadSources = vi.fn().mockResolvedValue([])
+    const loadEntries = vi.fn()
+    const { rerender } = render(
+      <StudyTools
+        open
+        reference={{ book: ' Genesis ', chapter: '1', verse: '2' }}
+        verses={[3, 1, 2, 2]}
+        details={{}}
+        onClose={vi.fn()}
+        onSelectVerse={onSelectVerse}
+        onActiveToolChange={onActiveToolChange}
+        commentaryLoadSources={loadSources}
+        commentaryLoadEntries={loadEntries}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    const commentaryRegion = screen.getByRole('region', { name: 'Genesis 1 commentary' })
+    expect(commentaryRegion.getAttribute('aria-labelledby')).toMatch(/-commentary$/)
+    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
+    expect(onActiveToolChange).toHaveBeenLastCalledWith('commentary')
+
+    await user.click(screen.getByRole('button', { name: 'Previous verse' }))
+    await user.click(screen.getByRole('button', { name: 'Next verse' }))
+    expect(onSelectVerse).toHaveBeenNthCalledWith(1, 1)
+    expect(onSelectVerse).toHaveBeenNthCalledWith(2, 3)
+
+    rerender(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1, verse: 3 }}
+        verses={[3, 1, 2, 2]}
+        details={{}}
+        onClose={vi.fn()}
+        onSelectVerse={onSelectVerse}
+        onActiveToolChange={onActiveToolChange}
+        commentaryLoadSources={loadSources}
+        commentaryLoadEntries={loadEntries}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Commentary for Genesis 1:3')).toBeInTheDocument()
   })
 
   it('calls route destinations with a normalized reference without changing the inline panel', async () => {

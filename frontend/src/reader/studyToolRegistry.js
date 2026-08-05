@@ -74,6 +74,7 @@ const tools = [
     label: 'Context',
     detailKeys: ['historical_context'],
   },
+  { id: 'commentary', kind: 'data', label: 'Commentary' },
   {
     id: 'compare',
     kind: 'inline',

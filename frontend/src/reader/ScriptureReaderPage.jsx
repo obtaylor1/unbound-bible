@@ -57,6 +57,8 @@ export default function ScriptureReaderPage({
   onPageChange,
   navigateDocument = (url) => window.location.assign(url),
   SearchComponent = SearchDialog,
+  commentaryLoadSources,
+  commentaryLoadEntries,
 }) {
   const [route, setRoute] = useState(() => parseReaderHash())
   const [books, setBooks] = useState([])
@@ -73,6 +75,7 @@ export default function ScriptureReaderPage({
   const [retryRevision, setRetryRevision] = useState(0)
   const [bookPickerOpen, setBookPickerOpen] = useState(false)
   const [studyToolsOpen, setStudyToolsOpen] = useState(false)
+  const [activeStudyTool, setActiveStudyTool] = useState('context')
   const [searchOpen, setSearchOpen] = useState(false)
   const [details, setDetails] = useState(null)
   const [detailsStatus, setDetailsStatus] = useState('ready')
@@ -298,7 +301,7 @@ export default function ScriptureReaderPage({
   const referenceKey = studyReferenceKey(reference)
 
   useEffect(() => {
-    if (!studyToolsOpen || !route.verse) {
+    if (!studyToolsOpen || !route.verse || activeStudyTool === 'commentary') {
       detailsGeneration.current += 1
       setDetails(null)
       setDetailsReferenceKey(referenceKey)
@@ -336,6 +339,7 @@ export default function ScriptureReaderPage({
     }
   }, [
     studyToolsOpen,
+    activeStudyTool,
     referenceKey,
     route.book,
     route.chapter,
@@ -348,6 +352,9 @@ export default function ScriptureReaderPage({
   const verses = currentChapterRows.filter(
     (row) => String(row?.translation ?? '').trim().toUpperCase() === route.translation,
   )
+  const commentaryVerseNumbers = [...new Set(verses.flatMap((row) => (
+    Number.isSafeInteger(row?.verse) && row.verse > 0 ? [row.verse] : []
+  )))].sort((left, right) => left - right)
   const currentChapters = chaptersBookKey === route.book ? chapters : []
   const currentChaptersStatus = chaptersBookKey === route.book ? chaptersStatus : 'loading'
   const chapterIndex = currentChapters.indexOf(route.chapter)
@@ -372,6 +379,7 @@ export default function ScriptureReaderPage({
   }
   const openStudyTools = () => {
     closeOverlays()
+    setActiveStudyTool('context')
     setStudyToolsOpen(true)
   }
   const openSearch = () => {
@@ -454,6 +462,7 @@ export default function ScriptureReaderPage({
               chapter={route.chapter}
               verses={verses}
               selectedVerse={route.verse}
+              commentaryActive={studyToolsOpen && activeStudyTool === 'commentary'}
               onSelectVerse={(verse) => navigate({ verse })}
             />
           </>
@@ -492,6 +501,11 @@ export default function ScriptureReaderPage({
         detailsReferenceKey={detailsReferenceKey}
         detailsRevision={detailsRevision}
         detailsStatus={detailsStatus}
+        verses={commentaryVerseNumbers}
+        onSelectVerse={(verse) => navigate({ verse })}
+        onActiveToolChange={setActiveStudyTool}
+        commentaryLoadSources={commentaryLoadSources}
+        commentaryLoadEntries={commentaryLoadEntries}
         onClose={() => setStudyToolsOpen(false)}
         onNavigate={typeof onPageChange === 'function' ? changePage : undefined}
       />

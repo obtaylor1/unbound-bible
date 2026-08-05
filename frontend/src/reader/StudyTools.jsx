@@ -1,4 +1,5 @@
-import { useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import CommentaryPanel from './CommentaryPanel'
 import {
   normalizeStudyReference,
   positiveStudyInteger,
@@ -8,7 +9,7 @@ import {
 import useDialogFocus from './useDialogFocus'
 
 const INLINE_TOOLS = STUDY_TOOLS.filter(({ kind }) => kind === 'inline')
-const SELECTABLE_TOOLS = STUDY_TOOLS.filter(({ kind }) => ['inline', 'local'].includes(kind))
+const SELECTABLE_TOOLS = STUDY_TOOLS.filter(({ kind }) => ['inline', 'local', 'data'].includes(kind))
 const CONTEXT_TOOL = INLINE_TOOLS[0]
 const MAX_RENDER_DEPTH = 6
 const MAX_RENDER_NODES = 200
@@ -592,6 +593,11 @@ export default function StudyTools({
   detailsStatus,
   onClose,
   onNavigate,
+  verses = [],
+  onSelectVerse,
+  onActiveToolChange,
+  commentaryLoadSources,
+  commentaryLoadEntries,
 }) {
   const titleId = useId()
   const unavailableId = useId()
@@ -626,7 +632,9 @@ export default function StudyTools({
   }
   const freshOpen = open && !wasOpenRef.current
   wasOpenRef.current = open
-  const resetActiveTool = activeSelection.referenceKey !== referenceKey || freshOpen
+  const referenceChanged = activeSelection.referenceKey !== referenceKey
+  const preserveCommentary = referenceChanged && activeSelection.id === 'commentary' && !freshOpen
+  const resetActiveTool = (referenceChanged && !preserveCommentary) || freshOpen
   if (
     resetActiveTool
     && (
@@ -639,6 +647,17 @@ export default function StudyTools({
   const effectiveActiveToolId = resetActiveTool
     ? CONTEXT_TOOL.id
     : activeSelection.id
+
+  useEffect(() => {
+    if (preserveCommentary) {
+      setActiveSelection({ id: 'commentary', referenceKey })
+    }
+  }, [preserveCommentary, referenceKey])
+
+  useEffect(() => {
+    if (!open || typeof onActiveToolChange !== 'function') return
+    onActiveToolChange(effectiveActiveToolId)
+  }, [effectiveActiveToolId, onActiveToolChange, open])
 
   const normalizedStatus = ['loading', 'ready', 'error'].includes(detailsStatus)
     ? detailsStatus
@@ -700,7 +719,7 @@ export default function StudyTools({
 
         <nav className="study-tools__choices" aria-label="Study tool choices">
           {STUDY_TOOLS.map((tool) => {
-            const selectable = ['inline', 'local'].includes(tool.kind)
+            const selectable = ['inline', 'local', 'data'].includes(tool.kind)
             const unavailable = tool.kind === 'route' && !navigationAvailable
             return (
               <button
@@ -724,7 +743,16 @@ export default function StudyTools({
           Navigation unavailable
         </span>
 
-        {activeTool.kind === 'local' ? (
+        {activeTool.kind === 'data' ? (
+          <CommentaryPanel
+            headingId={`${panelId}-commentary`}
+            reference={normalizedReference.value}
+            verses={verses}
+            onSelectVerse={onSelectVerse}
+            {...(commentaryLoadSources ? { loadSources: commentaryLoadSources } : {})}
+            {...(commentaryLoadEntries ? { loadEntries: commentaryLoadEntries } : {})}
+          />
+        ) : activeTool.kind === 'local' ? (
           <MarkerPanel
             headingId={`${panelId}-${activeTool.id}`}
             reference={normalizedReference}
