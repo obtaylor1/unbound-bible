@@ -325,6 +325,22 @@ export default function CommentaryPanel({
     chooseSource(sources[(index + 1) % sources.length].id)
   }
 
+  const clearCopyNotice = () => {
+    setCopyNotice((current) => current.message
+      ? { message: '', revision: current.revision + 1, surface: null }
+      : current)
+  }
+
+  const openExpanded = () => {
+    clearCopyNotice()
+    setExpanded(true)
+  }
+
+  const closeExpanded = () => {
+    clearCopyNotice()
+    setExpanded(false)
+  }
+
   const copyText = async (text, label, surface = 'base') => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
@@ -391,7 +407,7 @@ export default function CommentaryPanel({
             ref={expandButtonRef}
             type="button"
             className="commentary-panel__control commentary-panel__expand"
-            onClick={() => setExpanded(true)}
+            onClick={openExpanded}
           >
             Expand commentary reading view
           </button>
@@ -687,7 +703,7 @@ export default function CommentaryPanel({
         entries={filteredEntries}
         availability={ownedResult?.availability}
         onCopy={copyText}
-        onClose={() => setExpanded(false)}
+        onClose={closeExpanded}
         openerRef={expandButtonRef}
         searchMatched={Boolean(query)}
         source={ownedResult?.source ?? selectedSource}

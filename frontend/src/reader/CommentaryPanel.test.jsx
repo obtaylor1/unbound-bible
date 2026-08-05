@@ -620,6 +620,40 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(screen.queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
   })
 
+  it('clears a base copy notice across an open-close cycle without a modal copy', async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    })
+    renderPanel()
+    await user.click(await screen.findByRole('button', { name: 'Copy commentary text' }))
+    expect(screen.getByRole('status', { name: 'Copy status' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Expand commentary reading view' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Close expanded commentary' }))
+    expect(screen.queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
+  })
+
+  it('clears a modal copy notice across close-reopen without another copy', async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    })
+    renderPanel()
+    const open = await screen.findByRole('button', { name: 'Expand commentary reading view' })
+    await user.click(open)
+    let dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Copy commentary text' }))
+    expect(within(dialog).getByRole('status', { name: 'Copy status' })).toBeVisible()
+    await user.click(within(dialog).getByRole('button', { name: 'Close expanded commentary' }))
+    await user.click(open)
+    dialog = screen.getByRole('dialog')
+    expect(within(dialog).queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
+  })
+
   it('preserves body paragraphs, omits absent headings, and identifies the source on every article', async () => {
     renderPanel({ loadEntries: vi.fn().mockResolvedValue(result({ entries: [entry({ heading: '', body: 'First paragraph.\n\nSecond paragraph.' })] })) })
     const article = await screen.findByRole('article')
