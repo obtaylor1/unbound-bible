@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 import json
@@ -10,6 +11,7 @@ import re
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commentary.models import (
@@ -23,10 +25,48 @@ from app.commentary.models import (
 )
 
 from .types import NormalizedCommentaryEntry
-from .validate import validate_commentary
+from .validate import has_exact_chapter_coverage, validate_commentary
 
 
 _CHECKSUM = re.compile(r'^[0-9a-f]{64}$')
+_PUBLICATION_CONSTRAINTS = frozenset({
+    'uq_commentary_editions_source_dataset_version',
+    'uq_commentary_publications_source_version',
+    'uq_commentary_publications_active_source',
+})
+
+
+class CommentaryPublicationConflict(ValueError):
+    """A concurrent publication operation won a known uniqueness race."""
+
+
+def is_commentary_publication_conflict(error: IntegrityError) -> bool:
+    """Classify only known publication uniqueness failures across supported DBs."""
+    original = error.orig
+    diagnostic = getattr(original, 'diag', None)
+    constraint = getattr(diagnostic, 'constraint_name', None)
+    if constraint in _PUBLICATION_CONSTRAINTS:
+        return True
+    message = str(original).casefold()
+    return any(fragment in message for fragment in (
+        'unique constraint failed: commentary_publications.source_id',
+        'unique constraint failed: commentary_publications.source_id, '
+        'commentary_publications.version',
+        'unique constraint failed: commentary_editions.source_id, '
+        'commentary_editions.dataset_version',
+    ))
+
+
+@contextmanager
+def _publication_conflict_boundary():
+    try:
+        yield
+    except IntegrityError as exc:
+        if is_commentary_publication_conflict(exc):
+            raise CommentaryPublicationConflict(
+                'Another commentary publication operation won the race.'
+            ) from exc
+        raise
 
 
 def _ensure_caller_owned_outer_transaction(session: Session) -> None:
@@ -166,7 +206,7 @@ def _manifest(
     relevant_metadata = dict(metadata)
     relevant_metadata.pop('validation_manifest', None)
     payload = [
-        'commentary-verified-run-v1',
+        'commentary-verified-run-v2',
         source_id,
         source_checksum,
         relevant_metadata,
@@ -322,7 +362,7 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
     if existing.status != 'verified' or existing.error_count or has_errors:
         raise ValueError('Only an error-free verified commentary run may be published.')
 
-    with session.begin_nested():
+    with _publication_conflict_boundary(), session.begin_nested():
         # Every publication lifecycle operation locks the source first. This
         # gives publish and rollback one global order before any publication row.
         source = session.scalar(
@@ -368,6 +408,10 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
         coverage = metadata.get('coverage')
         if type(coverage) is not dict:
             raise ValueError('Verified commentary run has no coverage snapshot.')
+        if not has_exact_chapter_coverage(coverage):
+            raise ValueError(
+                'Legacy verified commentary coverage must be revalidated before publication.'
+            )
         normalized_rows = _verified_staged_rows(session, run, metadata)
         edition = CommentaryEdition(
             source_id=run.source_id,
@@ -407,7 +451,7 @@ def rollback_publication(session: Session, publication_id: int) -> CommentaryPub
     if not requested.active:
         raise ValueError('Rollback requires the active publication.')
 
-    with session.begin_nested():
+    with _publication_conflict_boundary(), session.begin_nested():
         source = session.scalar(
             select(CommentarySource)
             .where(CommentarySource.id == requested.source_id)

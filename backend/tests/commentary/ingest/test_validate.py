@@ -167,6 +167,20 @@ def test_prior_full_coverage_mapping_is_accepted_for_regression_checks():
     assert validate_commentary([_row()], {'genesis'}, prior).publishable
 
 
+def test_legacy_prior_coverage_without_chapter_numbers_remains_accepted():
+    from app.commentary.ingest.validate import validate_commentary
+
+    legacy = {
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+    }
+
+    result = validate_commentary([_row()], {'genesis'}, legacy)
+
+    assert result.publishable is True
+    assert result.coverage['by_work']['genesis']['chapter_numbers'] == (1,)
+
+
 def test_prior_full_coverage_rejects_zero_total_entries():
     from app.commentary.ingest.validate import validate_commentary
 

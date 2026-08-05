@@ -195,6 +195,53 @@ def test_validate_run_uses_previous_published_coverage(commentary_session, comme
     }
 
 
+def test_validate_run_accepts_legacy_active_edition_coverage(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import validate_run
+
+    edition = CommentaryEdition(
+        source_id=commentary_source.id, dataset_version='legacy', source_checksum='a' * 64,
+        status='published', record_count=1,
+        coverage={
+            'books': 1, 'chapters': 1, 'entries': 1,
+            'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+        },
+    )
+    commentary_session.add(edition)
+    commentary_session.flush()
+    commentary_session.add(CommentaryPublication(
+        source_id=commentary_source.id, edition_id=edition.id, version=1, active=True,
+    ))
+    commentary_session.flush()
+    run = _stage(commentary_session, commentary_source)
+
+    validate_run(commentary_session, run.id)
+
+    assert run.status == 'verified'
+    assert run.metadata_snapshot['coverage']['by_work']['genesis'] == {
+        'chapters': 1, 'chapter_numbers': [1], 'entries': 1,
+    }
+
+
+def test_publish_rejects_legacy_verified_coverage_until_revalidated(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    snapshot = dict(run.metadata_snapshot)
+    snapshot['coverage'] = {
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+    }
+    run.metadata_snapshot = snapshot
+    commentary_session.flush()
+
+    with pytest.raises(ValueError, match='revalidated'):
+        publish_run(commentary_session, run.id)
+
+
 def test_validate_run_rejects_missing_run_invalid_status_and_bad_metadata(
     commentary_session, commentary_source,
 ):
@@ -423,7 +470,11 @@ def test_publish_rejects_verified_run_metadata_mutation(
     elif mutation == 'coverage':
         snapshot['coverage'] = {
             'books': 1, 'chapters': 1, 'entries': 99,
-            'by_work': {'genesis': {'chapters': 1, 'entries': 99}},
+            'by_work': {
+                'genesis': {
+                    'chapters': 1, 'chapter_numbers': [1], 'entries': 99,
+                },
+            },
         }
         run.metadata_snapshot = snapshot
     else:
@@ -678,7 +729,7 @@ def test_independent_sessions_duplicate_publish_has_one_winner_and_no_orphans(tm
                 publication = publish_run(session, run_id)
                 session.commit()
                 return ('published', publication.id)
-            except (ValueError, IntegrityError) as exc:
+            except ValueError as exc:
                 session.rollback()
                 return ('rejected', type(exc).__name__)
 

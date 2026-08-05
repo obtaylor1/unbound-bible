@@ -19,6 +19,7 @@ class ConfirmationRequest(StrictModel):
 class CommentaryCoverageWork(StrictModel):
     chapters: int
     chapter_numbers: list[int]
+    chapter_numbers_complete: bool
     entries: int
 
 

@@ -269,27 +269,33 @@ def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | N
     for work_id, work_coverage in by_work.items():
         if type(work_id) is not str or work_id not in _KNOWN_WORK_IDS:
             raise ValueError('previous_coverage by_work must use known canonical work IDs.')
-        if (
-            not isinstance(work_coverage, Mapping)
-            or set(work_coverage) != {'chapters', 'chapter_numbers', 'entries'}
+        if not isinstance(work_coverage, Mapping):
+            raise ValueError('previous_coverage by_work values must be mappings.')
+        fields = set(work_coverage)
+        if fields not in (
+            {'chapters', 'entries'},
+            {'chapters', 'chapter_numbers', 'entries'},
         ):
             raise ValueError(
                 'previous_coverage by_work values must contain chapters, '
-                'chapter_numbers, and entries only.'
+                'entries, and optional exact chapter_numbers only.'
             )
         work_chapter_count = work_coverage['chapters']
         work_entry_count = work_coverage['entries']
-        chapter_numbers = work_coverage['chapter_numbers']
+        chapter_numbers = work_coverage.get('chapter_numbers')
         if (
             type(work_chapter_count) is not int or type(work_entry_count) is not int
             or work_chapter_count < 0 or work_entry_count <= 0
             or work_chapter_count > work_entry_count
-            or not isinstance(chapter_numbers, (list, tuple))
+        ):
+            raise ValueError('previous_coverage by_work counts are inconsistent.')
+        if chapter_numbers is not None and (
+            not isinstance(chapter_numbers, (list, tuple))
             or any(type(chapter) is not int or chapter <= 0 for chapter in chapter_numbers)
             or list(chapter_numbers) != sorted(set(chapter_numbers))
             or work_chapter_count != len(chapter_numbers)
         ):
-            raise ValueError('previous_coverage by_work counts are inconsistent.')
+            raise ValueError('previous_coverage chapter_numbers are inconsistent.')
         work_chapters += work_chapter_count
         work_entries += work_entry_count
     if (
@@ -302,6 +308,15 @@ def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | N
     ):
         raise ValueError('previous_coverage counts must match by_work totals.')
     return entries
+
+
+def has_exact_chapter_coverage(coverage: object) -> bool:
+    """Return whether coverage has the current strict, immutable chapter shape."""
+    try:
+        _freeze_coverage(coverage)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def validate_commentary(

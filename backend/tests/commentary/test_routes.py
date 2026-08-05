@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+import sqlite3
 from uuid import uuid4
 
 import pytest
@@ -5,6 +7,7 @@ from fastapi import APIRouter, Depends
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from app.application import create_application
 from app.auth.dependencies import get_session, require_admin
@@ -168,6 +171,49 @@ def test_sources_lists_only_active_published_editions(commentary_client, comment
     assert source['dataset_version'] == '1.0.0'
     assert source['coverage']['by_work']['genesis']['entries'] == 1
     assert source['license_spdx'] == 'Public-Domain'
+    assert source['coverage']['by_work']['genesis']['chapter_numbers_complete'] is True
+
+
+def test_legacy_published_coverage_is_normalized_and_conservatively_incomplete(
+    commentary_client, commentary_application,
+):
+    _publish(commentary_application, coverage={
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+    })
+
+    source = commentary_client.get('/api/v1/commentaries/sources').json()['sources'][0]
+    passage = commentary_client.get('/api/v1/commentaries/entries', params={
+        'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 2,
+    })
+
+    assert source['coverage']['by_work']['genesis'] == {
+        'chapters': 1,
+        'chapter_numbers': [],
+        'chapter_numbers_complete': False,
+        'entries': 1,
+    }
+    assert passage.status_code == 200
+    assert passage.json()['availability'] == 'coverage_incomplete'
+
+
+def test_malformed_service_payload_fails_runtime_response_validation(
+    commentary_application, monkeypatch,
+):
+    import app.commentary.router as commentary_router
+
+    monkeypatch.setattr(
+        commentary_router,
+        'passage_document',
+        lambda *args, **kwargs: ({'malformed': True}, datetime.now(UTC)),
+    )
+    with TestClient(commentary_application, raise_server_exceptions=False) as client:
+        response = client.get('/api/v1/commentaries/entries', params={
+            'source': 'anything', 'book': 'Genesis', 'chapter': 1,
+        })
+
+    assert response.status_code == 500
+    assert response.text == 'Internal Server Error'
 
 
 def test_verse_query_returns_covering_range(commentary_client, commentary_application):
@@ -317,6 +363,29 @@ def test_unknown_work_has_structured_error(commentary_client, commentary_applica
     })
     assert response.status_code == 404
     assert response.json()['detail']['code'] == code
+
+
+@pytest.mark.parametrize(('path', 'params'), [
+    ('/api/v1/commentaries/entries', {
+        'source': 'anything', 'book': 'Genesis', 'chapter': 10**20,
+    }),
+    ('/api/v1/commentaries/entries', {
+        'source': 'anything', 'book': 'Genesis', 'chapter': 1, 'verse': 10**20,
+    }),
+    ('/api/v1/commentaries/compare', [
+        ('sources', 'anything'), ('book', 'Genesis'),
+        ('chapter', str(10**20)), ('verse', '1'),
+    ]),
+    ('/api/v1/commentaries/compare', [
+        ('sources', 'anything'), ('book', 'Genesis'),
+        ('chapter', '1'), ('verse', str(10**20)),
+    ]),
+])
+def test_coordinates_have_safe_bible_sensible_upper_bounds(commentary_client, path, params):
+    response = commentary_client.get(path, params=params)
+
+    assert response.status_code == 422
+    assert isinstance(response.json()['detail'], list)
 
 
 def test_unknown_and_unpublished_sources_have_distinct_stable_errors(
@@ -721,6 +790,60 @@ def test_admin_publish_rolls_back_when_request_boundary_commit_fails(
         )).all()
         assert run.status == 'verified'
         assert publications == []
+
+
+def test_duplicate_publication_integrity_error_is_normalized_to_stable_conflict(
+    commentary_client, commentary_application, monkeypatch,
+):
+    import app.commentary.router as commentary_router
+
+    _override_admin(commentary_application)
+    run_id = _stage_verified(commentary_application, 'duplicate-race', 'One winner.')
+    error = IntegrityError(
+        'INSERT INTO commentary_publications', {},
+        sqlite3.IntegrityError(
+            'UNIQUE constraint failed: commentary_publications.source_id'
+        ),
+    )
+
+    def duplicate(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(commentary_router, 'publish_run', duplicate)
+    response = commentary_client.post(
+        f'/api/v1/commentaries/admin/imports/{run_id}/publish', json={'confirm': True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()['detail'] == {
+        'code': 'publication_conflict',
+        'message': 'Another publication operation won the race. Refresh and try again.',
+    }
+
+
+def test_unrelated_database_integrity_error_remains_sanitized_server_error(
+    commentary_application, monkeypatch,
+):
+    import app.commentary.router as commentary_router
+
+    _override_admin(commentary_application)
+    run_id = _stage_verified(commentary_application, 'unrelated-db', 'No leak.')
+    error = IntegrityError(
+        'INSERT INTO unrelated_table', {}, sqlite3.IntegrityError('FOREIGN KEY constraint failed'),
+    )
+
+    def unrelated(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(commentary_router, 'publish_run', unrelated)
+    with TestClient(commentary_application, raise_server_exceptions=False) as client:
+        response = client.post(
+            f'/api/v1/commentaries/admin/imports/{run_id}/publish', json={'confirm': True},
+        )
+
+    assert response.status_code == 500
+    assert response.text == 'Internal Server Error'
+    assert 'FOREIGN KEY' not in response.text
 
 
 def test_openapi_declares_complete_commentary_response_contracts(commentary_application):

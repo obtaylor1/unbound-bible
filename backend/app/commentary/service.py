@@ -21,6 +21,8 @@ from app.library.models import LibraryWork
 
 MAX_ENTRIES = 50
 MAX_BODY_CHARACTERS = 100_000
+MAX_CHAPTER = 500
+MAX_VERSE = 1_000
 
 
 class CommentaryLookupError(LookupError):
@@ -104,7 +106,39 @@ def source_document(item: PublishedSource) -> dict:
         'provenance_url': source.provenance_url,
         'edition_version': publication.version,
         'dataset_version': edition.dataset_version,
-        'coverage': edition.coverage,
+        'coverage': normalize_public_coverage(edition.coverage),
+    }
+
+
+def normalize_public_coverage(coverage: object) -> dict:
+    """Expose exact coverage when present and label legacy counts conservatively."""
+    document = coverage if isinstance(coverage, dict) else {}
+    raw_by_work = document.get('by_work')
+    by_work: dict[str, dict] = {}
+    if isinstance(raw_by_work, dict):
+        for work_id, raw in raw_by_work.items():
+            if not isinstance(work_id, str) or not isinstance(raw, dict):
+                continue
+            chapters = raw.get('chapters') if type(raw.get('chapters')) is int else 0
+            entries = raw.get('entries') if type(raw.get('entries')) is int else 0
+            raw_numbers = raw.get('chapter_numbers')
+            exact = (
+                isinstance(raw_numbers, list)
+                and all(type(number) is int and number > 0 for number in raw_numbers)
+                and raw_numbers == sorted(set(raw_numbers))
+                and len(raw_numbers) == chapters
+            )
+            by_work[work_id] = {
+                'chapters': max(chapters, 0),
+                'chapter_numbers': list(raw_numbers) if exact else [],
+                'chapter_numbers_complete': exact,
+                'entries': max(entries, 0),
+            }
+    return {
+        'books': document.get('books') if type(document.get('books')) is int else len(by_work),
+        'chapters': document.get('chapters') if type(document.get('chapters')) is int else 0,
+        'entries': document.get('entries') if type(document.get('entries')) is int else 0,
+        'by_work': by_work,
     }
 
 
@@ -113,7 +147,11 @@ def _coverage_availability(coverage: dict, work_id: str, chapter: int) -> str:
     if not isinstance(work_coverage, dict):
         return 'coverage_incomplete'
     chapter_numbers = work_coverage.get('chapter_numbers')
-    if isinstance(chapter_numbers, list) and chapter not in chapter_numbers:
+    if (
+        work_coverage.get('chapter_numbers_complete') is not True
+        or not isinstance(chapter_numbers, list)
+        or chapter not in chapter_numbers
+    ):
         return 'coverage_incomplete'
     return 'no_entry'
 
@@ -191,6 +229,7 @@ def passage_document(
     rows = matching_rows[:max_entries]
 
     source = source_document(published)
+    coverage = source['coverage']
     remaining = max_body_characters
     entries: list[dict] = []
     body_truncated = False
@@ -220,7 +259,7 @@ def passage_document(
             break
 
     coverage_availability = _coverage_availability(
-        published.edition.coverage, work.id, chapter,
+        coverage, work.id, chapter,
     )
     if verse is None and coverage_availability == 'coverage_incomplete':
         availability = coverage_availability
@@ -244,7 +283,7 @@ def passage_document(
             'version': published.publication.version,
             'dataset_version': published.edition.dataset_version,
         },
-        'coverage': published.edition.coverage,
+        'coverage': coverage,
         'entries': entries,
         'truncated': count_truncated or body_truncated,
     }

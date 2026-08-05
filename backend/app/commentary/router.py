@@ -9,13 +9,19 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_session, require_admin
 from app.auth.models import User
-from app.commentary.ingest.publish import publish_run, rollback_publication
+from app.commentary.ingest.publish import (
+    CommentaryPublicationConflict,
+    is_commentary_publication_conflict,
+    publish_run,
+    rollback_publication,
+)
 from app.commentary.models import CommentaryImportRun, CommentaryValidationFinding
 from app.commentary.schemas import (
     CommentaryCompareResponse,
@@ -28,7 +34,9 @@ from app.commentary.schemas import (
 from app.commentary.service import (
     CommentaryLookupError,
     MAX_BODY_CHARACTERS,
+    MAX_CHAPTER,
     MAX_ENTRIES,
+    MAX_VERSE,
     list_published_sources,
     passage_document,
     source_document,
@@ -49,8 +57,16 @@ def _http_datetime(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _cached_response(request: Request, document: dict, modified: datetime) -> Response:
-    serialized = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+def _cached_response(
+    request: Request,
+    document: dict,
+    modified: datetime,
+    response_model: type[BaseModel],
+) -> Response:
+    validated = response_model.model_validate(document).model_dump(mode='json')
+    serialized = json.dumps(
+        validated, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    )
     etag = f'"{sha256(serialized.encode("utf-8")).hexdigest()}"'
     modified_utc = _http_datetime(modified).replace(microsecond=0)
     headers = {
@@ -72,7 +88,7 @@ def _cached_response(request: Request, document: dict, modified: datetime) -> Re
                 return Response(status_code=304, headers=headers)
         except (TypeError, ValueError, OverflowError):
             pass
-    return JSONResponse(document, headers=headers)
+    return Response(serialized, media_type='application/json', headers=headers)
 
 
 @router.get('/sources', response_model=CommentarySourcesResponse)
@@ -83,7 +99,7 @@ def sources(request: Request, session: Session = Depends(get_session)) -> Respon
         (item.publication.published_at for item in published),
         default=datetime(1970, 1, 1, tzinfo=UTC),
     )
-    return _cached_response(request, document, modified)
+    return _cached_response(request, document, modified, CommentarySourcesResponse)
 
 
 @router.get('/entries', response_model=CommentaryPassageResponse)
@@ -91,8 +107,8 @@ def entries(
     request: Request,
     source: str = Query(min_length=1, max_length=64),
     book: str = Query(min_length=1, max_length=200),
-    chapter: int = Query(gt=0),
-    verse: int | None = Query(default=None, gt=0),
+    chapter: int = Query(gt=0, le=MAX_CHAPTER),
+    verse: int | None = Query(default=None, gt=0, le=MAX_VERSE),
     session: Session = Depends(get_session),
 ) -> Response:
     try:
@@ -101,7 +117,7 @@ def entries(
         )
     except CommentaryLookupError as exc:
         raise _error(404, exc.code, exc.message) from exc
-    return _cached_response(request, document, modified)
+    return _cached_response(request, document, modified, CommentaryPassageResponse)
 
 
 @router.get('/compare', response_model=CommentaryCompareResponse)
@@ -109,8 +125,8 @@ def compare(
     request: Request,
     sources: list[str] = Query(),
     book: str = Query(min_length=1, max_length=200),
-    chapter: int = Query(gt=0),
-    verse: int = Query(gt=0),
+    chapter: int = Query(gt=0, le=MAX_CHAPTER),
+    verse: int = Query(gt=0, le=MAX_VERSE),
     session: Session = Depends(get_session),
 ) -> Response:
     if not 1 <= len(sources) <= 2 or len(set(sources)) != len(sources):
@@ -141,7 +157,9 @@ def compare(
         'reference': results[0]['reference'],
         'results': results,
     }
-    return _cached_response(request, document, max(modified_values))
+    return _cached_response(
+        request, document, max(modified_values), CommentaryCompareResponse,
+    )
 
 
 @router.get('/admin/imports/{run_id}', response_model=CommentaryImportStatusResponse)
@@ -174,6 +192,14 @@ def _require_confirmation(body: ConfirmationRequest | None) -> None:
         raise _error(400, 'confirmation_required', 'Set confirm to true to continue.')
 
 
+def _publication_conflict() -> HTTPException:
+    return _error(
+        409,
+        'publication_conflict',
+        'Another publication operation won the race. Refresh and try again.',
+    )
+
+
 @router.post(
     '/admin/imports/{run_id}/publish',
     response_model=CommentaryPublicationActionResponse,
@@ -190,9 +216,17 @@ def publish_import(
     try:
         publication = publish_run(session, run_id)
         session.commit()
+    except CommentaryPublicationConflict as exc:
+        session.rollback()
+        raise _publication_conflict() from exc
     except ValueError as exc:
         session.rollback()
         raise _error(409, 'publication_blocked', str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        if is_commentary_publication_conflict(exc):
+            raise _publication_conflict() from exc
+        raise
     except Exception:
         session.rollback()
         raise
@@ -217,12 +251,20 @@ def rollback(
     try:
         publication = rollback_publication(session, publication_id)
         session.commit()
+    except CommentaryPublicationConflict as exc:
+        session.rollback()
+        raise _publication_conflict() from exc
     except ValueError as exc:
         session.rollback()
         message = str(exc)
         if message == 'Commentary publication was not found.':
             raise _error(404, 'publication_not_found', message) from exc
         raise _error(409, 'rollback_blocked', message) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        if is_commentary_publication_conflict(exc):
+            raise _publication_conflict() from exc
+        raise
     except Exception:
         session.rollback()
         raise
