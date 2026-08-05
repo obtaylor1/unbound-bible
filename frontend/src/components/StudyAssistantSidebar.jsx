@@ -334,21 +334,8 @@ function StudyAssistantSidebar({
                           ))}
                         </div>
                       ) : (
-                        <div className="commentary-list">
-                          <div className="commentary-card">
-                            <h5>Decolonized Commentary (Axum Studies)</h5>
-                            <p>Exegesis on this verse points out the traditional Near Eastern agrarian setting, noting how local Ge'ez translations preserve active verbal structures compared to Western nominal translations.</p>
-                          </div>
-                          <div className="commentary-card">
-                            <h5>Library Commentary (Standard Exegesis)</h5>
-                            <p>Literary analysis indicates this chapter represents a covenant ratification formula standard in the Bronze-Age Levant.</p>
-                          </div>
-                          <button 
-                            className="btn-action-outline"
-                            onClick={() => sendChatMessage(`Can you summarize the major commentaries and scholarly debates on ${book} ${chapter}:${verse}?`)}
-                          >
-                            🤖 Generate Full Commentary Review
-                          </button>
+                        <div className="empty-state">
+                          <p>Verified commentary is available in the Scripture Reader Study Tools.</p>
                         </div>
                       )}
                     </div>
