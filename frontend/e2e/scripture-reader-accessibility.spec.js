@@ -36,6 +36,17 @@ const verseDetails = {
   ],
 }
 
+const commentarySource = {
+  id: 'john-gill',
+  title: 'John Gill’s Exposition',
+  abbreviation: 'Gill',
+  author: 'John Gill',
+  publication_period: '1746–1763',
+  tradition: 'Reformed Baptist',
+  language: 'English',
+  attribution: 'Public-domain edition prepared by HelloAO',
+}
+
 const test = base.extend({
   browserDiagnostics: async ({ page }, runTest) => {
     const errors = []
@@ -85,6 +96,37 @@ test.beforeEach(async ({ page, browserDiagnostics }) => {
       }],
     },
   }))
+  await page.route('**/api/v1/commentaries/sources', (route) => route.fulfill({
+    json: { sources: [commentarySource] },
+  }))
+  await page.route('**/api/v1/commentaries/entries?**', (route) => {
+    const params = new URL(route.request().url()).searchParams
+    const verse = Number(params.get('verse')) || undefined
+    return route.fulfill({
+      json: {
+        reference: {
+          book: params.get('book'),
+          chapter: Number(params.get('chapter')),
+          ...(verse ? { verse } : {}),
+        },
+        availability: 'available',
+        truncated: false,
+        source: commentarySource,
+        entries: [{
+          body: verse
+            ? `Commentary notes for Genesis 1:${verse}.`
+            : 'Commentary overview for Genesis 1.',
+          citation: verse
+            ? `John Gill, Exposition of Genesis 1:${verse}`
+            : 'John Gill, Exposition of Genesis 1',
+          entry_type: verse ? 'verse' : 'chapter_intro',
+          scope: verse
+            ? { verse_start: verse, verse_end: verse }
+            : { verse_start: null, verse_end: null },
+        }],
+      },
+    })
+  })
 })
 
 async function openReader(page) {
@@ -436,6 +478,143 @@ test('selected verse Study Tools expose all truthful destinations and restore fo
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await expect(opener).toBeFocused()
+})
+
+test('docked Commentary leaves Scripture pointer-accessible while reading and scrolling', async ({ page }, testInfo) => {
+  test.skip(
+    !['desktop-chromium', 'mobile-390', 'mobile-320'].includes(testInfo.project.name),
+    'commentary dock pointer and responsive geometry coverage',
+  )
+
+  const extendedChapter = [
+    ...chapters[1],
+    ...Array.from({ length: 11 }, (_, index) => {
+      const verse = index + 4
+      return {
+        id: `kjv-1-${verse}`,
+        chapter: 1,
+        verse,
+        translation: 'KJV',
+        text: `Genesis chapter one fixture text for verse ${verse}.`,
+      }
+    }),
+  ]
+  await page.route('**/api/biblical-texts/chapter-content?**', (route) => route.fulfill({
+    json: { content: extendedChapter },
+  }))
+
+  await openReader(page)
+  await page.getByRole('button', { name: 'Open study tools' }).click()
+  await expect(page.getByRole('dialog', { name: 'Genesis 1' })).toBeVisible()
+  await page.getByRole('button', { name: 'Commentary' }).click()
+
+  const dock = page.getByRole('complementary', { name: 'Genesis 1' })
+  const dockWrapper = page.locator('.study-tools--docked')
+  await expect(dock).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Genesis 1' })).toHaveCount(0)
+  await expect(dock).not.toHaveAttribute('aria-modal')
+  await expect(page.getByText('Commentary for Genesis 1', { exact: true })).toBeVisible()
+  await expect(page.locator('.study-tools__backdrop')).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+
+  const initialGeometry = await dock.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const wrapper = element.closest('.study-tools')
+    return {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      height: rect.height,
+      position: getComputedStyle(element).position,
+      panelPointerEvents: getComputedStyle(element).pointerEvents,
+      wrapperPointerEvents: getComputedStyle(wrapper).pointerEvents,
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(initialGeometry.position).toBe('fixed')
+  expect(initialGeometry.panelPointerEvents).toBe('auto')
+  expect(initialGeometry.wrapperPointerEvents).toBe('none')
+  expect(initialGeometry.bodyOverflow).not.toBe('hidden')
+  expect(initialGeometry.left).toBeGreaterThanOrEqual(0)
+  expect(initialGeometry.right).toBeLessThanOrEqual(initialGeometry.viewportWidth)
+  expect(initialGeometry.bottom).toBeLessThanOrEqual(initialGeometry.viewportHeight)
+  if (testInfo.project.name.startsWith('mobile-')) {
+    expect(initialGeometry.height).toBeLessThanOrEqual(initialGeometry.viewportHeight * 0.52 + 1)
+    expect(initialGeometry.top).toBeGreaterThanOrEqual(initialGeometry.viewportHeight * 0.48 - 1)
+  }
+
+  const targetVerse = page.getByRole('button', { name: /Genesis 1 verse 8/ })
+  await targetVerse.evaluate((element) => {
+    const panelRect = document.querySelector('.study-tools__dialog--docked').getBoundingClientRect()
+    const rect = element.getBoundingClientRect()
+    const panelSpansViewportWidth = panelRect.left <= 1 && panelRect.right >= window.innerWidth - 1
+    const desiredCenterY = panelSpansViewportWidth
+      ? Math.max(16, panelRect.top / 2)
+      : window.innerHeight / 2
+    window.scrollBy(0, rect.top + rect.height / 2 - desiredCenterY)
+  })
+
+  const pointer = await targetVerse.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const minX = Math.max(0, Math.ceil(rect.left + 2))
+    const maxX = Math.min(window.innerWidth - 1, Math.floor(rect.right - 2))
+    const minY = Math.max(0, Math.ceil(rect.top + 2))
+    const maxY = Math.min(window.innerHeight - 1, Math.floor(rect.bottom - 2))
+    for (let y = minY; y <= maxY; y += 6) {
+      for (let x = minX; x <= maxX; x += 6) {
+        if (document.elementFromPoint(x, y)?.closest('button') === element) return { x, y }
+      }
+    }
+    return null
+  })
+  expect(pointer, 'verse 8 must expose a real pointer hit target outside the dock').not.toBeNull()
+  await page.mouse.click(pointer.x, pointer.y)
+
+  await expect(page).toHaveURL(/verse=8/)
+  await expect(page.getByRole('complementary', { name: 'Genesis 1:8' })).toBeVisible()
+  await expect(page.getByText('Commentary for Genesis 1:8', { exact: true })).toBeVisible()
+  await expect(page.getByText('Commentary notes for Genesis 1:8.', { exact: true })).toBeVisible()
+
+  const scrollBefore = await page.evaluate(() => ({
+    y: window.scrollY,
+    maximum: document.documentElement.scrollHeight - window.innerHeight,
+  }))
+  const scrollDelta = scrollBefore.y < scrollBefore.maximum - 20 ? 320 : -320
+  await page.mouse.move(pointer.x, pointer.y)
+  await page.mouse.wheel(0, scrollDelta)
+  await expect.poll(() => page.evaluate(() => window.scrollY)).not.toBe(scrollBefore.y)
+
+  await expect(page.getByRole('complementary', { name: 'Genesis 1:8' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  const afterGeometry = await page.getByRole('complementary', { name: 'Genesis 1:8' }).evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const reader = document.querySelector('[data-testid="scripture-reader"]').getBoundingClientRect()
+    const navigation = document.querySelector('.reader-bottom-navigation')?.getBoundingClientRect()
+    return {
+      panelTop: rect.top,
+      panelRight: rect.right,
+      panelBottom: rect.bottom,
+      readerLeft: reader.left,
+      readerRight: reader.right,
+      navigationLeft: navigation?.left,
+      navigationRight: navigation?.right,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(afterGeometry.panelTop).toBeCloseTo(initialGeometry.top, 0)
+  expect(afterGeometry.panelRight).toBeLessThanOrEqual(afterGeometry.viewportWidth)
+  expect(afterGeometry.panelBottom).toBeLessThanOrEqual(afterGeometry.viewportHeight)
+  expect(afterGeometry.readerLeft).toBeGreaterThanOrEqual(0)
+  expect(afterGeometry.readerRight).toBeLessThanOrEqual(afterGeometry.viewportWidth)
+  if (afterGeometry.navigationLeft !== undefined) {
+    expect(afterGeometry.navigationLeft).toBeGreaterThanOrEqual(0)
+    expect(afterGeometry.navigationRight).toBeLessThanOrEqual(afterGeometry.viewportWidth)
+  }
+  await expect(dockWrapper).toHaveCSS('pointer-events', 'none')
 })
 
 test('route Study Tools activate their real destinations from selected Genesis 1:2', async ({ page }, testInfo) => {
