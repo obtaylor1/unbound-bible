@@ -35,6 +35,7 @@ class AcquiredArtifact:
     sidecar: Path
     checksum: str
     size: int
+    url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,9 @@ class _RestartDownload(Exception):
 
 class _PartialDurabilityError(OSError):
     """Partial bytes could not be made durable and must never be resumed."""
+
+
+_FinalizationHook = Callable[[str], None]
 
 
 def _registry(path: Path | None = None) -> dict[str, SourceMetadata]:
@@ -388,35 +392,265 @@ def _read_response(response: BinaryIO, part: Path, existing: int) -> tuple[bytes
     return raw, total
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+def _fsync_directory(directory_fd: int) -> None:
+    descriptor = os.dup(directory_fd)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
 
 
-def _write_sidecar(path: Path, checksum: str, filename: str) -> None:
-    temporary = path.with_name(path.name + '.part')
-    if temporary.exists() or temporary.is_symlink():
-        _regular_size(temporary)
-        temporary.unlink()
+def _write_sidecar(
+    path: Path, checksum: str, filename: str, directory_fd: int,
+) -> None:
+    _write_atomic_at(
+        directory_fd, path.name, f'{checksum}  {filename}\n'.encode('ascii'),
+    )
+
+
+def _open_directory_nofollow(path: Path, *, create: bool = False) -> int:
+    """Open a directory by walking every component without following links."""
+    absolute = path.expanduser().absolute()
+    descriptor = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        for name in absolute.parts[1:]:
+            if create:
+                try:
+                    os.mkdir(name, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(
+                name,
+                os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                | getattr(os, 'O_NOFOLLOW', 0),
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _open_child_directory(parent_fd: int, name: str, *, create: bool = False) -> int:
+    if '/' in name or name in {'', '.', '..'}:
+        raise ValueError('directory name is invalid.')
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+    return os.open(
+        name,
+        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0),
+        dir_fd=parent_fd,
+    )
+
+
+def _read_regular_at(directory_fd: int, name: str, maximum: int) -> bytes | None:
+    try:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+        raise ValueError(f'{Path(name).name} must be a small regular file.')
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError(f'{Path(name).name} changed while opening.')
+        chunks: list[bytes] = []
+        remaining = info.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                raise ValueError(f'{Path(name).name} ended while reading.')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _unlink_at(directory_fd: int, name: str) -> None:
+    try:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f'{Path(name).name} must be a regular file.')
+    os.unlink(name, dir_fd=directory_fd)
+
+
+def _write_atomic_at(directory_fd: int, name: str, raw: bytes) -> None:
+    temporary = name + '.part'
+    _unlink_at(directory_fd, temporary)
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
         0o600,
+        dir_fd=directory_fd,
     )
     try:
-        payload = memoryview(f'{checksum}  {filename}\n'.encode('ascii'))
-        while payload:
-            written = os.write(descriptor, payload)
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
             if written <= 0:
-                raise OSError('checksum sidecar write made no progress.')
-            payload = payload[written:]
+                raise OSError('atomic file write made no progress.')
+            view = view[written:]
         os.fsync(descriptor)
+        os.replace(
+            temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
+        )
+    except Exception:
+        try:
+            _unlink_at(directory_fd, temporary)
+        except Exception:
+            pass
+        raise
     finally:
         os.close(descriptor)
-    os.replace(temporary, path)
+
+
+def _path_still_identifies(path: Path, descriptor: int) -> bool:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    opened = os.fstat(descriptor)
+    return stat.S_ISDIR(current.st_mode) and (
+        current.st_dev, current.st_ino
+    ) == (opened.st_dev, opened.st_ino)
+
+
+def _marker_document(
+    source_id: str, filename: str, url: str, checksum: str,
+) -> bytes:
+    return (json.dumps({
+        'schema_version': 1,
+        'source_id': source_id,
+        'artifact': filename,
+        'url': url,
+        'sha256': checksum,
+        'generation': f'generations/{filename}/{checksum}',
+    }, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
+
+
+def _finalize_generation(
+    *,
+    destination: Path,
+    source_id: str,
+    filename: str,
+    url: str,
+    raw: bytes,
+    checksum: str,
+    hook: _FinalizationHook | None,
+) -> tuple[Path, Path]:
+    checkpoint = hook or (lambda _step: None)
+    artifact_root = destination / 'generations' / filename
+    generation = artifact_root / checksum
+    artifact = generation / filename
+    sidecar = generation / f'{filename}.sha256'
+    marker_name = f'{filename}.current.json'
+    destination_fd = _open_directory_nofollow(destination)
+    generations_fd = artifact_root_fd = generation_fd = None
+    switched = False
+    try:
+        generations_fd = _open_child_directory(destination_fd, 'generations', create=True)
+        artifact_root_fd = _open_child_directory(generations_fd, filename, create=True)
+        generation_fd = _open_child_directory(artifact_root_fd, checksum, create=True)
+        previous_marker = _read_regular_at(destination_fd, marker_name, 4096)
+        _write_atomic_at(generation_fd, filename, raw)
+        checkpoint('generation_data')
+        _write_sidecar(sidecar, checksum, filename, generation_fd)
+        checkpoint('generation_sidecar')
+        _fsync_directory(generation_fd)
+        marker_raw = _marker_document(source_id, filename, url, checksum)
+        marker_temporary = marker_name + '.part'
+        _write_atomic_at(destination_fd, marker_temporary, marker_raw)
+        checkpoint('before_marker_switch')
+        if not _path_still_identifies(destination, destination_fd):
+            raise ValueError('acquisition output directory changed during finalization.')
+        os.replace(
+            marker_temporary, marker_name,
+            src_dir_fd=destination_fd, dst_dir_fd=destination_fd,
+        )
+        switched = True
+        checkpoint('after_marker_switch')
+        checkpoint('directory_fsync')
+        _fsync_directory(destination_fd)
+        return artifact, sidecar
+    except Exception:
+        if switched:
+            try:
+                if previous_marker is None:
+                    _unlink_at(destination_fd, marker_name)
+                else:
+                    _write_atomic_at(destination_fd, marker_name, previous_marker)
+                _fsync_directory(destination_fd)
+            except Exception:
+                pass
+        else:
+            try:
+                _unlink_at(destination_fd, marker_name + '.part')
+                _unlink_at(destination_fd, marker_name + '.part.part')
+            except Exception:
+                pass
+        # Immutable incomplete generations are harmless because readers only
+        # follow the durable marker. Leave them for operator cleanup.
+        raise
+    finally:
+        for descriptor in (generation_fd, artifact_root_fd, generations_fd, destination_fd):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def read_acquired_artifact(
+    source_directory: Path, filename: str, *, source_id: str,
+) -> tuple[bytes, str, str]:
+    """Read and verify only the immutable generation selected by the marker."""
+    if '/' in filename or filename in {'', '.', '..'}:
+        raise ValueError('Requested artifact name is invalid.')
+    source_fd = _open_directory_nofollow(source_directory)
+    generations_fd = artifact_root_fd = generation_fd = None
+    try:
+        raw_marker = _read_regular_at(source_fd, f'{filename}.current.json', 4096)
+        if raw_marker is None:
+            raise ValueError(f'No current acquired generation exists for {filename}.')
+        try:
+            value = json.loads(raw_marker.decode('utf-8', errors='strict'))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise ValueError('Current artifact marker is invalid.') from exc
+        expected_keys = {
+            'schema_version', 'source_id', 'artifact', 'url', 'sha256', 'generation',
+        }
+        if type(value) is not dict or set(value) != expected_keys:
+            raise ValueError('Current artifact marker has an invalid shape.')
+        checksum = value['sha256']
+        generation = value['generation']
+        if (
+            value['schema_version'] != 1 or value['source_id'] != source_id
+            or value['artifact'] != filename or type(value['url']) is not str
+            or type(checksum) is not str or not re.fullmatch(r'[0-9a-f]{64}', checksum)
+            or generation != f'generations/{filename}/{checksum}'
+        ):
+            raise ValueError('Current artifact marker does not match the requested artifact.')
+        generations_fd = _open_child_directory(source_fd, 'generations')
+        artifact_root_fd = _open_child_directory(generations_fd, filename)
+        generation_fd = _open_child_directory(artifact_root_fd, checksum)
+        raw = _read_regular_at(generation_fd, filename, MAX_ARTIFACT_BYTES)
+        if raw is None or sha256(raw).hexdigest() != checksum:
+            raise ValueError('Current acquired generation is incomplete or corrupt.')
+        return raw, checksum, value['url']
+    finally:
+        for descriptor in (generation_fd, artifact_root_fd, generations_fd, source_fd):
+            if descriptor is not None:
+                os.close(descriptor)
 
 
 def acquire_source(
@@ -427,6 +661,7 @@ def acquire_source(
     opener: Callable[..., object] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     registry_path: Path | None = None,
+    finalization_hook: _FinalizationHook | None = None,
 ) -> AcquiredArtifact:
     """Acquire one exact allowlisted JSON artifact through a safe resumable file."""
     registry = _registry(registry_path)
@@ -436,8 +671,6 @@ def acquire_source(
     _ensure_directory(output)
     destination = output / source_id
     _ensure_directory(destination)
-    target = destination / filename
-    sidecar = destination / f'{filename}.sha256'
     part = destination / f'{filename}.part'
     resume_metadata = destination / f'{filename}.part.meta'
     existing = _regular_size(part)
@@ -449,10 +682,6 @@ def acquire_source(
             existing = 0
     elif resume_metadata.exists() or resume_metadata.is_symlink():
         _cleanup_artifacts(resume_metadata)
-    if target.exists() and (not target.is_file() or target.is_symlink()):
-        raise ValueError('final artifact must be a regular file.')
-    if sidecar.exists() and (not sidecar.is_file() or sidecar.is_symlink()):
-        raise ValueError('checksum sidecar must be a regular file.')
     transport = opener or _default_opener(source_id, registry)
 
     last_network_error: Exception | None = None
@@ -534,24 +763,19 @@ def acquire_source(
         expected = registry[source_id].source_checksum if filename == 'books.json' else None
         if expected is not None and checksum != expected:
             raise ValueError('artifact checksum does not match the reviewed registry checksum.')
-        # Materialize both members before the durability boundary. A failure at
-        # either rename or fsync removes the pair, never exposing a half result.
-        _write_sidecar(sidecar, checksum, filename)
-        os.replace(part, target)
+        artifact, sidecar = _finalize_generation(
+            destination=destination, source_id=source_id, filename=filename,
+            url=url, raw=raw, checksum=checksum, hook=finalization_hook,
+        )
+        _cleanup_artifacts(part)
         _cleanup_artifacts(resume_metadata)
-        _fsync_directory(destination)
     except Exception:
         _cleanup_artifacts(
-            target, sidecar, part, resume_metadata,
-            sidecar.with_name(sidecar.name + '.part'),
+            part, resume_metadata,
             resume_metadata.with_name(resume_metadata.name + '.part'),
         )
-        try:
-            _fsync_directory(destination)
-        except OSError:
-            pass
         raise
-    return AcquiredArtifact(target, sidecar, checksum, size)
+    return AcquiredArtifact(artifact, sidecar, checksum, size, url)
 
 
 def acquire_source_bundle(

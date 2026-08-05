@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "matthew-henry": {"artifacts": {"books.json": {"url": "https://bible.helloao.org/api/c/matthew-henry/books.json", "sha256": "ad2850450a1e5c0546c275f4bd09b9325ae47424d83311120ca7ced5724c4bc8"}}},
+    "john-gill": {"artifacts": {"books.json": {"url": "https://bible.helloao.org/api/c/john-gill/books.json", "sha256": "f6fcfd6c3a726dc834cfaf1ae1cd0bf49bffb88c1246ac3500699e8af7be71a5"}}},
+    "adam-clarke": {"artifacts": {"books.json": {"url": "https://bible.helloao.org/api/c/adam-clarke/books.json", "sha256": "92e28c9363c876d215e296f2fe04abb3ab7e34a2aacebdf06bd62ae79c6e3dba"}}},
+    "jamieson-fausset-brown": {"artifacts": {"books.json": {"url": "https://bible.helloao.org/api/c/jamieson-fausset-brown/books.json", "sha256": "db3d4c8b3c1f32ef9d1430a57392e02bda3a17aac1f9bbe398461de021a3cb13"}}},
+    "keil-delitzsch": {"artifacts": {"books.json": {"url": "https://bible.helloao.org/api/c/keil-delitzsch/books.json", "sha256": "bb5cc0f9cfe0a93b3c903bb6972c6bc8c4e9f2bd3be6c2a6d276737cf9c5edce"}}}
+  }
+}

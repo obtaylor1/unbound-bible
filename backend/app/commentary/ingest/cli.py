@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 from typing import Annotated, NoReturn
@@ -25,13 +26,16 @@ from app.commentary.models import (
 from app.config import Settings
 from app.database import create_database_engine, create_session_factory
 
-from .acquire import MAX_ARTIFACT_BYTES, acquire_source_bundle
+from .acquire import MAX_ARTIFACT_BYTES, acquire_source_bundle, read_acquired_artifact
 from .adapter import load_helloao_bundle_bytes
 from .publish import publish_run, rollback_publication, stage_bundle, validate_run
 from .validate import SourceMetadata, load_source_registry
 
 
 _REGISTRY_PATH = Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'sources.json'
+_REVIEWED_ARTIFACTS_PATH = (
+    Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'reviewed-artifacts.json'
+)
 _BOOK_NAMES = (
     'Genesis', 'Exodus', 'Leviticus', 'Numbers', 'Deuteronomy', 'Joshua', 'Judges', 'Ruth',
     '1 Samuel', '2 Samuel', '1 Kings', '2 Kings', '1 Chronicles', '2 Chronicles', 'Ezra',
@@ -222,38 +226,89 @@ def _read_bounded_regular(path: Path, *, maximum: int, label: str) -> bytes:
         os.close(parent)
 
 
-def _verify_artifact(path: Path) -> tuple[bytes, str]:
-    sidecar_path = path.with_name(path.name + '.sha256')
-    raw = _read_bounded_regular(path, maximum=MAX_ARTIFACT_BYTES, label='input artifact')
-    checksum = sha256(raw).hexdigest()
+def _reviewed_source_artifacts(
+    source_id: str, metadata: SourceMetadata, path: Path,
+) -> dict[str, dict[str, str]]:
+    raw = _read_bounded_regular(path, maximum=256 * 1024, label='reviewed artifact manifest')
     try:
-        sidecar = _read_bounded_regular(
-            sidecar_path, maximum=256, label='checksum sidecar',
-        ).decode('ascii', errors='strict')
-    except UnicodeDecodeError as exc:
-        raise ValueError('checksum sidecar must contain ASCII text.') from exc
-    if sidecar != f'{checksum}  {path.name}\n':
-        raise ValueError(f'Checksum sidecar does not match {path.name}.')
-    return raw, checksum
+        manifest = json.loads(raw.decode('utf-8', errors='strict'))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError('Reviewed artifact manifest must contain valid JSON.') from exc
+    if type(manifest) is not dict or set(manifest) != {'schema_version', 'sources'}:
+        raise ValueError('Reviewed artifact manifest has an invalid schema.')
+    sources = manifest['sources']
+    if manifest['schema_version'] != 1 or type(sources) is not dict or source_id not in sources:
+        raise ValueError('Reviewed artifact manifest has no approved source record.')
+    source = sources[source_id]
+    if (
+        type(source) is not dict or set(source) != {'artifacts'}
+        or type(source['artifacts']) is not dict
+    ):
+        raise ValueError('Reviewed artifact source record has an invalid schema.')
+    artifacts = source['artifacts']
+    expected = [f'{code}.json' for code in metadata.expected_source_books] + ['books.json']
+    if set(artifacts) != set(expected):
+        raise ValueError(
+            'Reviewed artifact manifest is incomplete; production staging is blocked.'
+        )
+    approved: dict[str, dict[str, str]] = {}
+    for filename in expected:
+        record = artifacts[filename]
+        expected_url = (
+            metadata.upstream_url if filename == 'books.json'
+            else f'https://bible.helloao.org/api/c/{source_id}/{filename}'
+        )
+        if (
+            type(record) is not dict or set(record) != {'url', 'sha256'}
+            or record.get('url') != expected_url
+            or type(record.get('sha256')) is not str
+            or re.fullmatch(r'[0-9a-f]{64}', record['sha256']) is None
+        ):
+            raise ValueError(
+                'Reviewed artifact record does not match the approved URL and digest schema.'
+            )
+        if filename == 'books.json' and record['sha256'] != metadata.source_checksum:
+            raise ValueError('Reviewed catalog digest does not match the pinned source registry.')
+        approved[filename] = {'url': record['url'], 'sha256': record['sha256']}
+    return approved
 
 
-def _load_stage_input(source_id: str, input_path: Path, metadata: SourceMetadata):
+def _load_stage_input(
+    source_id: str, input_path: Path, metadata: SourceMetadata, *,
+    reviewed_manifest_path: Path = _REVIEWED_ARTIFACTS_PATH,
+):
     _safe_input_directory(input_path)
     if input_path.name != source_id:
         raise ValueError('input directory name must exactly match --source.')
+    reviewed = _reviewed_source_artifacts(source_id, metadata, reviewed_manifest_path)
     expected_codes = metadata.expected_source_books
     rows = []
     checksums = []
     for code in expected_codes:
-        artifact = input_path / f'{code}.json'
-        raw, checksum = _verify_artifact(artifact)
-        checksums.append((artifact.name, checksum))
+        filename = f'{code}.json'
+        raw, checksum, acquired_url = read_acquired_artifact(
+            input_path, filename, source_id=source_id,
+        )
+        if (
+            checksum != reviewed[filename]['sha256']
+            or acquired_url != reviewed[filename]['url']
+        ):
+            raise ValueError(
+                f'{filename} does not match its independently reviewed digest and URL.'
+            )
+        checksums.append((filename, checksum))
         loaded = tuple(load_helloao_bundle_bytes(raw, {code: _BOOK_MAP[code]}))
         if not loaded or any(not row.source_locator.startswith(f'helloao:{source_id}:{code}:') for row in loaded):
-            raise ValueError(f'{artifact.name} does not identify the reviewed commentary source.')
+            raise ValueError(f'{filename} does not identify the reviewed commentary source.')
         rows.extend(loaded)
-    catalog = input_path / 'books.json'
-    _catalog_raw, catalog_checksum = _verify_artifact(catalog)
+    _catalog_raw, catalog_checksum, catalog_url = read_acquired_artifact(
+        input_path, 'books.json', source_id=source_id,
+    )
+    if (
+        catalog_checksum != reviewed['books.json']['sha256']
+        or catalog_url != reviewed['books.json']['url']
+    ):
+        raise ValueError('books.json does not match its independently reviewed digest and URL.')
     if catalog_checksum != metadata.source_checksum:
         raise ValueError('books.json checksum no longer matches the reviewed registry.')
     checksums.append(('books.json', catalog_checksum))
@@ -291,6 +346,7 @@ def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
             CommentaryValidationFinding.chapter,
             CommentaryValidationFinding.verse,
             CommentaryValidationFinding.code,
+            CommentaryValidationFinding.message,
             CommentaryValidationFinding.id,
         )
     ).all()
@@ -313,7 +369,9 @@ def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
     }
 
 
-def _atomic_json(path: Path, value: dict[str, object]) -> None:
+def _atomic_json(
+    path: Path, value: dict[str, object], *, _before_replace=None,
+) -> None:
     path = path.expanduser()
     parent = path.parent
     absolute = path.absolute()
@@ -325,35 +383,64 @@ def _atomic_json(path: Path, value: dict[str, object]) -> None:
         if stat.S_ISLNK(info.st_mode):
             raise ValueError('report output path must not contain a symlink.')
     parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and (path.is_symlink() or not path.is_file()):
-        raise ValueError('report output must be a regular file path.')
-    temporary = path.with_name(path.name + '.part')
-    if temporary.exists():
-        if temporary.is_symlink() or not temporary.is_file():
-            raise ValueError('report temporary path must be a regular file.')
-        temporary.unlink()
+    directory = os.open(
+        parent,
+        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    opened_parent = os.fstat(directory)
+    name = path.name
+    temporary = name + '.part'
     data = (json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False,
     ) + '\n').encode('utf-8')
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
-        0o600,
-    )
     try:
-        remaining = memoryview(data)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError('report write made no progress.')
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.replace(temporary, path)
-    directory = os.open(parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-    try:
+        for candidate, label in ((name, 'output'), (temporary, 'temporary')):
+            try:
+                info = os.stat(candidate, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError(f'report {label} path must be a regular file.')
+            if candidate == temporary:
+                os.unlink(candidate, dir_fd=directory)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+            0o600,
+            dir_fd=directory,
+        )
+        try:
+            remaining = memoryview(data)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError('report write made no progress.')
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if _before_replace is not None:
+            _before_replace()
+        try:
+            current_parent = os.stat(parent, follow_symlinks=False)
+        except FileNotFoundError:
+            current_parent = None
+        if current_parent is None or not stat.S_ISDIR(current_parent.st_mode) or (
+            current_parent.st_dev, current_parent.st_ino
+        ) != (opened_parent.st_dev, opened_parent.st_ino):
+            raise ValueError('report output directory changed during report creation.')
+        os.replace(
+            temporary, name, src_dir_fd=directory, dst_dir_fd=directory,
+        )
         os.fsync(directory)
+    except Exception:
+        try:
+            info = os.stat(temporary, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISREG(info.st_mode):
+                os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        raise
     finally:
         os.close(directory)
 
@@ -367,11 +454,18 @@ def acquire(
         artifacts = acquire_source_bundle(source, output)
         _emit({
             'artifacts': len(artifacts), 'bytes': sum(item.size for item in artifacts),
+            'artifact_digests': [
+                {'path': str(item.path), 'sha256': item.checksum, 'url': item.url}
+                for item in artifacts
+            ],
             'command': 'acquire', 'output': str(output / source), 'source_id': source,
             'status': 'acquired',
         })
-    except Exception as exc:
-        _error('acquisition_failed', str(exc), command='acquire')
+    except Exception:
+        _error(
+            'acquisition_failed', 'Acquisition was blocked by a safety check.',
+            command='acquire',
+        )
 
 
 @app.command()
@@ -401,8 +495,11 @@ def stage(
             'command': 'stage', 'run_id': str(run.id), 'source_id': source,
             'staged_count': run.staged_count, 'status': run.status,
         })
-    except Exception as exc:
-        _error('operation_blocked', str(exc), command='stage')
+    except Exception:
+        _error(
+            'operation_blocked', 'Command was blocked by a safety or validation gate.',
+            command='stage',
+        )
 
 
 @app.command()
@@ -423,8 +520,11 @@ def validate(
             'command': 'validate', 'run_id': str(run.id), 'source_id': run.source_id,
             'status': run.status, 'errors': run.error_count, 'warnings': run.warning_count,
         })
-    except Exception as exc:
-        _error('operation_blocked', str(exc), command='validate')
+    except Exception:
+        _error(
+            'operation_blocked', 'Command was blocked by a safety or validation gate.',
+            command='validate',
+        )
 
 
 @app.command()
@@ -442,8 +542,11 @@ def report(
             'command': 'report', 'output': str(output), 'run_id': str(run_id),
             'status': 'reported',
         })
-    except Exception as exc:
-        _error('operation_blocked', str(exc), command='report')
+    except Exception:
+        _error(
+            'operation_blocked', 'Command was blocked by a safety or validation gate.',
+            command='report',
+        )
 
 
 @app.command()
@@ -468,8 +571,11 @@ def publish(
             'edition_id': str(publication.edition_id), 'source_id': publication.source_id,
             'status': 'published', 'version': publication.version,
         })
-    except Exception as exc:
-        _error('operation_blocked', str(exc), command='publish')
+    except Exception:
+        _error(
+            'operation_blocked', 'Command was blocked by a safety or validation gate.',
+            command='publish',
+        )
 
 
 @app.command()
@@ -494,8 +600,11 @@ def rollback(
             'edition_id': str(restored.edition_id), 'source_id': restored.source_id,
             'status': 'rolled_back', 'version': restored.version,
         })
-    except Exception as exc:
-        _error('operation_blocked', str(exc), command='rollback')
+    except Exception:
+        _error(
+            'operation_blocked', 'Command was blocked by a safety or validation gate.',
+            command='rollback',
+        )
 
 
 if __name__ == '__main__':

@@ -45,6 +45,7 @@ def test_acquire_command_emits_one_json_document(monkeypatch, tmp_path):
         sidecar = tmp_path / 'matthew-henry' / 'books.json.sha256'
         checksum = 'a' * 64
         size = 2
+        url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
 
     monkeypatch.setattr(cli, 'acquire_source_bundle', lambda source, output: (Artifact(),))
     result = runner.invoke(cli.app, [
@@ -53,6 +54,9 @@ def test_acquire_command_emits_one_json_document(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert payload(result) == {
         'artifacts': 1, 'bytes': 2, 'command': 'acquire',
+        'artifact_digests': [{
+            'path': str(Artifact.path), 'sha256': 'a' * 64, 'url': Artifact.url,
+        }],
         'output': str(tmp_path / 'matthew-henry'), 'source_id': 'matthew-henry',
         'status': 'acquired',
     }
@@ -112,6 +116,46 @@ def test_cli_rolls_back_transaction_when_operation_fails(monkeypatch):
     assert payload(result)['error']['code'] == 'operation_blocked'
 
 
+def test_cli_does_not_expose_internal_exception_details(monkeypatch, tmp_path):
+    from app.commentary.ingest import cli
+
+    secret = 'database-password=do-not-disclose'
+    monkeypatch.setattr(
+        cli, 'acquire_source_bundle',
+        lambda *_args: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    result = runner.invoke(cli.app, [
+        'acquire', '--source', 'matthew-henry', '--output', str(tmp_path),
+    ])
+
+    assert result.exit_code != 0
+    assert secret not in result.stdout
+    assert payload(result)['error']['code'] == 'acquisition_failed'
+
+
+def test_report_findings_are_ordered_by_every_emitted_field(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.cli import _build_report
+    from app.commentary.models import CommentaryImportRun, CommentaryValidationFinding
+
+    run = CommentaryImportRun(
+        source_id=commentary_source.id, source_checksum='a' * 64,
+        metadata_snapshot={}, status='verified', staged_count=0,
+    )
+    commentary_session.add(run)
+    commentary_session.flush()
+    for message in ('Zulu', 'Alpha'):
+        commentary_session.add(CommentaryValidationFinding(
+            run_id=run.id, severity='warning', code='style', message=message,
+            work_id='genesis', chapter=1, verse=1,
+        ))
+    commentary_session.flush()
+
+    report = _build_report(commentary_session, run.id)
+    assert [item['message'] for item in report['findings']] == ['Alpha', 'Zulu']
+
+
 def test_cli_commits_at_boundary_after_success(monkeypatch):
     from app.commentary.ingest import cli
 
@@ -163,15 +207,35 @@ def test_report_rejects_symlinked_output_ancestor(tmp_path):
     assert not (real / 'report.json').exists()
 
 
+def test_report_parent_swap_cannot_redirect_final_report(tmp_path):
+    from app.commentary.ingest.cli import _atomic_json
+
+    parent = tmp_path / 'reports'
+    parent.mkdir()
+    attacker = tmp_path / 'attacker'
+    attacker.mkdir()
+
+    def swap():
+        parent.rename(tmp_path / 'original-reports')
+        parent.symlink_to(attacker, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='changed during report creation'):
+        _atomic_json(parent / 'report.json', {'status': 'verified'}, _before_replace=swap)
+
+    assert list(attacker.iterdir()) == []
+    assert not (tmp_path / 'original-reports' / 'report.json').exists()
+
+
 def test_stage_artifact_verification_rejects_oversized_files_before_reading(tmp_path):
-    from app.commentary.ingest.cli import _verify_artifact
+    from app.commentary.ingest.cli import MAX_ARTIFACT_BYTES, _read_bounded_regular
 
     artifact = tmp_path / 'GEN.json'
     artifact.write_bytes(b'x' * (5 * 1024 * 1024 + 1))
-    (tmp_path / 'GEN.json.sha256').write_text('untrusted\n', encoding='ascii')
 
     with pytest.raises(ValueError, match='5 MiB'):
-        _verify_artifact(artifact)
+        _read_bounded_regular(
+            artifact, maximum=MAX_ARTIFACT_BYTES, label='input artifact',
+        )
 
 
 def test_parser_errors_are_single_structured_json_documents():
@@ -213,18 +277,36 @@ def test_stage_parses_the_same_verified_bytes_when_path_is_swapped(monkeypatch, 
     source_dir.mkdir()
     fixture = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
     trusted = fixture.read_bytes()
-    book = source_dir / 'GEN.json'
-    book.write_bytes(trusted)
     book_checksum = sha256(trusted).hexdigest()
-    (source_dir / 'GEN.json.sha256').write_text(
-        f'{book_checksum}  GEN.json\n', encoding='ascii',
-    )
     catalog = b'{}'
     catalog_checksum = sha256(catalog).hexdigest()
-    (source_dir / 'books.json').write_bytes(catalog)
-    (source_dir / 'books.json.sha256').write_text(
-        f'{catalog_checksum}  books.json\n', encoding='ascii',
-    )
+    book_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+
+    def generation(filename, raw, url):
+        digest = sha256(raw).hexdigest()
+        directory = source_dir / 'generations' / filename / digest
+        directory.mkdir(parents=True)
+        (directory / filename).write_bytes(raw)
+        marker = {
+            'schema_version': 1, 'source_id': 'matthew-henry',
+            'artifact': filename, 'url': url, 'sha256': digest,
+            'generation': f'generations/{filename}/{digest}',
+        }
+        (source_dir / f'{filename}.current.json').write_text(
+            json.dumps(marker), encoding='utf-8',
+        )
+
+    generation('GEN.json', trusted, book_url)
+    generation('books.json', catalog, catalog_url)
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1,
+        'sources': {'matthew-henry': {'artifacts': {
+            'GEN.json': {'url': book_url, 'sha256': book_checksum},
+            'books.json': {'url': catalog_url, 'sha256': catalog_checksum},
+        }}},
+    }), encoding='utf-8')
     metadata = replace(
         cli._registry()['matthew-henry'], expected_book_count=1,
         expected_source_books=('GEN',), source_checksum=catalog_checksum,
@@ -235,13 +317,69 @@ def test_stage_parses_the_same_verified_bytes_when_path_is_swapped(monkeypatch, 
     def swapping_loader(raw, book_map):
         nonlocal loader_calls
         loader_calls += 1
-        book.write_bytes(b'{"hostile":true}')
+        active = source_dir / 'generations' / 'GEN.json' / book_checksum / 'GEN.json'
+        active.write_bytes(b'{"hostile":true}')
         return real_loader(raw, book_map)
 
     monkeypatch.setattr(cli, 'load_helloao_bundle_bytes', swapping_loader)
-    rows, _checksum = cli._load_stage_input('matthew-henry', source_dir, metadata)
+    rows, _checksum = cli._load_stage_input(
+        'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+    )
     assert loader_calls == 1
     assert rows[0].body == 'An introduction to Genesis.'
+
+
+def test_stage_rejects_self_authored_sidecar_without_reviewed_digest(tmp_path):
+    from dataclasses import replace
+    from hashlib import sha256
+    from app.commentary.ingest import cli
+
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    fixture = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
+    raw = fixture.read_bytes()
+    digest = sha256(raw).hexdigest()
+    generation = source_dir / 'generations' / 'GEN.json' / digest
+    generation.mkdir(parents=True)
+    (generation / 'GEN.json').write_bytes(raw)
+    (generation / 'GEN.json.sha256').write_text(f'{digest}  GEN.json\n', encoding='ascii')
+    (source_dir / 'GEN.json.current.json').write_text(json.dumps({
+        'schema_version': 1, 'source_id': 'matthew-henry', 'artifact': 'GEN.json',
+        'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN.json',
+        'sha256': digest, 'generation': f'generations/GEN.json/{digest}',
+    }), encoding='utf-8')
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=1,
+        expected_source_books=('GEN',), source_checksum='a' * 64,
+    )
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
+            'GEN.json': {
+                'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN.json',
+                'sha256': 'b' * 64,
+            },
+            'books.json': {
+                'url': 'https://bible.helloao.org/api/c/matthew-henry/books.json',
+                'sha256': 'a' * 64,
+            },
+        }}},
+    }), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='reviewed digest'):
+        cli._load_stage_input(
+            'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+        )
+
+
+def test_production_review_manifest_blocks_unreviewed_book_staging():
+    from app.commentary.ingest import cli
+
+    with pytest.raises(ValueError, match='incomplete'):
+        cli._reviewed_source_artifacts(
+            'matthew-henry', cli._registry()['matthew-henry'],
+            cli._REVIEWED_ARTIFACTS_PATH,
+        )
 
 
 def _run_cli(*arguments: str):

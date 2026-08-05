@@ -68,7 +68,10 @@ def test_acquire_writes_valid_json_atomically_with_checksum_sidecar(tmp_path):
     artifact = acquire_source('matthew-henry', url, tmp_path, opener=opener)
 
     assert calls[0][1] == 10
-    assert artifact.path == tmp_path / 'matthew-henry' / 'GEN.json'
+    assert artifact.path == (
+        tmp_path / 'matthew-henry' / 'generations' / 'GEN.json'
+        / artifact.checksum / 'GEN.json'
+    )
     assert artifact.path.read_bytes() == body
     assert artifact.checksum == sha256(body).hexdigest()
     assert artifact.sidecar.read_text(encoding='ascii') == f'{artifact.checksum}  GEN.json\n'
@@ -240,7 +243,9 @@ def test_bundle_acquisition_requests_only_registry_artifacts(monkeypatch, tmp_pa
 
     def fake_acquire(source_id, url, output, **options):
         calls.append((source_id, url))
-        return acquire.AcquiredArtifact(tmp_path / 'x', tmp_path / 'x.sha256', 'a' * 64, 2)
+        return acquire.AcquiredArtifact(
+            tmp_path / 'x', tmp_path / 'x.sha256', 'a' * 64, 2, url,
+        )
 
     monkeypatch.setattr(acquire, 'acquire_source', fake_acquire)
     artifacts = acquire.acquire_source_bundle('keil-delitzsch', tmp_path)
@@ -397,3 +402,104 @@ def test_changed_etag_on_partial_response_restarts_from_zero(tmp_path):
         'matthew-henry', url, tmp_path, opener=opener, sleeper=lambda _delay: None,
     )
     assert artifact.path.read_bytes() == b'{"fresh":true}'
+
+
+def test_failed_reacquisition_preserves_the_known_good_generation(tmp_path):
+    from app.commentary.ingest.acquire import acquire_source, read_acquired_artifact
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    first = b'{"generation":1}'
+    acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(first, url=url, headers={
+            'Content-Type': 'application/json', 'ETag': '"v1"',
+        }),
+    )
+
+    with pytest.raises(ValueError, match='valid JSON'):
+        acquire_source(
+            'matthew-henry', url, tmp_path,
+            opener=lambda *_args, **_kwargs: Response(b'{bad', url=url, headers={
+                'Content-Type': 'application/json', 'ETag': '"v2"',
+            }),
+        )
+
+    raw, digest, acquired_url = read_acquired_artifact(
+        tmp_path / 'matthew-henry', 'GEN.json', source_id='matthew-henry',
+    )
+    assert raw == first
+    assert digest == sha256(first).hexdigest()
+    assert acquired_url == url
+
+
+@pytest.mark.parametrize('checkpoint', [
+    'generation_data', 'generation_sidecar', 'before_marker_switch',
+    'after_marker_switch', 'directory_fsync',
+])
+def test_failure_at_each_generation_switch_step_restores_previous(
+    tmp_path, checkpoint,
+):
+    from app.commentary.ingest.acquire import acquire_source, read_acquired_artifact
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    old = b'{"generation":"old"}'
+    acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(old, url=url),
+    )
+
+    def hook(step):
+        if step == checkpoint:
+            raise OSError(f'injected {step}')
+
+    with pytest.raises(OSError, match='injected'):
+        acquire_source(
+            'matthew-henry', url, tmp_path,
+            opener=lambda *_args, **_kwargs: Response(b'{"generation":"new"}', url=url),
+            finalization_hook=hook,
+        )
+    assert read_acquired_artifact(
+        tmp_path / 'matthew-henry', 'GEN.json', source_id='matthew-henry',
+    )[0] == old
+
+
+def test_unreferenced_incomplete_generation_does_not_replace_current(tmp_path):
+    from app.commentary.ingest.acquire import acquire_source, read_acquired_artifact
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    trusted = b'{"trusted":true}'
+    acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(trusted, url=url),
+    )
+    stale = tmp_path / 'matthew-henry' / 'generations' / 'GEN.json' / ('f' * 64)
+    stale.mkdir(parents=True)
+    (stale / 'artifact.json').write_text('{"incomplete":true}', encoding='utf-8')
+
+    assert read_acquired_artifact(
+        tmp_path / 'matthew-henry', 'GEN.json', source_id='matthew-henry',
+    )[0] == trusted
+
+
+def test_output_directory_swap_cannot_redirect_authoritative_marker(tmp_path):
+    from app.commentary.ingest.acquire import acquire_source
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    output = tmp_path / 'output'
+    attacker = tmp_path / 'attacker'
+    attacker.mkdir()
+
+    def swap(step):
+        if step == 'before_marker_switch':
+            (output / 'matthew-henry').rename(output / 'original-source')
+            (output / 'matthew-henry').symlink_to(attacker, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='changed during finalization'):
+        acquire_source(
+            'matthew-henry', url, output,
+            opener=lambda *_args, **_kwargs: Response(b'{"safe":true}', url=url),
+            finalization_hook=swap,
+        )
+
+    assert list(attacker.iterdir()) == []
+    assert not (output / 'original-source' / 'GEN.json.current.json').exists()
