@@ -1,10 +1,12 @@
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
+import os
 from threading import Barrier
+from types import MappingProxyType
 
 import pytest
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.commentary.ingest.types import NormalizedCommentaryEntry
@@ -89,6 +91,21 @@ def test_stage_bundle_snapshots_all_normalized_scalars_without_committing(
     assert run.metadata_snapshot['nested']['reviewed'] is True
 
 
+def test_stage_bundle_accepts_any_mapping_snapshot(commentary_session, commentary_source):
+    from app.commentary.ingest.publish import stage_bundle
+
+    metadata = MappingProxyType(_metadata(nested=MappingProxyType({'reviewed': True})))
+    run = stage_bundle(
+        commentary_session, source_id=commentary_source.id, source_checksum='f' * 64,
+        metadata_snapshot=metadata, rows=[_row()],
+    )
+
+    assert run.metadata_snapshot == {
+        'dataset_version': '2026-08-04', 'expected_books': ['genesis'],
+        'nested': {'reviewed': True},
+    }
+
+
 @pytest.mark.parametrize('checksum', ['x' * 64, 'a' * 63, True])
 def test_stage_bundle_rejects_invalid_checksum(commentary_session, commentary_source, checksum):
     from app.commentary.ingest.publish import stage_bundle
@@ -139,6 +156,7 @@ def test_validate_run_replaces_findings_and_saves_coverage(commentary_session, c
         'books': 1, 'chapters': 1, 'entries': 1,
         'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
     }
+    assert len(run.metadata_snapshot['validation_manifest']) == 64
     assert {finding.code for finding in findings} == {'missing_book_intro', 'missing_chapter_intro'}
 
 
@@ -332,6 +350,71 @@ def test_publish_rejects_staged_row_changed_after_verification(
     with pytest.raises(ValueError, match='changed after validation'):
         publish_run(commentary_session, run.id)
     assert commentary_session.scalar(select(CommentaryPublication)) is None
+
+
+def test_publish_rejects_scalar_and_checksum_changed_together_after_verification(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    staged = commentary_session.scalar(select(StagedCommentaryEntry).where(
+        StagedCommentaryEntry.run_id == run.id
+    ))
+    changed = _row(body='Coordinated replacement.')
+    staged.body = changed.body
+    staged.row_checksum = changed.row_checksum
+    commentary_session.flush()
+
+    with pytest.raises(ValueError, match='manifest'):
+        publish_run(commentary_session, run.id)
+    assert commentary_session.scalar(select(CommentaryPublication)) is None
+
+
+@pytest.mark.parametrize('mutation', ['source_checksum', 'coverage', 'expected_books'])
+def test_publish_rejects_verified_run_metadata_mutation(
+    commentary_session, commentary_source, mutation,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    snapshot = dict(run.metadata_snapshot)
+    if mutation == 'source_checksum':
+        run.source_checksum = '0' * 64
+    elif mutation == 'coverage':
+        snapshot['coverage'] = {
+            'books': 1, 'chapters': 1, 'entries': 99,
+            'by_work': {'genesis': {'chapters': 1, 'entries': 99}},
+        }
+        run.metadata_snapshot = snapshot
+    else:
+        snapshot['expected_books'] = ['genesis', 'exodus']
+        run.metadata_snapshot = snapshot
+    commentary_session.flush()
+
+    with pytest.raises(ValueError, match='manifest'):
+        publish_run(commentary_session, run.id)
+
+
+def test_publish_copies_reconstructed_normalized_values_not_raw_staging_scalars(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    staged = commentary_session.scalar(select(StagedCommentaryEntry).where(
+        StagedCommentaryEntry.run_id == run.id
+    ))
+    # This raw DB value normalizes to the originally verified body and therefore
+    # retains the same semantic manifest and checksum.
+    staged.body = '  Commentary   text.  '
+    commentary_session.flush()
+
+    publication = publish_run(commentary_session, run.id)
+    entry = commentary_session.scalar(select(CommentaryEntry).where(
+        CommentaryEntry.edition_id == publication.edition_id
+    ))
+    assert entry.body == 'Commentary text.'
 
 
 def test_publish_failure_rolls_back_its_savepoint_and_preserves_previous_active(
@@ -557,6 +640,111 @@ def test_independent_sessions_duplicate_publish_has_one_winner_and_no_orphans(tm
             assert observer.get(CommentaryImportRun, run_ids[1]).status == 'verified'
     finally:
         engine.dispose()
+
+
+def _prepare_publish_rollback_race(factory):
+    with factory() as session:
+        from app.commentary.models import CommentarySource
+        source = session.get(CommentarySource, 'race-source')
+        first = _verified(session, source, [_row(body='First.')])
+        from app.commentary.ingest.publish import publish_run
+        publish_run(session, first.id)
+        second = _verified(session, source, [_row(body='Second.')])
+        current = publish_run(session, second.id)
+        requested = _verified(session, source, [_row(body='Third.')])
+        session.commit()
+        return current.id, requested.id
+
+
+def _run_publish_rollback_race(factory, current_id, requested_id):
+    from app.commentary.ingest.publish import publish_run, rollback_publication
+
+    barrier = Barrier(2)
+
+    def operation(kind):
+        with factory() as session:
+            barrier.wait()
+            try:
+                value = (
+                    publish_run(session, requested_id)
+                    if kind == 'publish'
+                    else rollback_publication(session, current_id)
+                )
+                session.commit()
+                return ('completed', value.id)
+            except ValueError as exc:
+                session.rollback()
+                return ('rejected', str(exc))
+            except OperationalError as exc:
+                session.rollback()
+                return ('database-error', str(exc))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(operation, ('publish', 'rollback')))
+    return outcomes
+
+
+def _assert_publish_rollback_race_consistent(factory, requested_id, outcomes):
+    assert 'database-error' not in {item[0] for item in outcomes}
+    assert outcomes[0][0] == 'completed'  # Publishing the distinct verified run always wins eventually.
+    with factory() as observer:
+        publications = observer.scalars(select(CommentaryPublication).order_by(
+            CommentaryPublication.version
+        )).all()
+        assert [item.version for item in publications] == list(range(1, len(publications) + 1))
+        assert sum(item.active for item in publications) == 1
+        assert observer.scalar(select(func.count()).select_from(CommentaryEdition)) == 3
+        assert observer.scalar(select(func.count()).select_from(CommentaryEntry)) == 3
+        requested = observer.get(CommentaryImportRun, requested_id)
+        assert requested.status == 'published'
+        assert observer.scalar(select(CommentaryEdition).where(
+            CommentaryEdition.dataset_version == str(requested.id)
+        )) is not None
+
+
+def test_independent_publish_and_rollback_use_consistent_lock_order(tmp_path):
+    engine, factory, _ = _race_database(tmp_path)
+    try:
+        current_id, requested_id = _prepare_publish_rollback_race(factory)
+        outcomes = _run_publish_rollback_race(factory, current_id, requested_id)
+        _assert_publish_rollback_race_consistent(factory, requested_id, outcomes)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.environ.get('COMMENTARY_TEST_POSTGRES_DSN'),
+    reason='COMMENTARY_TEST_POSTGRES_DSN is not configured for real PostgreSQL integration tests.',
+)
+def test_postgresql_publish_and_rollback_are_deadlock_free():
+    dsn = os.environ['COMMENTARY_TEST_POSTGRES_DSN']
+    schema = f'commentary_test_{uuid4().hex}'
+    admin_engine = create_engine(dsn)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    engine = create_engine(dsn, connect_args={'options': f'-csearch_path={schema}'})
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    try:
+        Base.metadata.create_all(engine)
+        with factory() as session:
+            seed_ethiopian_canon(session)
+            from app.commentary.models import CommentarySource
+            session.add(CommentarySource(
+                id='race-source', title='Race Source', abbreviation='RS', author='Author',
+                publication_period='1900', tradition='Test', language='eng',
+                license_spdx='LicenseRef-Public-Domain',
+                license_url='https://creativecommons.org/publicdomain/mark/1.0/',
+                attribution='Public domain.', provenance_url='https://example.test/source',
+            ))
+            session.commit()
+        current_id, requested_id = _prepare_publish_rollback_race(factory)
+        outcomes = _run_publish_rollback_race(factory, current_id, requested_id)
+        _assert_publish_rollback_race_consistent(factory, requested_id, outcomes)
+    finally:
+        engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
 
 
 def test_rollback_rejects_missing_current_or_cross_source_target(

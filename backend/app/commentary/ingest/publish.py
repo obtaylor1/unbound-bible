@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from hashlib import sha256
 import json
 import re
 from uuid import UUID
@@ -44,11 +45,21 @@ def _ensure_caller_owned_outer_transaction(session: Session) -> None:
         connection.exec_driver_sql('BEGIN IMMEDIATE')
 
 
+def _plain_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise ValueError('metadata_snapshot JSON object keys must be strings.')
+        return {key: _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    return value
+
+
 def _json_snapshot(value: object) -> dict:
-    if type(value) is not dict:
+    if not isinstance(value, Mapping):
         raise ValueError('metadata_snapshot must be a JSON object.')
     try:
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        encoded = json.dumps(_plain_json(value), ensure_ascii=False, allow_nan=False)
         copied = json.loads(encoded)
     except (TypeError, ValueError, OverflowError, RecursionError) as exc:
         raise ValueError('metadata_snapshot must contain finite JSON values.') from exc
@@ -129,6 +140,29 @@ def _normalized_staged_rows(session: Session, run_id: UUID) -> list[NormalizedCo
     ]
 
 
+def _manifest(
+    source_checksum: str,
+    metadata: Mapping[str, object],
+    rows: Iterable[NormalizedCommentaryEntry],
+) -> str:
+    relevant_metadata = dict(metadata)
+    relevant_metadata.pop('validation_manifest', None)
+    payload = [
+        'commentary-verified-run-v1',
+        source_checksum,
+        relevant_metadata,
+        [[
+            row.work_id, row.chapter, row.verse_start, row.verse_end,
+            row.entry_type, row.heading, row.body, row.source_locator,
+            row.position, row.row_checksum,
+        ] for row in rows],
+    ]
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')
+    return sha256(encoded).hexdigest()
+
+
 def _previous_coverage(session: Session, source_id: str) -> Mapping[str, object] | None:
     edition = session.scalar(
         select(CommentaryEdition)
@@ -160,8 +194,9 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
     if type(expected) is not list or not expected or any(type(item) is not str for item in expected):
         raise ValueError('metadata_snapshot expected_books must be a nonempty list of work IDs.')
 
+    normalized_rows = _normalized_staged_rows(session, run.id)
     result = validate_commentary(
-        _normalized_staged_rows(session, run.id),
+        normalized_rows,
         expected_books=set(expected),
         previous_coverage=_previous_coverage(session, run.source_id),
     )
@@ -188,6 +223,7 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
             work_id: dict(values) for work_id, values in result.coverage['by_work'].items()
         },
     }
+    metadata['validation_manifest'] = _manifest(run.source_checksum, metadata, normalized_rows)
     run.metadata_snapshot = metadata
     run.error_count = result.error_count
     run.warning_count = result.warning_count
@@ -196,7 +232,9 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
     return run
 
 
-def _copy_staged_entries(session: Session, run: CommentaryImportRun, edition: CommentaryEdition) -> None:
+def _verified_staged_rows(
+    session: Session, run: CommentaryImportRun, metadata: Mapping[str, object],
+) -> list[NormalizedCommentaryEntry]:
     staged = session.scalars(
         select(StagedCommentaryEntry)
         .where(StagedCommentaryEntry.run_id == run.id)
@@ -204,6 +242,7 @@ def _copy_staged_entries(session: Session, run: CommentaryImportRun, edition: Co
     ).all()
     if len(staged) != run.staged_count:
         raise ValueError('Staged commentary row count no longer matches the verified run.')
+    normalized_rows: list[NormalizedCommentaryEntry] = []
     for row in staged:
         normalized = NormalizedCommentaryEntry(
             row.work_id, row.chapter, row.verse_start, row.verse_end, row.entry_type,
@@ -211,6 +250,22 @@ def _copy_staged_entries(session: Session, run: CommentaryImportRun, edition: Co
         )
         if normalized.row_checksum != row.row_checksum:
             raise ValueError('Staged commentary row changed after validation.')
+        normalized_rows.append(normalized)
+    expected_manifest = metadata.get('validation_manifest')
+    if (
+        type(expected_manifest) is not str
+        or _CHECKSUM.fullmatch(expected_manifest) is None
+        or _manifest(run.source_checksum, metadata, normalized_rows) != expected_manifest
+    ):
+        raise ValueError('Verified commentary run manifest no longer matches staged content.')
+    return normalized_rows
+
+
+def _copy_staged_entries(
+    session: Session,
+    edition: CommentaryEdition,
+    normalized_rows: Iterable[NormalizedCommentaryEntry],
+) -> None:
     session.add_all([
         CommentaryEntry(
             edition_id=edition.id,
@@ -225,7 +280,7 @@ def _copy_staged_entries(session: Session, run: CommentaryImportRun, edition: Co
             row_checksum=row.row_checksum,
             position=row.position,
         )
-        for row in staged
+        for row in normalized_rows
     ])
     session.flush()
 
@@ -246,6 +301,15 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
         raise ValueError('Only an error-free verified commentary run may be published.')
 
     with session.begin_nested():
+        # Every publication lifecycle operation locks the source first. This
+        # gives publish and rollback one global order before any publication row.
+        source = session.scalar(
+            select(CommentarySource)
+            .where(CommentarySource.id == existing.source_id)
+            .with_for_update()
+        )
+        if source is None:
+            raise ValueError('Commentary source was not found.')
         run = session.scalar(
             select(CommentaryImportRun)
             .where(CommentaryImportRun.id == run_id)
@@ -262,15 +326,8 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
         if run.status != 'verified' or run.error_count or has_errors:
             raise ValueError('Only an error-free verified commentary run may be published.')
 
-        # A source-row lock serializes even the first publication, when no active
-        # publication row exists yet. Database uniqueness remains the final guard.
-        source = session.scalar(
-            select(CommentarySource)
-            .where(CommentarySource.id == run.source_id)
-            .with_for_update()
-        )
-        if source is None:
-            raise ValueError('Commentary source was not found.')
+        if run.source_id != source.id:
+            raise ValueError('Commentary run source changed during publication.')
 
         previous = session.scalar(
             select(CommentaryPublication)
@@ -289,6 +346,7 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
         coverage = metadata.get('coverage')
         if type(coverage) is not dict:
             raise ValueError('Verified commentary run has no coverage snapshot.')
+        normalized_rows = _verified_staged_rows(session, run, metadata)
         edition = CommentaryEdition(
             source_id=run.source_id,
             dataset_version=str(run.id),
@@ -299,7 +357,7 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
         )
         session.add(edition)
         session.flush()
-        _copy_staged_entries(session, run, edition)
+        _copy_staged_entries(session, edition, normalized_rows)
         if previous is not None:
             previous.active = False
             session.flush()
@@ -321,7 +379,6 @@ def rollback_publication(session: Session, publication_id: int) -> CommentaryPub
     requested = session.scalar(
         select(CommentaryPublication)
         .where(CommentaryPublication.id == publication_id)
-        .with_for_update()
     )
     if requested is None:
         raise ValueError('Commentary publication was not found.')
@@ -329,6 +386,13 @@ def rollback_publication(session: Session, publication_id: int) -> CommentaryPub
         raise ValueError('Rollback requires the active publication.')
 
     with session.begin_nested():
+        source = session.scalar(
+            select(CommentarySource)
+            .where(CommentarySource.id == requested.source_id)
+            .with_for_update()
+        )
+        if source is None:
+            raise ValueError('Commentary source was not found.')
         current = session.scalar(
             select(CommentaryPublication)
             .where(
@@ -339,13 +403,8 @@ def rollback_publication(session: Session, publication_id: int) -> CommentaryPub
         )
         if current is None:
             raise ValueError('Rollback requires the active publication.')
-        source = session.scalar(
-            select(CommentarySource)
-            .where(CommentarySource.id == current.source_id)
-            .with_for_update()
-        )
-        if source is None:
-            raise ValueError('Commentary source was not found.')
+        if current.source_id != source.id:
+            raise ValueError('Commentary publication source changed during rollback.')
         target = session.scalar(
             select(CommentaryPublication)
             .where(
