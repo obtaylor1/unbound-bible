@@ -13,6 +13,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 import typer
+from typer import _click as click
+from typer.core import TyperGroup
 
 from app.commentary.models import (
     CommentaryImportRun,
@@ -23,7 +25,7 @@ from app.config import Settings
 from app.database import create_database_engine, create_session_factory
 
 from .acquire import MAX_ARTIFACT_BYTES, acquire_source_bundle
-from .adapter import load_helloao_bundle
+from .adapter import load_helloao_bundle_bytes
 from .publish import publish_run, rollback_publication, stage_bundle, validate_run
 from .validate import SourceMetadata, load_source_registry
 
@@ -52,8 +54,35 @@ _BOOK_CODES = (
 _BOOK_MAP = dict(zip(_BOOK_CODES, _BOOK_NAMES, strict=True))
 
 
+class _JsonErrorGroup(TyperGroup):
+    """Convert Click/Typer parsing failures into the CLI's JSON contract."""
+
+    def main(self, *args, standalone_mode: bool = True, **kwargs):  # noqa: ANN002, ANN003
+        command_args = kwargs.get('args')
+        if command_args is None and args:
+            command_args = args[0]
+        command = command_args[0] if command_args else 'commentary'
+        try:
+            result = super().main(*args, standalone_mode=False, **kwargs)
+        except click.ClickException as exc:
+            _emit({
+                'command': command,
+                'error': {'code': 'invalid_command', 'message': exc.format_message()},
+                'status': 'error',
+            })
+            if standalone_mode:
+                raise click.exceptions.Exit(exc.exit_code) from None
+            return exc.exit_code
+        if standalone_mode and type(result) is int and result != 0:
+            raise click.exceptions.Exit(result)
+        return result
+
+
 app = typer.Typer(
+    cls=_JsonErrorGroup,
     no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
     pretty_exceptions_enable=False,
     help='Acquire, stage, validate, report, publish, and roll back reviewed commentary.',
 )
@@ -119,64 +148,90 @@ def _ensure_source(session: Session, source_id: str, metadata: SourceMetadata) -
 
 
 def _safe_input_directory(path: Path) -> None:
+    absolute = path.expanduser().absolute()
+    descriptor = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
-        info = os.lstat(path)
-    except OSError as exc:
-        raise ValueError('input must be an acquired source directory.') from exc
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise ValueError('input must be a real acquired source directory.')
-
-
-def _verify_artifact(path: Path) -> str:
-    sidecar_path = path.with_name(path.name + '.sha256')
-    try:
-        info = os.lstat(path)
-        sidecar_info = os.lstat(sidecar_path)
-    except OSError as exc:
-        raise ValueError(f'Missing artifact or checksum sidecar for {path.name}.') from exc
-    if (
-        not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(sidecar_info.st_mode) or stat.S_ISLNK(sidecar_info.st_mode)
-    ):
-        raise ValueError('input artifacts and checksum sidecars must be regular files.')
-    if info.st_size > MAX_ARTIFACT_BYTES:
-        raise ValueError('input artifact must be no larger than 5 MiB.')
-    if sidecar_info.st_size > 256:
-        raise ValueError('checksum sidecar must be no larger than 256 bytes.')
-
-    def read_exact(checked_path: Path, checked_info: os.stat_result) -> bytes:
-        descriptor = os.open(
-            checked_path,
-            os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
-        )
-        try:
-            opened = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (checked_info.st_dev, checked_info.st_ino)
-            ):
-                raise ValueError('input artifact changed during verification.')
-            chunks = []
-            remaining = checked_info.st_size
-            while remaining:
-                chunk = os.read(descriptor, min(64 * 1024, remaining))
-                if not chunk:
-                    raise ValueError('input artifact ended during verification.')
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            return b''.join(chunks)
-        finally:
+        for component in absolute.parts[1:]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                    | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+                    dir_fd=descriptor,
+                )
+            except OSError as exc:
+                raise ValueError('input path must not contain a symlink or special node.') from exc
             os.close(descriptor)
+            descriptor = child
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError('input must be a real acquired source directory.')
+    finally:
+        os.close(descriptor)
 
-    raw = read_exact(path, info)
+
+def _read_bounded_regular(path: Path, *, maximum: int, label: str) -> bytes:
+    """Read one file through no-follow directory descriptors exactly once."""
+    absolute = path.expanduser().absolute()
+    parent = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    descriptor: int | None = None
+    try:
+        for component in absolute.parts[1:-1]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                    | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+                    dir_fd=parent,
+                )
+            except OSError as exc:
+                raise ValueError(f'{label} path must not contain a symlink.') from exc
+            os.close(parent)
+            parent = child
+        try:
+            descriptor = os.open(
+                absolute.name,
+                os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+                dir_fd=parent,
+            )
+        except OSError as exc:
+            raise ValueError(f'{label} must be a regular file.') from exc
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'{label} must be a regular file.')
+        if info.st_size > maximum:
+            size_label = '5 MiB' if maximum == MAX_ARTIFACT_BYTES else f'{maximum} bytes'
+            raise ValueError(f'{label} must be no larger than {size_label}.')
+        chunks = []
+        remaining = info.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                raise ValueError(f'{label} ended during verification.')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if after.st_size != info.st_size:
+            raise ValueError(f'{label} changed during verification.')
+        return b''.join(chunks)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def _verify_artifact(path: Path) -> tuple[bytes, str]:
+    sidecar_path = path.with_name(path.name + '.sha256')
+    raw = _read_bounded_regular(path, maximum=MAX_ARTIFACT_BYTES, label='input artifact')
     checksum = sha256(raw).hexdigest()
     try:
-        sidecar = read_exact(sidecar_path, sidecar_info).decode('ascii', errors='strict')
+        sidecar = _read_bounded_regular(
+            sidecar_path, maximum=256, label='checksum sidecar',
+        ).decode('ascii', errors='strict')
     except UnicodeDecodeError as exc:
         raise ValueError('checksum sidecar must contain ASCII text.') from exc
     if sidecar != f'{checksum}  {path.name}\n':
         raise ValueError(f'Checksum sidecar does not match {path.name}.')
-    return checksum
+    return raw, checksum
 
 
 def _load_stage_input(source_id: str, input_path: Path, metadata: SourceMetadata):
@@ -188,13 +243,14 @@ def _load_stage_input(source_id: str, input_path: Path, metadata: SourceMetadata
     checksums = []
     for code in expected_codes:
         artifact = input_path / f'{code}.json'
-        checksums.append((artifact.name, _verify_artifact(artifact)))
-        loaded = tuple(load_helloao_bundle(artifact, {code: _BOOK_MAP[code]}))
+        raw, checksum = _verify_artifact(artifact)
+        checksums.append((artifact.name, checksum))
+        loaded = tuple(load_helloao_bundle_bytes(raw, {code: _BOOK_MAP[code]}))
         if not loaded or any(not row.source_locator.startswith(f'helloao:{source_id}:{code}:') for row in loaded):
             raise ValueError(f'{artifact.name} does not identify the reviewed commentary source.')
         rows.extend(loaded)
     catalog = input_path / 'books.json'
-    catalog_checksum = _verify_artifact(catalog)
+    _catalog_raw, catalog_checksum = _verify_artifact(catalog)
     if catalog_checksum != metadata.source_checksum:
         raise ValueError('books.json checksum no longer matches the reviewed registry.')
     checksums.append(('books.json', catalog_checksum))

@@ -54,6 +54,14 @@ def test_loads_all_commentary_scopes_in_source_order_with_stable_checksums():
     ]
 
 
+def test_loads_representative_bundle_from_verified_bytes():
+    from app.commentary.ingest.adapter import load_helloao_bundle_bytes
+
+    rows = tuple(load_helloao_bundle_bytes(FIXTURE.read_bytes(), {'GEN': 'genesis'}))
+    assert len(rows) == 4
+    assert rows[2].body == 'In the beginning.'
+
+
 def test_repeat_loads_are_identical():
     first = _load(FIXTURE)
     second = _load(FIXTURE)

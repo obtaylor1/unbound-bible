@@ -166,9 +166,13 @@ def _read_bundle_bytes(path: Path) -> bytes:
             pass
 
 
-def _read_bundle(path: Path) -> Mapping[str, Any]:
+def _decode_bundle(raw: bytes) -> Mapping[str, Any]:
+    if type(raw) is not bytes:
+        raise ValueError('bundle bytes must be bytes.')
+    if len(raw) > _MAX_BUNDLE_BYTES:
+        raise ValueError('bundle must be no larger than 5 MiB.')
     try:
-        text = _read_bundle_bytes(path).decode('utf-8', errors='strict')
+        text = raw.decode('utf-8', errors='strict')
     except UnicodeDecodeError as exc:
         raise ValueError('bundle must be valid UTF-8.') from exc
     try:
@@ -189,9 +193,9 @@ def _read_bundle(path: Path) -> Mapping[str, Any]:
     return bundle
 
 
-def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[NormalizedCommentaryEntry]:
-    """Return an iterator over one completely validated local HelloAO JSON bundle."""
-    bundle = _read_bundle(path)
+def _normalize_bundle(
+    bundle: Mapping[str, Any], book_map: Mapping[str, str],
+) -> Iterator[NormalizedCommentaryEntry]:
     source_to_work = _normalize_book_map(book_map)
 
     commentary = _require_mapping('commentary', bundle['commentary'])
@@ -301,3 +305,15 @@ def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[Nor
                 ))
 
     return iter(tuple(entries))
+
+
+def load_helloao_bundle_bytes(
+    raw: bytes, book_map: Mapping[str, str],
+) -> Iterator[NormalizedCommentaryEntry]:
+    """Normalize the exact bounded bytes already verified by a trusted caller."""
+    return _normalize_bundle(_decode_bundle(raw), book_map)
+
+
+def load_helloao_bundle(path: Path, book_map: Mapping[str, str]) -> Iterator[NormalizedCommentaryEntry]:
+    """Return an iterator over one completely validated local HelloAO JSON bundle."""
+    return load_helloao_bundle_bytes(_read_bundle_bytes(path), book_map)

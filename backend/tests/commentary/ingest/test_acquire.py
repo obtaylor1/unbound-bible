@@ -83,14 +83,19 @@ def test_acquire_resumes_a_safe_partial_file(tmp_path):
     target_dir.mkdir()
     part = target_dir / 'GEN.json.part'
     part.write_bytes(b'{"ok"')
+    (target_dir / 'GEN.json.part.meta').write_text(
+        json.dumps({'url': url, 'etag': '"v1"'}), encoding='utf-8',
+    )
     tail = b':true}'
 
     def opener(request, *, timeout):
         assert request.headers['Range'] == 'bytes=5-'
+        assert request.headers['If-range'] == '"v1"'
         return Response(tail, url=url, status=206, headers={
             'Content-Type': 'application/json',
             'Content-Length': str(len(tail)),
             'Content-Range': 'bytes 5-10/11',
+            'ETag': '"v1"',
         })
 
     artifact = acquire_source('matthew-henry', url, tmp_path, opener=opener)
@@ -104,11 +109,17 @@ def test_acquire_restarts_when_server_ignores_range(tmp_path):
     target_dir = tmp_path / 'matthew-henry'
     target_dir.mkdir()
     (target_dir / 'GEN.json.part').write_bytes(b'garbage')
+    (target_dir / 'GEN.json.part.meta').write_text(
+        json.dumps({'url': url, 'etag': '"v1"'}), encoding='utf-8',
+    )
     body = b'{"fresh":true}'
 
     def opener(request, *, timeout):
         assert request.headers['Range'] == 'bytes=7-'
-        return Response(body, url=url, status=200, headers={'Content-Type': 'application/json'})
+        assert request.headers['If-range'] == '"v1"'
+        return Response(body, url=url, status=200, headers={
+            'Content-Type': 'application/json', 'ETag': '"v2"',
+        })
 
     artifact = acquire_source('matthew-henry', url, tmp_path, opener=opener)
     assert artifact.path.read_bytes() == body
@@ -142,11 +153,15 @@ def test_acquire_enforces_streaming_cap_including_resumed_bytes(tmp_path):
     directory = tmp_path / 'matthew-henry'
     directory.mkdir()
     (directory / 'GEN.json.part').write_bytes(b'x' * (5 * 1024 * 1024))
+    (directory / 'GEN.json.part.meta').write_text(
+        json.dumps({'url': url, 'etag': '"v1"'}), encoding='utf-8',
+    )
 
     def opener(request, *, timeout):
         return Response(b'x', url=url, status=206, headers={
             'Content-Type': 'application/json',
             'Content-Range': f'bytes {5 * 1024 * 1024}-{5 * 1024 * 1024}/{5 * 1024 * 1024 + 1}',
+            'ETag': '"v1"',
         })
 
     with pytest.raises(ValueError, match='5 MiB'):
@@ -243,6 +258,9 @@ def test_retry_resumes_from_bytes_persisted_before_read_timeout(tmp_path):
     directory = tmp_path / 'matthew-henry'
     directory.mkdir()
     (directory / 'GEN.json.part').write_bytes(b'{"ok"')
+    (directory / 'GEN.json.part.meta').write_text(
+        json.dumps({'url': url, 'etag': '"v1"'}), encoding='utf-8',
+    )
     requests = []
 
     class Interrupted(Response):
@@ -259,13 +277,123 @@ def test_retry_resumes_from_bytes_persisted_before_read_timeout(tmp_path):
         if len(requests) == 1:
             return Interrupted(b'', url=url, status=206, headers={
                 'Content-Type': 'application/json', 'Content-Range': 'bytes 5-5/6',
+                'ETag': '"v1"',
             })
         assert request.headers['Range'] == 'bytes=6-'
         return Response(b'true}', url=url, status=206, headers={
             'Content-Type': 'application/json', 'Content-Range': 'bytes 6-10/11',
+            'ETag': '"v1"',
         })
 
     artifact = acquire_source(
         'matthew-henry', url, tmp_path, opener=opener, sleeper=lambda _delay: None,
     )
     assert artifact.path.read_bytes() == b'{"ok":true}'
+
+
+@pytest.mark.parametrize('failure_point', ['sidecar', 'directory_fsync'])
+def test_finalization_failure_removes_both_final_artifacts(monkeypatch, tmp_path, failure_point):
+    from app.commentary.ingest import acquire
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+
+    def opener(request, *, timeout):
+        return Response(b'{"ok":true}', url=url, headers={
+            'Content-Type': 'application/json', 'ETag': '"v1"',
+        })
+
+    if failure_point == 'sidecar':
+        monkeypatch.setattr(
+            acquire, '_write_sidecar',
+            lambda *_args: (_ for _ in ()).throw(OSError('sidecar failed')),
+        )
+    else:
+        monkeypatch.setattr(
+            acquire, '_fsync_directory',
+            lambda *_args: (_ for _ in ()).throw(OSError('directory fsync failed')),
+        )
+
+    with pytest.raises(OSError):
+        acquire.acquire_source('matthew-henry', url, tmp_path, opener=opener)
+    directory = tmp_path / 'matthew-henry'
+    assert not (directory / 'GEN.json').exists()
+    assert not (directory / 'GEN.json.sha256').exists()
+    assert list(directory.glob('GEN.json*.part*')) == []
+
+
+def test_partial_bytes_are_fsynced_before_retry(monkeypatch, tmp_path):
+    from app.commentary.ingest import acquire
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    fsync_calls = []
+    real_fsync = acquire.os.fsync
+    attempts = 0
+
+    class Interrupted(Response):
+        reads = 0
+
+        def read(self, _size=-1):
+            self.reads += 1
+            if self.reads == 1:
+                return b'{'
+            raise socket.timeout('read timed out')
+
+    def tracking_fsync(descriptor):
+        fsync_calls.append(descriptor)
+        return real_fsync(descriptor)
+
+    def opener(request, *, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return Interrupted(b'', url=url, headers={
+                'Content-Type': 'application/json', 'ETag': '"v1"',
+            })
+        assert request.headers['Range'] == 'bytes=1-'
+        assert request.headers['If-range'] == '"v1"'
+        return Response(b'"ok":true}', url=url, status=206, headers={
+            'Content-Type': 'application/json', 'ETag': '"v1"',
+            'Content-Range': 'bytes 1-10/11',
+        })
+
+    monkeypatch.setattr(acquire.os, 'fsync', tracking_fsync)
+
+    def sleeper(_delay):
+        assert fsync_calls, 'partial descriptor was not fsynced before retry delay'
+
+    artifact = acquire.acquire_source(
+        'matthew-henry', url, tmp_path, opener=opener, sleeper=sleeper,
+    )
+    assert artifact.path.read_bytes() == b'{"ok":true}'
+
+
+def test_changed_etag_on_partial_response_restarts_from_zero(tmp_path):
+    from app.commentary.ingest.acquire import acquire_source
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    directory = tmp_path / 'matthew-henry'
+    directory.mkdir()
+    (directory / 'GEN.json.part').write_bytes(b'{"old"')
+    (directory / 'GEN.json.part.meta').write_text(
+        json.dumps({'url': url, 'etag': '"v1"'}), encoding='utf-8',
+    )
+    attempts = 0
+
+    def opener(request, *, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            assert request.headers['If-range'] == '"v1"'
+            return Response(b':false}', url=url, status=206, headers={
+                'Content-Type': 'application/json', 'ETag': '"v2"',
+                'Content-Range': 'bytes 6-12/13',
+            })
+        assert 'Range' not in request.headers
+        return Response(b'{"fresh":true}', url=url, headers={
+            'Content-Type': 'application/json', 'ETag': '"v2"',
+        })
+
+    artifact = acquire_source(
+        'matthew-henry', url, tmp_path, opener=opener, sleeper=lambda _delay: None,
+    )
+    assert artifact.path.read_bytes() == b'{"fresh":true}'

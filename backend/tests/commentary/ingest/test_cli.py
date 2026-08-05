@@ -168,3 +168,73 @@ def test_stage_artifact_verification_rejects_oversized_files_before_reading(tmp_
 
     with pytest.raises(ValueError, match='5 MiB'):
         _verify_artifact(artifact)
+
+
+def test_parser_errors_are_single_structured_json_documents():
+    from app.commentary.ingest.cli import app
+
+    cases = [
+        ['publish', '--run-id', 'not-a-uuid', '--confirm'],
+        ['rollback', '--publication-id', 'not-an-integer', '--confirm'],
+        ['acquire', '--source', 'matthew-henry'],
+    ]
+    for arguments in cases:
+        result = runner.invoke(app, arguments)
+        assert result.exit_code != 0
+        assert result.stderr == ''
+        parsed = payload(result)
+        assert parsed['status'] == 'error'
+        assert parsed['error']['code'] == 'invalid_command'
+
+
+def test_stage_rejects_symlinked_input_ancestor(tmp_path):
+    from app.commentary.ingest.cli import _safe_input_directory
+
+    real = tmp_path / 'real'
+    source = real / 'matthew-henry'
+    source.mkdir(parents=True)
+    linked = tmp_path / 'linked'
+    linked.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='symlink'):
+        _safe_input_directory(linked / 'matthew-henry')
+
+
+def test_stage_parses_the_same_verified_bytes_when_path_is_swapped(monkeypatch, tmp_path):
+    from dataclasses import replace
+    from hashlib import sha256
+    from app.commentary.ingest import cli
+
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    fixture = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
+    trusted = fixture.read_bytes()
+    book = source_dir / 'GEN.json'
+    book.write_bytes(trusted)
+    book_checksum = sha256(trusted).hexdigest()
+    (source_dir / 'GEN.json.sha256').write_text(
+        f'{book_checksum}  GEN.json\n', encoding='ascii',
+    )
+    catalog = b'{}'
+    catalog_checksum = sha256(catalog).hexdigest()
+    (source_dir / 'books.json').write_bytes(catalog)
+    (source_dir / 'books.json.sha256').write_text(
+        f'{catalog_checksum}  books.json\n', encoding='ascii',
+    )
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=1,
+        expected_source_books=('GEN',), source_checksum=catalog_checksum,
+    )
+    real_loader = cli.load_helloao_bundle_bytes
+    loader_calls = 0
+
+    def swapping_loader(raw, book_map):
+        nonlocal loader_calls
+        loader_calls += 1
+        book.write_bytes(b'{"hostile":true}')
+        return real_loader(raw, book_map)
+
+    monkeypatch.setattr(cli, 'load_helloao_bundle_bytes', swapping_loader)
+    rows, _checksum = cli._load_stage_input('matthew-henry', source_dir, metadata)
+    assert loader_calls == 1
+    assert rows[0].body == 'An introduction to Genesis.'

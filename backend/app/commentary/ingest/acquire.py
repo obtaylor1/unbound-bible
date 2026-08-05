@@ -37,6 +37,20 @@ class AcquiredArtifact:
     size: int
 
 
+@dataclass(frozen=True, slots=True)
+class _RepresentationValidator:
+    header: str
+    value: str
+
+
+class _RestartDownload(Exception):
+    """The partial artifact no longer identifies the upstream representation."""
+
+
+class _PartialDurabilityError(OSError):
+    """Partial bytes could not be made durable and must never be resumed."""
+
+
 def _registry(path: Path | None = None) -> dict[str, SourceMetadata]:
     return load_source_registry(path or _REGISTRY_PATH)
 
@@ -118,7 +132,7 @@ def _validate_json(raw: bytes) -> None:
         )
     except UnicodeDecodeError as exc:
         raise ValueError('artifact must be valid UTF-8 JSON.') from exc
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ValueError('artifact must contain valid JSON.') from exc
 
 
@@ -182,6 +196,117 @@ def _content_length(response: object) -> int | None:
     return int(raw)
 
 
+def _response_validator(response: object) -> _RepresentationValidator | None:
+    headers = getattr(response, 'headers', None)
+    etag = headers.get('ETag') if headers is not None else None
+    if (
+        type(etag) is str and len(etag) <= 200 and etag.startswith('"')
+        and etag.endswith('"') and not etag.startswith('W/')
+        and not any(character in '\r\n' for character in etag)
+    ):
+        return _RepresentationValidator('ETag', etag)
+    modified = headers.get('Last-Modified') if headers is not None else None
+    if (
+        type(modified) is str and 0 < len(modified) <= 200
+        and modified == modified.strip()
+        and not any(character in '\r\n' for character in modified)
+    ):
+        return _RepresentationValidator('Last-Modified', modified)
+    return None
+
+
+def _read_resume_metadata(path: Path, url: str) -> _RepresentationValidator | None:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 1024:
+        raise ValueError('partial artifact metadata must be a small regular file.')
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            raise ValueError('partial artifact metadata changed while opening.')
+        raw = os.read(descriptor, 1025)
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(raw.decode('utf-8', errors='strict'))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError('partial artifact metadata must contain valid JSON.') from exc
+    if type(value) is not dict or set(value) not in ({'url', 'etag'}, {'url', 'last_modified'}):
+        raise ValueError('partial artifact metadata has an invalid shape.')
+    if value.get('url') != url:
+        raise ValueError('partial artifact metadata belongs to another URL.')
+    if 'etag' in value:
+        validator = _RepresentationValidator('ETag', value['etag'])
+    else:
+        validator = _RepresentationValidator('Last-Modified', value['last_modified'])
+    if (
+        type(validator.value) is not str or not validator.value or len(validator.value) > 200
+        or any(character in '\r\n' for character in validator.value)
+        or validator.header == 'ETag'
+        and not (validator.value.startswith('"') and validator.value.endswith('"'))
+    ):
+        raise ValueError('partial artifact metadata has an invalid validator.')
+    return validator
+
+
+def _write_resume_metadata(
+    path: Path, url: str, validator: _RepresentationValidator,
+) -> None:
+    key = 'etag' if validator.header == 'ETag' else 'last_modified'
+    raw = json.dumps(
+        {'url': url, key: validator.value}, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    temporary = path.with_name(path.name + '.part')
+    if temporary.exists() or temporary.is_symlink():
+        _regular_size(temporary)
+        temporary.unlink()
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+        0o600,
+    )
+    try:
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError('partial metadata write made no progress.')
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, path)
+
+
+def _remove_regular(path: Path) -> None:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+        path.unlink()
+        return
+    raise ValueError(f'unsafe cleanup path: {path.name}.')
+
+
+def _cleanup_artifacts(*paths: Path) -> None:
+    for path in paths:
+        try:
+            _remove_regular(path)
+        except (OSError, ValueError):
+            # Cleanup is best effort here; the original safety failure remains
+            # the command result and unsafe nodes are never followed.
+            pass
+
+
 def _resume_mode(response: object, existing: int) -> tuple[bool, int | None]:
     status = _response_status(response)
     length = _content_length(response)
@@ -241,7 +366,6 @@ def _read_response(response: BinaryIO, part: Path, existing: int) -> tuple[bytes
                 view = view[written:]
         if declared_total is not None and total != declared_total:
             raise ValueError('HTTP response ended before its declared size.')
-        os.fsync(descriptor)
         os.lseek(descriptor, 0, os.SEEK_SET)
         chunks: list[bytes] = []
         remaining = total
@@ -253,7 +377,14 @@ def _read_response(response: BinaryIO, part: Path, existing: int) -> tuple[bytes
             remaining -= len(chunk)
         raw = b''.join(chunks)
     finally:
-        os.close(descriptor)
+        try:
+            # Persist every byte written even when response.read raised. The
+            # next request derives its Range only after this succeeds.
+            os.fsync(descriptor)
+        except OSError as exc:
+            raise _PartialDurabilityError('partial artifact could not be fsynced.') from exc
+        finally:
+            os.close(descriptor)
     return raw, total
 
 
@@ -308,7 +439,16 @@ def acquire_source(
     target = destination / filename
     sidecar = destination / f'{filename}.sha256'
     part = destination / f'{filename}.part'
+    resume_metadata = destination / f'{filename}.part.meta'
     existing = _regular_size(part)
+    resume_validator: _RepresentationValidator | None = None
+    if existing:
+        resume_validator = _read_resume_metadata(resume_metadata, url)
+        if resume_validator is None:
+            _cleanup_artifacts(part, resume_metadata)
+            existing = 0
+    elif resume_metadata.exists() or resume_metadata.is_symlink():
+        _cleanup_artifacts(resume_metadata)
     if target.exists() and (not target.is_file() or target.is_symlink()):
         raise ValueError('final artifact must be a regular file.')
     if sidecar.exists() and (not sidecar.is_file() or sidecar.is_symlink()):
@@ -323,6 +463,7 @@ def acquire_source(
         })
         if existing:
             request.add_header('Range', f'bytes={existing}-')
+            request.add_header('If-Range', resume_validator.value)  # type: ignore[union-attr]
         try:
             response = transport(request, timeout=HTTP_TIMEOUT_SECONDS)
             with response:  # type: ignore[attr-defined]
@@ -333,18 +474,55 @@ def acquire_source(
                     raise ValueError('HTTP redirect left the approved URL boundary.') from exc
                 if (final_name, final_book) != (filename, book_id):
                     raise ValueError('HTTP redirect changed the approved artifact identity.')
+                response_validator = _response_validator(response)
+                status = _response_status(response)
+                if existing and status == 206:
+                    if response_validator != resume_validator:
+                        raise _RestartDownload(
+                            'upstream representation changed during resumed acquisition.'
+                        )
+                elif status == 200:
+                    resume_validator = response_validator
+                    if response_validator is not None:
+                        _write_resume_metadata(resume_metadata, url, response_validator)
+                    else:
+                        _cleanup_artifacts(resume_metadata)
                 raw, size = _read_response(response, part, existing)  # type: ignore[arg-type]
             break
+        except _RestartDownload as exc:
+            last_network_error = exc
+            _cleanup_artifacts(part, resume_metadata)
+            existing = 0
+            resume_validator = None
+        except _PartialDurabilityError as exc:
+            last_network_error = exc
+            _cleanup_artifacts(part, resume_metadata)
+            existing = 0
+            resume_validator = None
         except HTTPError as exc:
             last_network_error = exc
             if exc.code == 416 and part.exists():
-                part.unlink()
+                _cleanup_artifacts(part, resume_metadata)
                 existing = 0
+                resume_validator = None
         except (URLError, TimeoutError, socket.timeout, ConnectionError, OSError) as exc:
             last_network_error = exc
             # A read timeout can occur after durable bytes were appended. Resume
             # from the descriptor's actual size, never from a stale request offset.
             existing = _regular_size(part)
+            if existing:
+                if resume_validator is None:
+                    _cleanup_artifacts(part, resume_metadata)
+                    existing = 0
+                else:
+                    persisted = _read_resume_metadata(resume_metadata, url)
+                    if persisted != resume_validator:
+                        _cleanup_artifacts(part, resume_metadata)
+                        existing = 0
+                        resume_validator = None
+        except ValueError:
+            _cleanup_artifacts(part, resume_metadata)
+            raise
         if attempt < MAX_ATTEMPTS - 1:
             sleeper(float(attempt + 1))
     else:
@@ -356,14 +534,22 @@ def acquire_source(
         expected = registry[source_id].source_checksum if filename == 'books.json' else None
         if expected is not None and checksum != expected:
             raise ValueError('artifact checksum does not match the reviewed registry checksum.')
-        os.replace(part, target)
+        # Materialize both members before the durability boundary. A failure at
+        # either rename or fsync removes the pair, never exposing a half result.
         _write_sidecar(sidecar, checksum, filename)
+        os.replace(part, target)
+        _cleanup_artifacts(resume_metadata)
         _fsync_directory(destination)
     except Exception:
-        if part.exists() and part.is_file() and not part.is_symlink():
-            part.unlink()
-        if not target.exists() and sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink():
-            sidecar.unlink()
+        _cleanup_artifacts(
+            target, sidecar, part, resume_metadata,
+            sidecar.with_name(sidecar.name + '.part'),
+            resume_metadata.with_name(resume_metadata.name + '.part'),
+        )
+        try:
+            _fsync_directory(destination)
+        except OSError:
+            pass
         raise
     return AcquiredArtifact(target, sidecar, checksum, size)
 
