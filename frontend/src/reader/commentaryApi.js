@@ -36,11 +36,22 @@ function nonblank(value, name) {
 }
 
 function boundedInteger(value, name, maximum) {
-  const number = Number(value)
+  const number = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^[1-9]\d*$/.test(value)
+      ? Number(value)
+      : Number.NaN
   if (!Number.isSafeInteger(number) || number < 1 || number > maximum) {
     throw new TypeError(`${name} must be an integer between 1 and ${maximum}`)
   }
   return number
+}
+
+function invalidResponse() {
+  return new CommentaryRequestError('Commentary response was invalid', {
+    status: 200,
+    code: 'invalid_commentary_response',
+  })
 }
 
 function optionalText(target, source, key) {
@@ -186,11 +197,17 @@ export async function getCommentaryEntries({ source, book, chapter, verse } = {}
 
   const payload = await requestCommentary(`/api/v1/commentaries/entries?${params}`, signal)
   const document = isRecord(payload) ? payload : {}
+  if (!AVAILABILITY_STATES.has(document.availability)) throw invalidResponse()
+  if (
+    Object.prototype.hasOwnProperty.call(document, 'truncated')
+    && typeof document.truncated !== 'boolean'
+  ) {
+    throw invalidResponse()
+  }
   return {
     reference: normalizeReference(document.reference),
-    availability: AVAILABILITY_STATES.has(document.availability)
-      ? document.availability
-      : 'no_entry',
+    availability: document.availability,
+    truncated: document.truncated ?? false,
     source: normalizeSource(document.source),
     entries: Array.isArray(document.entries)
       ? document.entries.map(normalizeEntry).filter(Boolean)
