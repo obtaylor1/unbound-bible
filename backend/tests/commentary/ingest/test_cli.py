@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -9,6 +12,7 @@ from typer.testing import CliRunner
 
 
 runner = CliRunner()
+BACKEND = Path(__file__).parents[3]
 
 
 def payload(result):
@@ -238,3 +242,81 @@ def test_stage_parses_the_same_verified_bytes_when_path_is_swapped(monkeypatch, 
     rows, _checksum = cli._load_stage_input('matthew-henry', source_dir, metadata)
     assert loader_calls == 1
     assert rows[0].body == 'An introduction to Genesis.'
+
+
+def _run_cli(*arguments: str):
+    environment = os.environ.copy()
+    environment['PYTHONPATH'] = str(BACKEND)
+    return subprocess.run(
+        [sys.executable, '-m', 'app.commentary.ingest.cli', *arguments],
+        cwd=BACKEND, env=environment, text=True, capture_output=True, check=False,
+    )
+
+
+@pytest.mark.parametrize(('arguments', 'command', 'code', 'exit_code'), [
+    (('publish', '--run-id', 'not-a-uuid', '--confirm'), 'publish', 'invalid_command', 2),
+    (('acquire', '--source', 'matthew-henry'), 'acquire', 'invalid_command', 2),
+    (('acquire', '--unknown-option'), 'acquire', 'invalid_command', 2),
+    (('not-a-command',), 'not-a-command', 'invalid_command', 2),
+    ((), 'commentary', 'invalid_command', 2),
+    (
+        ('publish', '--run-id', '00000000-0000-0000-0000-000000000000'),
+        'publish', 'confirmation_required', 1,
+    ),
+])
+def test_real_module_failures_emit_one_json_without_traceback(
+    arguments, command, code, exit_code,
+):
+    result = _run_cli(*arguments)
+
+    assert result.returncode == exit_code
+    assert result.stderr == ''
+    assert result.stdout.endswith('\n')
+    assert result.stdout.count('\n') == 1
+    document = json.loads(result.stdout)
+    assert document['command'] == command
+    assert document['status'] == 'error'
+    assert document['error']['code'] == code
+
+
+def test_real_module_success_emits_one_json_without_stderr(tmp_path):
+    from app.commentary.models import CommentaryImportRun, CommentarySource
+    from app.config import Settings
+    from app.database import Base, create_database_engine, create_session_factory
+    from app.library.seed import seed_ethiopian_canon
+
+    database = tmp_path / 'commentary-cli.sqlite'
+    database_url = f'sqlite:///{database}'
+    engine = create_database_engine(Settings(environment='test', database_url=database_url))
+    Base.metadata.create_all(engine)
+    factory = create_session_factory(engine)
+    with factory() as session:
+        seed_ethiopian_canon(session)
+        source = CommentarySource(
+            id='test-source', title='Test', abbreviation='T', author='Test',
+            publication_period='2026', tradition='Test', language='eng',
+            license_spdx='CC0-1.0', license_url='https://example.test/license',
+            attribution='Test', provenance_url='https://example.test/source',
+        )
+        session.add(source)
+        session.flush()
+        run = CommentaryImportRun(
+            source_id=source.id, source_checksum='a' * 64,
+            metadata_snapshot={}, status='staged', staged_count=0,
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+    engine.dispose()
+
+    output = tmp_path / 'report.json'
+    result = _run_cli(
+        'report', '--run-id', str(run_id), '--output', str(output),
+        '--database-url', database_url,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ''
+    assert result.stdout.count('\n') == 1
+    assert json.loads(result.stdout)['status'] == 'reported'
+    assert json.loads(output.read_text(encoding='utf-8'))['run_id'] == str(run_id)

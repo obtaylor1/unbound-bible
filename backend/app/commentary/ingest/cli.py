@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 from typing import Annotated, NoReturn
 from uuid import UUID
 
@@ -61,6 +62,8 @@ class _JsonErrorGroup(TyperGroup):
         command_args = kwargs.get('args')
         if command_args is None and args:
             command_args = args[0]
+        if command_args is None:
+            command_args = sys.argv[1:]
         command = command_args[0] if command_args else 'commentary'
         try:
             result = super().main(*args, standalone_mode=False, **kwargs)
@@ -71,10 +74,10 @@ class _JsonErrorGroup(TyperGroup):
                 'status': 'error',
             })
             if standalone_mode:
-                raise click.exceptions.Exit(exc.exit_code) from None
+                raise SystemExit(exc.exit_code) from None
             return exc.exit_code
         if standalone_mode and type(result) is int and result != 0:
-            raise click.exceptions.Exit(result)
+            raise SystemExit(result)
         return result
 
 
