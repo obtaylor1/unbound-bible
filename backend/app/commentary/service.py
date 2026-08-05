@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.commentary.models import (
@@ -128,6 +129,42 @@ def _citation(work: LibraryWork, row: CommentaryEntry, source: CommentarySource)
     return f'{reference} — {source.title}'
 
 
+def entry_statement(
+    *,
+    edition_id: UUID,
+    work_id: str,
+    chapter: int,
+    verse: int | None,
+    limit: int,
+):
+    """Build the portable semantic entry order used by every public read."""
+    statement = select(CommentaryEntry).where(
+        CommentaryEntry.edition_id == edition_id,
+        CommentaryEntry.work_id == work_id,
+    )
+    if verse is not None:
+        statement = statement.where(
+            CommentaryEntry.chapter == chapter,
+            CommentaryEntry.verse_start.is_not(None),
+            CommentaryEntry.verse_end.is_not(None),
+            CommentaryEntry.verse_start <= verse,
+            CommentaryEntry.verse_end >= verse,
+        )
+    else:
+        statement = statement.where(or_(
+            CommentaryEntry.chapter == chapter,
+            CommentaryEntry.chapter.is_(None),
+        ))
+    return statement.order_by(
+        CommentaryEntry.chapter.asc().nulls_first(),
+        CommentaryEntry.verse_start.asc().nulls_first(),
+        CommentaryEntry.verse_end.asc().nulls_first(),
+        CommentaryEntry.entry_type,
+        CommentaryEntry.position,
+        CommentaryEntry.id,
+    ).limit(limit)
+
+
 def passage_document(
     session: Session,
     *,
@@ -135,38 +172,32 @@ def passage_document(
     book: str,
     chapter: int,
     verse: int | None,
+    max_entries: int = MAX_ENTRIES,
+    max_body_characters: int = MAX_BODY_CHARACTERS,
 ) -> tuple[dict, datetime]:
     published = get_published_source(session, source_id)
     work = resolve_work(session, book)
-    statement = select(CommentaryEntry).where(
-        CommentaryEntry.edition_id == published.edition.id,
-        CommentaryEntry.work_id == work.id,
-        CommentaryEntry.chapter == chapter,
+    if max_entries < 0 or max_body_characters < 0:
+        raise ValueError('Commentary response budgets must be nonnegative.')
+    statement = entry_statement(
+        edition_id=published.edition.id,
+        work_id=work.id,
+        chapter=chapter,
+        verse=verse,
+        limit=max_entries + 1,
     )
-    if verse is not None:
-        statement = statement.where(
-            CommentaryEntry.verse_start.is_not(None),
-            CommentaryEntry.verse_end.is_not(None),
-            CommentaryEntry.verse_start <= verse,
-            CommentaryEntry.verse_end >= verse,
-        )
-    statement = statement.order_by(
-        CommentaryEntry.chapter,
-        CommentaryEntry.verse_start,
-        CommentaryEntry.verse_end,
-        CommentaryEntry.entry_type,
-        CommentaryEntry.position,
-        CommentaryEntry.id,
-    )
-    rows = session.scalars(statement.limit(MAX_ENTRIES + 1)).all()
-    count_truncated = len(rows) > MAX_ENTRIES
-    rows = rows[:MAX_ENTRIES]
+    matching_rows = session.scalars(statement).all()
+    count_truncated = len(matching_rows) > max_entries
+    rows = matching_rows[:max_entries]
 
     source = source_document(published)
-    remaining = MAX_BODY_CHARACTERS
+    remaining = max_body_characters
     entries: list[dict] = []
     body_truncated = False
     for row in rows:
+        if remaining == 0:
+            body_truncated = True
+            break
         body = row.body
         if len(body) > remaining:
             body = body[:remaining]
@@ -174,7 +205,6 @@ def passage_document(
         remaining -= len(body)
         entries.append({
             'scope': {
-                'chapter': row.chapter,
                 'verse_start': row.verse_start,
                 'verse_end': row.verse_end,
             },
@@ -189,14 +219,19 @@ def passage_document(
             body_truncated = body_truncated or row is not rows[-1]
             break
 
-    if entries:
+    coverage_availability = _coverage_availability(
+        published.edition.coverage, work.id, chapter,
+    )
+    if verse is None and coverage_availability == 'coverage_incomplete':
+        availability = coverage_availability
+    elif matching_rows:
         availability = 'available' if verse is not None else (
             'available'
-            if any(entry['entry_type'] in {'book_intro', 'chapter_intro'} for entry in entries)
+            if any(row.entry_type in {'book_intro', 'chapter_intro'} for row in matching_rows)
             else 'wider_range'
         )
     else:
-        availability = _coverage_availability(published.edition.coverage, work.id, chapter)
+        availability = coverage_availability
     reference = {'book': work.title, 'chapter': chapter}
     if verse is not None:
         reference['verse'] = verse

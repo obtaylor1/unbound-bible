@@ -17,9 +17,18 @@ from app.auth.dependencies import get_session, require_admin
 from app.auth.models import User
 from app.commentary.ingest.publish import publish_run, rollback_publication
 from app.commentary.models import CommentaryImportRun, CommentaryValidationFinding
-from app.commentary.schemas import ConfirmationRequest
+from app.commentary.schemas import (
+    CommentaryCompareResponse,
+    CommentaryImportStatusResponse,
+    CommentaryPassageResponse,
+    CommentaryPublicationActionResponse,
+    CommentarySourcesResponse,
+    ConfirmationRequest,
+)
 from app.commentary.service import (
     CommentaryLookupError,
+    MAX_BODY_CHARACTERS,
+    MAX_ENTRIES,
     list_published_sources,
     passage_document,
     source_document,
@@ -66,7 +75,7 @@ def _cached_response(request: Request, document: dict, modified: datetime) -> Re
     return JSONResponse(document, headers=headers)
 
 
-@router.get('/sources')
+@router.get('/sources', response_model=CommentarySourcesResponse)
 def sources(request: Request, session: Session = Depends(get_session)) -> Response:
     published = list_published_sources(session)
     document = {'sources': [source_document(item) for item in published]}
@@ -77,7 +86,7 @@ def sources(request: Request, session: Session = Depends(get_session)) -> Respon
     return _cached_response(request, document, modified)
 
 
-@router.get('/entries')
+@router.get('/entries', response_model=CommentaryPassageResponse)
 def entries(
     request: Request,
     source: str = Query(min_length=1, max_length=64),
@@ -95,7 +104,7 @@ def entries(
     return _cached_response(request, document, modified)
 
 
-@router.get('/compare')
+@router.get('/compare', response_model=CommentaryCompareResponse)
 def compare(
     request: Request,
     sources: list[str] = Query(),
@@ -107,13 +116,25 @@ def compare(
     if not 1 <= len(sources) <= 2 or len(set(sources)) != len(sources):
         raise _error(422, 'invalid_sources', 'Choose one or two distinct commentary sources.')
     results, modified_values = [], []
+    remaining_entries = MAX_ENTRIES
+    remaining_body_characters = MAX_BODY_CHARACTERS
     try:
         for source_id in sources:
             document, modified = passage_document(
-                session, source_id=source_id, book=book, chapter=chapter, verse=verse,
+                session,
+                source_id=source_id,
+                book=book,
+                chapter=chapter,
+                verse=verse,
+                max_entries=remaining_entries,
+                max_body_characters=remaining_body_characters,
             )
             results.append(document)
             modified_values.append(modified)
+            remaining_entries -= len(document['entries'])
+            remaining_body_characters -= sum(
+                len(entry['body']) for entry in document['entries']
+            )
     except CommentaryLookupError as exc:
         raise _error(404, exc.code, exc.message) from exc
     document = {
@@ -123,7 +144,7 @@ def compare(
     return _cached_response(request, document, max(modified_values))
 
 
-@router.get('/admin/imports/{run_id}')
+@router.get('/admin/imports/{run_id}', response_model=CommentaryImportStatusResponse)
 def import_status(
     run_id: UUID,
     _admin: User = Depends(require_admin),
@@ -153,7 +174,10 @@ def _require_confirmation(body: ConfirmationRequest | None) -> None:
         raise _error(400, 'confirmation_required', 'Set confirm to true to continue.')
 
 
-@router.post('/admin/imports/{run_id}/publish')
+@router.post(
+    '/admin/imports/{run_id}/publish',
+    response_model=CommentaryPublicationActionResponse,
+)
 def publish_import(
     run_id: UUID,
     body: ConfirmationRequest | None = Body(default=None),
@@ -179,7 +203,10 @@ def publish_import(
     }
 
 
-@router.post('/admin/publications/{publication_id}/rollback')
+@router.post(
+    '/admin/publications/{publication_id}/rollback',
+    response_model=CommentaryPublicationActionResponse,
+)
 def rollback(
     publication_id: int,
     body: ConfirmationRequest | None = Body(default=None),

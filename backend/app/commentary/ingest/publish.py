@@ -239,7 +239,12 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
         'chapters': result.coverage['chapters'],
         'entries': result.coverage['entries'],
         'by_work': {
-            work_id: dict(values) for work_id, values in result.coverage['by_work'].items()
+            work_id: {
+                'chapters': values['chapters'],
+                'chapter_numbers': list(values['chapter_numbers']),
+                'entries': values['entries'],
+            }
+            for work_id, values in result.coverage['by_work'].items()
         },
     }
     metadata['validation_manifest'] = _manifest(

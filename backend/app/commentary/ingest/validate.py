@@ -98,19 +98,33 @@ def _freeze_coverage(coverage: Mapping[str, Any]) -> Mapping[str, Any]:
         or books < 0 or chapters < 0 or entries < 0 or not isinstance(by_work, Mapping)
     ):
         raise ValueError('coverage must contain nonnegative exact integer counts.')
-    copied_by_work: dict[str, Mapping[str, int]] = {}
+    copied_by_work: dict[str, Mapping[str, Any]] = {}
     for work_id, values in by_work.items():
         if type(work_id) is not str or work_id not in _KNOWN_WORK_IDS:
             raise ValueError('coverage by_work must use known canonical work IDs.')
-        if not isinstance(values, Mapping) or set(values) != {'chapters', 'entries'}:
-            raise ValueError('coverage by_work values must contain chapters and entries only.')
+        if (
+            not isinstance(values, Mapping)
+            or set(values) != {'chapters', 'chapter_numbers', 'entries'}
+        ):
+            raise ValueError(
+                'coverage by_work values must contain chapters, chapter_numbers, and entries only.'
+            )
         work_chapters, work_entries = values['chapters'], values['entries']
+        chapter_numbers = values['chapter_numbers']
         if (
             type(work_chapters) is not int or type(work_entries) is not int
             or work_chapters < 0 or work_entries <= 0 or work_chapters > work_entries
+            or not isinstance(chapter_numbers, (list, tuple))
+            or any(type(chapter) is not int or chapter <= 0 for chapter in chapter_numbers)
+            or list(chapter_numbers) != sorted(set(chapter_numbers))
+            or work_chapters != len(chapter_numbers)
         ):
             raise ValueError('coverage by_work counts are inconsistent.')
-        copied_by_work[work_id] = MappingProxyType({'chapters': work_chapters, 'entries': work_entries})
+        copied_by_work[work_id] = MappingProxyType({
+            'chapters': work_chapters,
+            'chapter_numbers': tuple(chapter_numbers),
+            'entries': work_entries,
+        })
     if (
         books != len(copied_by_work)
         or chapters != sum(value['chapters'] for value in copied_by_work.values())
@@ -215,13 +229,17 @@ def _is_safe_normalized_row(row: NormalizedCommentaryEntry) -> bool:
 
 def _coverage(rows: list[NormalizedCommentaryEntry]) -> Mapping[str, Any]:
     works = sorted({row.work_id for row in rows}, key=lambda item: (_WORK_ORDER[item], item))
-    by_work: dict[str, dict[str, int]] = {}
+    by_work: dict[str, dict[str, object]] = {}
     chapter_pairs: set[tuple[str, int]] = set()
     for work_id in works:
         work_rows = [row for row in rows if row.work_id == work_id]
         chapters = {row.chapter for row in work_rows if type(row.chapter) is int and row.chapter > 0}
         chapter_pairs.update((work_id, chapter) for chapter in chapters)
-        by_work[work_id] = {'chapters': len(chapters), 'entries': len(work_rows)}
+        by_work[work_id] = {
+            'chapters': len(chapters),
+            'chapter_numbers': sorted(chapters),
+            'entries': len(work_rows),
+        }
     return {'books': len(works), 'chapters': len(chapter_pairs), 'entries': len(rows), 'by_work': by_work}
 
 
@@ -251,14 +269,25 @@ def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | N
     for work_id, work_coverage in by_work.items():
         if type(work_id) is not str or work_id not in _KNOWN_WORK_IDS:
             raise ValueError('previous_coverage by_work must use known canonical work IDs.')
-        if not isinstance(work_coverage, Mapping) or set(work_coverage) != {'chapters', 'entries'}:
-            raise ValueError('previous_coverage by_work values must contain chapters and entries only.')
+        if (
+            not isinstance(work_coverage, Mapping)
+            or set(work_coverage) != {'chapters', 'chapter_numbers', 'entries'}
+        ):
+            raise ValueError(
+                'previous_coverage by_work values must contain chapters, '
+                'chapter_numbers, and entries only.'
+            )
         work_chapter_count = work_coverage['chapters']
         work_entry_count = work_coverage['entries']
+        chapter_numbers = work_coverage['chapter_numbers']
         if (
             type(work_chapter_count) is not int or type(work_entry_count) is not int
             or work_chapter_count < 0 or work_entry_count <= 0
             or work_chapter_count > work_entry_count
+            or not isinstance(chapter_numbers, (list, tuple))
+            or any(type(chapter) is not int or chapter <= 0 for chapter in chapter_numbers)
+            or list(chapter_numbers) != sorted(set(chapter_numbers))
+            or work_chapter_count != len(chapter_numbers)
         ):
             raise ValueError('previous_coverage by_work counts are inconsistent.')
         work_chapters += work_chapter_count

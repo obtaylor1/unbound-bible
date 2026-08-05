@@ -154,7 +154,9 @@ def test_validate_run_replaces_findings_and_saves_coverage(commentary_session, c
     assert run.warning_count == 2
     assert run.metadata_snapshot['coverage'] == {
         'books': 1, 'chapters': 1, 'entries': 1,
-        'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+        'by_work': {
+            'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1},
+        },
     }
     assert len(run.metadata_snapshot['validation_manifest']) == 64
     assert {finding.code for finding in findings} == {'missing_book_intro', 'missing_chapter_intro'}

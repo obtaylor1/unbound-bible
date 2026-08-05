@@ -34,8 +34,8 @@ def test_valid_rows_have_exact_coverage_and_nonblocking_intro_warnings():
         'chapters': 2,
         'entries': 2,
         'by_work': {
-            'genesis': {'chapters': 1, 'entries': 1},
-            'exodus': {'chapters': 1, 'entries': 1},
+            'genesis': {'chapters': 1, 'chapter_numbers': (1,), 'entries': 1},
+            'exodus': {'chapters': 1, 'chapter_numbers': (1,), 'entries': 1},
         },
     }
     assert result.error_count == 0
@@ -159,7 +159,10 @@ def test_regression_allows_exactly_five_percent_and_blocks_more_without_floats()
 def test_prior_full_coverage_mapping_is_accepted_for_regression_checks():
     from app.commentary.ingest.validate import validate_commentary
 
-    prior = {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}}
+    prior = {
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}},
+    }
 
     assert validate_commentary([_row()], {'genesis'}, prior).publishable
 
@@ -168,7 +171,10 @@ def test_prior_full_coverage_rejects_zero_total_entries():
     from app.commentary.ingest.validate import validate_commentary
 
     with pytest.raises(ValueError, match='previous_coverage'):
-        validate_commentary([_row()], {'genesis'}, {'books': 0, 'chapters': 0, 'entries': 0, 'by_work': {}})
+        validate_commentary(
+            [_row()], {'genesis'},
+            {'books': 0, 'chapters': 0, 'entries': 0, 'by_work': {}},
+        )
 
 
 def test_prior_full_coverage_rejects_zero_entry_work():
@@ -177,8 +183,8 @@ def test_prior_full_coverage_rejects_zero_entry_work():
     previous = {
         'books': 2, 'chapters': 1, 'entries': 2,
         'by_work': {
-            'genesis': {'chapters': 0, 'entries': 0},
-            'exodus': {'chapters': 1, 'entries': 2},
+            'genesis': {'chapters': 0, 'chapter_numbers': [], 'entries': 0},
+            'exodus': {'chapters': 1, 'chapter_numbers': [1], 'entries': 2},
         },
     }
     with pytest.raises(ValueError, match='previous_coverage'):
@@ -188,17 +194,17 @@ def test_prior_full_coverage_rejects_zero_entry_work():
 @pytest.mark.parametrize('previous', [
     {'entries': 1, 'books': 1},
     {'entries': 1, 'other': 1},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1, 'extra': 1}}},
-    {'books': True, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': -1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'entries': 1}}},
-    {'books': 0, 'chapters': 0, 'entries': 1, 'by_work': {'genesis': {'chapters': 0, 'entries': 1}}},
-    {'books': 1, 'chapters': 0, 'entries': 0, 'by_work': {'genesis': {'chapters': 0, 'entries': 0}}},
-    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 2, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1]}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1, 'extra': 1}}},
+    {'books': True, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': -1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'chapter_numbers': [1, 2], 'entries': 1}}},
+    {'books': 0, 'chapters': 0, 'entries': 1, 'by_work': {'genesis': {'chapters': 0, 'chapter_numbers': [], 'entries': 1}}},
+    {'books': 1, 'chapters': 0, 'entries': 0, 'by_work': {'genesis': {'chapters': 0, 'chapter_numbers': [], 'entries': 0}}},
+    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 2, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
 ])
 def test_previous_coverage_requires_consistent_canonical_full_shape(previous):
     from app.commentary.ingest.validate import validate_commentary
@@ -230,33 +236,58 @@ def test_findings_and_result_are_immutable_and_constrained():
 def test_result_coverage_is_deeply_copied_and_immutable():
     from app.commentary.ingest.validate import CommentaryValidationResult, ValidationFinding, validate_commentary
 
-    source_coverage = {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}}
+    source_coverage = {
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}},
+    }
     findings = (ValidationFinding('warning', 'safe_warning', 'Safe warning.'),)
     result = CommentaryValidationResult(findings, source_coverage)
     source_coverage['entries'] = 99
     source_coverage['by_work']['genesis']['entries'] = 99
+    source_coverage['by_work']['genesis']['chapter_numbers'].append(2)
 
     assert result.coverage['entries'] == 1
     assert result.coverage['by_work']['genesis']['entries'] == 1
+    assert result.coverage['by_work']['genesis']['chapter_numbers'] == (1,)
     with pytest.raises(TypeError):
         result.coverage['entries'] = 2
     with pytest.raises(TypeError):
         result.coverage['by_work']['genesis']['entries'] = 2
+    with pytest.raises(AttributeError):
+        result.coverage['by_work']['genesis']['chapter_numbers'].append(2)
     with pytest.raises(AttributeError):
         result.findings.append(findings[0])
     assert validate_commentary([_row()], {'genesis'}).coverage['entries'] == 1
 
 
 @pytest.mark.parametrize('coverage', [
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1, 'extra': 1}}},
-    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
-    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'entries': 1}}},
-    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}, 'extra': 1},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1, 'extra': 1}}},
+    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}},
+    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'chapter_numbers': [1, 2], 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1}}, 'extra': 1},
 ])
 def test_public_validation_result_rejects_nonsensical_coverage(coverage):
     from app.commentary.ingest.validate import CommentaryValidationResult
 
+    with pytest.raises(ValueError, match='coverage'):
+        CommentaryValidationResult((), coverage)
+
+
+@pytest.mark.parametrize('chapter_numbers', [
+    [2, 1], [1, 1], [0], [True], ['1'], [1], '1', None,
+])
+def test_coverage_rejects_noncanonical_chapter_number_snapshots(chapter_numbers):
+    from app.commentary.ingest.validate import CommentaryValidationResult
+
+    coverage = {
+        'books': 1, 'chapters': 2, 'entries': 2,
+        'by_work': {
+            'genesis': {
+                'chapters': 2, 'chapter_numbers': chapter_numbers, 'entries': 2,
+            },
+        },
+    }
     with pytest.raises(ValueError, match='coverage'):
         CommentaryValidationResult((), coverage)
 

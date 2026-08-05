@@ -3,9 +3,11 @@ from uuid import uuid4
 import pytest
 from fastapi import APIRouter, Depends
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
 from app.application import create_application
-from app.auth.dependencies import require_admin
+from app.auth.dependencies import get_session, require_admin
 from app.auth.models import User
 from app.commentary.ingest.types import NormalizedCommentaryEntry
 from app.commentary.ingest.publish import stage_bundle, validate_run
@@ -114,7 +116,11 @@ def _publish(
     },)
     coverage = coverage or {
         'books': 1, 'chapters': 1, 'entries': len(entries),
-        'by_work': {'genesis': {'chapters': 1, 'entries': len(entries)}},
+        'by_work': {
+            'genesis': {
+                'chapters': 1, 'chapter_numbers': [1], 'entries': len(entries),
+            },
+        },
     }
     with application.state.session_factory() as session:
         source = _source(source_id)
@@ -176,7 +182,7 @@ def test_verse_query_returns_covering_range(commentary_client, commentary_applic
     assert payload['reference'] == {'book': 'Genesis', 'chapter': 1, 'verse': 2}
     assert payload['availability'] == 'available'
     assert payload['edition']['version'] == 1
-    assert payload['entries'][0]['scope'] == {'chapter': 1, 'verse_start': 1, 'verse_end': 3}
+    assert payload['entries'][0]['scope'] == {'verse_start': 1, 'verse_end': 3}
     assert payload['entries'][0]['source']['id'] == 'matthew-henry'
     assert payload['entries'][0]['citation'] == 'Genesis 1:1-3 — Matthew Henry'
 
@@ -188,6 +194,31 @@ def test_book_alias_is_resolved_to_canonical_work(commentary_client, commentary_
     })
     assert response.status_code == 200
     assert response.json()['reference']['book'] == 'Genesis'
+
+
+def test_real_noncanonical_alias_resolves_through_canon_mapping(
+    commentary_client, commentary_application,
+):
+    rows = ({
+        'work_id': 'song-of-solomon', 'chapter': 1, 'verse_start': 1, 'verse_end': 1,
+        'entry_type': 'verse', 'heading': None, 'body': 'Song commentary.',
+        'source_locator': 'Song 1:1', 'position': 0,
+    },)
+    _publish(commentary_application, entries=rows, coverage={
+        'books': 1, 'chapters': 1, 'entries': 1,
+        'by_work': {
+            'song-of-solomon': {
+                'chapters': 1, 'chapter_numbers': [1], 'entries': 1,
+            },
+        },
+    })
+
+    response = commentary_client.get('/api/v1/commentaries/entries', params={
+        'source': 'matthew-henry', 'book': 'Song of Songs', 'chapter': 1, 'verse': 1,
+    })
+
+    assert response.status_code == 200
+    assert response.json()['reference']['book'] == 'Song of Solomon'
 
 
 def test_chapter_query_orders_and_bounds_entries(commentary_client, commentary_application):
@@ -208,6 +239,55 @@ def test_chapter_query_orders_and_bounds_entries(commentary_client, commentary_a
     assert len(payload['entries']) == 50
     assert [entry['scope']['verse_start'] for entry in payload['entries'][:3]] == [1, 2, 3]
     assert payload['truncated'] is True
+
+
+def test_chapter_intro_precedes_verses_and_exact_verse_excludes_intro(
+    commentary_client, commentary_application,
+):
+    rows = (
+        {
+            'work_id': 'genesis', 'chapter': 1, 'verse_start': 1, 'verse_end': 1,
+            'entry_type': 'verse', 'heading': None, 'body': 'Verse commentary.',
+            'source_locator': 'Genesis 1:1', 'position': 0,
+        },
+        {
+            'work_id': 'genesis', 'chapter': 1, 'verse_start': None, 'verse_end': None,
+            'entry_type': 'chapter_intro', 'heading': 'Chapter introduction',
+            'body': 'Chapter overview.', 'source_locator': 'Genesis 1', 'position': 0,
+        },
+        {
+            'work_id': 'genesis', 'chapter': None, 'verse_start': None, 'verse_end': None,
+            'entry_type': 'book_intro', 'heading': 'Book introduction',
+            'body': 'Book overview.', 'source_locator': 'Genesis', 'position': 0,
+        },
+    )
+    _publish(commentary_application, entries=rows)
+
+    chapter = commentary_client.get('/api/v1/commentaries/entries', params={
+        'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 1,
+    }).json()
+    exact = commentary_client.get('/api/v1/commentaries/entries', params={
+        'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 1, 'verse': 1,
+    }).json()
+
+    assert [entry['entry_type'] for entry in chapter['entries']] == [
+        'book_intro', 'chapter_intro', 'verse',
+    ]
+    assert chapter['entries'][0]['scope'] == {'verse_start': None, 'verse_end': None}
+    assert [entry['entry_type'] for entry in exact['entries']] == ['verse']
+
+
+def test_entry_ordering_compiles_portable_explicit_nulls_first():
+    from app.commentary.service import entry_statement
+
+    statement = entry_statement(
+        edition_id=uuid4(), work_id='genesis', chapter=1, verse=None, limit=51,
+    )
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert 'verse_start ASC NULLS FIRST' in sql
+    assert 'verse_end ASC NULLS FIRST' in sql
+    assert 'chapter ASC NULLS FIRST' in sql
 
 
 def test_response_body_text_is_deterministically_bounded(commentary_client, commentary_application):
@@ -292,16 +372,48 @@ def test_unpublished_source_has_structured_error_and_never_returns_staged_text(
 def test_no_entry_and_incomplete_coverage_are_distinguished(commentary_client, commentary_application):
     _publish(commentary_application, coverage={
         'books': 1, 'chapters': 1, 'entries': 1,
-        'by_work': {'genesis': {'chapters': 1, 'entries': 1}},
+        'by_work': {
+            'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 1},
+        },
     })
     no_entry = commentary_client.get('/api/v1/commentaries/entries', params={
         'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 1, 'verse': 20,
     })
     incomplete = commentary_client.get('/api/v1/commentaries/entries', params={
-        'source': 'matthew-henry', 'book': 'Exodus', 'chapter': 1, 'verse': 1,
+        'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 2, 'verse': 1,
     })
     assert no_entry.json()['availability'] == 'no_entry'
     assert incomplete.json()['availability'] == 'coverage_incomplete'
+
+
+def test_book_intro_does_not_mask_incomplete_chapter_coverage(
+    commentary_client, commentary_application,
+):
+    rows = (
+        {
+            'work_id': 'genesis', 'chapter': None, 'verse_start': None, 'verse_end': None,
+            'entry_type': 'book_intro', 'heading': None, 'body': 'Genesis overview.',
+            'source_locator': 'Genesis', 'position': 0,
+        },
+        {
+            'work_id': 'genesis', 'chapter': 1, 'verse_start': 1, 'verse_end': 1,
+            'entry_type': 'verse', 'heading': None, 'body': 'Chapter one only.',
+            'source_locator': 'Genesis 1:1', 'position': 0,
+        },
+    )
+    _publish(commentary_application, entries=rows, coverage={
+        'books': 1, 'chapters': 1, 'entries': 2,
+        'by_work': {
+            'genesis': {'chapters': 1, 'chapter_numbers': [1], 'entries': 2},
+        },
+    })
+
+    response = commentary_client.get('/api/v1/commentaries/entries', params={
+        'source': 'matthew-henry', 'book': 'Genesis', 'chapter': 2,
+    })
+
+    assert response.status_code == 200
+    assert response.json()['availability'] == 'coverage_incomplete'
 
 
 def test_chapter_query_marks_verse_only_material_as_wider_range(commentary_client, commentary_application):
@@ -350,6 +462,19 @@ def test_nonmatching_etag_takes_precedence_over_if_modified_since(
     assert response.status_code == 200
 
 
+def test_if_modified_since_returns_not_modified(commentary_client, commentary_application):
+    _publish(commentary_application)
+    first = commentary_client.get('/api/v1/commentaries/sources')
+
+    cached = commentary_client.get(
+        '/api/v1/commentaries/sources',
+        headers={'If-Modified-Since': first.headers['last-modified']},
+    )
+
+    assert cached.status_code == 304
+    assert cached.content == b''
+
+
 def test_compare_accepts_one_or_two_distinct_published_sources(commentary_client, commentary_application):
     _publish(commentary_application, 'matthew-henry')
     _publish(commentary_application, 'john-gill')
@@ -367,6 +492,32 @@ def test_compare_accepts_one_or_two_distinct_published_sources(commentary_client
     ])
     assert single.status_code == 200
     assert [item['source']['id'] for item in single.json()['results']] == ['john-gill']
+
+
+def test_compare_applies_entry_and_body_bounds_across_entire_response(
+    commentary_client, commentary_application,
+):
+    rows = tuple({
+        'work_id': 'genesis', 'chapter': 1, 'verse_start': 1,
+        'verse_end': 1, 'entry_type': 'verse', 'heading': None,
+        'body': 'x' * 3_000, 'source_locator': f'Genesis 1:1 paragraph {position}',
+        'position': position,
+    } for position in range(30))
+    _publish(commentary_application, 'matthew-henry', entries=rows)
+    _publish(commentary_application, 'john-gill', entries=rows)
+
+    response = commentary_client.get('/api/v1/commentaries/compare', params=[
+        ('sources', 'matthew-henry'), ('sources', 'john-gill'),
+        ('book', 'Genesis'), ('chapter', '1'), ('verse', '1'),
+    ])
+    results = response.json()['results']
+
+    assert [len(result['entries']) for result in results] == [30, 4]
+    assert sum(
+        len(entry['body']) for result in results for entry in result['entries']
+    ) == 100_000
+    assert len(results[1]['entries'][-1]['body']) == 1_000
+    assert results[1]['truncated'] is True
 
 
 @pytest.mark.parametrize('sources', [
@@ -442,6 +593,9 @@ def test_admin_import_status_and_confirmation_errors_are_structured(
     missing_body = commentary_client.post(
         f'/api/v1/commentaries/admin/imports/{run_id}/publish',
     )
+    blocked = commentary_client.post(
+        f'/api/v1/commentaries/admin/imports/{run_id}/publish', json={'confirm': True},
+    )
     assert status_response.status_code == 200
     assert status_response.json()['status'] == 'staged'
     assert denied.status_code == 400
@@ -450,6 +604,8 @@ def test_admin_import_status_and_confirmation_errors_are_structured(
     assert missing_confirmation.json()['detail']['code'] == 'confirmation_required'
     assert missing_body.status_code == 400
     assert missing_body.json()['detail']['code'] == 'confirmation_required'
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'publication_blocked'
 
 
 def test_admin_unknown_import_and_publication_errors_are_stable(
@@ -514,3 +670,80 @@ def test_admin_rollback_creates_new_active_version_for_previous_immutable_editio
         'source': 'admin-rollback', 'book': 'Genesis', 'chapter': 1, 'verse': 1,
     })
     assert public.json()['entries'][0]['body'] == 'First edition.'
+
+
+def test_admin_rollback_requires_confirmation_and_a_previous_publication(
+    commentary_client, commentary_application,
+):
+    _override_admin(commentary_application)
+    publication = _publish(commentary_application, 'single-publication')
+    url = f'/api/v1/commentaries/admin/publications/{publication.id}/rollback'
+
+    denied = commentary_client.post(url, json={'confirm': False})
+    missing = commentary_client.post(url, json={})
+    blocked = commentary_client.post(url, json={'confirm': True})
+
+    assert denied.status_code == missing.status_code == 400
+    assert denied.json()['detail']['code'] == 'confirmation_required'
+    assert missing.json()['detail']['code'] == 'confirmation_required'
+    assert blocked.status_code == 409
+    assert blocked.json()['detail']['code'] == 'rollback_blocked'
+
+
+def test_admin_publish_rolls_back_when_request_boundary_commit_fails(
+    commentary_client, commentary_application,
+):
+    _override_admin(commentary_application)
+    run_id = _stage_verified(commentary_application, 'commit-failure', 'Must roll back.')
+    request_session = commentary_application.state.session_factory()
+
+    def failing_commit():
+        raise RuntimeError('simulated commit failure')
+
+    request_session.commit = failing_commit
+
+    def override_session():
+        try:
+            yield request_session
+        finally:
+            request_session.close()
+
+    commentary_application.dependency_overrides[get_session] = override_session
+    with pytest.raises(RuntimeError, match='simulated commit failure'):
+        commentary_client.post(
+            f'/api/v1/commentaries/admin/imports/{run_id}/publish', json={'confirm': True},
+        )
+
+    with commentary_application.state.session_factory() as session:
+        run = session.get(CommentaryImportRun, run_id)
+        publications = session.scalars(select(CommentaryPublication).where(
+            CommentaryPublication.source_id == 'commit-failure'
+        )).all()
+        assert run.status == 'verified'
+        assert publications == []
+
+
+def test_openapi_declares_complete_commentary_response_contracts(commentary_application):
+    schema = commentary_application.openapi()
+    expected = {
+        ('/api/v1/commentaries/sources', 'get'): 'CommentarySourcesResponse',
+        ('/api/v1/commentaries/entries', 'get'): 'CommentaryPassageResponse',
+        ('/api/v1/commentaries/compare', 'get'): 'CommentaryCompareResponse',
+        ('/api/v1/commentaries/admin/imports/{run_id}', 'get'):
+            'CommentaryImportStatusResponse',
+        ('/api/v1/commentaries/admin/imports/{run_id}/publish', 'post'):
+            'CommentaryPublicationActionResponse',
+        ('/api/v1/commentaries/admin/publications/{publication_id}/rollback', 'post'):
+            'CommentaryPublicationActionResponse',
+    }
+
+    for (path, method), model in expected.items():
+        response_schema = schema['paths'][path][method]['responses']['200']['content'][
+            'application/json'
+        ]['schema']
+        assert response_schema == {'$ref': f'#/components/schemas/{model}'}
+
+    components = schema['components']['schemas']
+    assert set(components['CommentaryScope']['properties']) == {'verse_start', 'verse_end'}
+    for model in set(expected.values()) | {'CommentaryScope', 'CommentaryEntryResponse'}:
+        assert components[model]['additionalProperties'] is False
