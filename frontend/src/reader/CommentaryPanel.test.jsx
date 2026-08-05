@@ -12,6 +12,7 @@ const sources = [
   {
     id: 'john-gill',
     title: 'John Gill’s Exposition',
+    abbreviation: 'Gill',
     author: 'John Gill',
     publication_period: '1746–1763',
     tradition: 'Reformed Baptist',
@@ -232,6 +233,50 @@ describe('CommentaryPanel requests and navigation', () => {
     requests[0].resolve(result({ entries: [entry({ body: 'Stale chapter response' })] }))
     await waitFor(() => expect(screen.queryByText('Stale chapter response')).not.toBeInTheDocument())
   })
+
+  it('immediately removes owned entries and an expanded dialog when the reference changes', async () => {
+    const user = userEvent.setup()
+    const second = deferred()
+    const loadSources = vi.fn().mockResolvedValue(sources)
+    const loadEntries = vi.fn()
+      .mockResolvedValueOnce(result({ entries: [entry({ body: 'Owned chapter response' })] }))
+      .mockReturnValueOnce(second.promise)
+    const view = renderPanel({ loadSources, loadEntries })
+    await screen.findByText('Owned chapter response')
+    await user.click(screen.getByRole('button', { name: 'Expand commentary reading view' }))
+    expect(screen.getByRole('dialog')).toBeVisible()
+
+    view.rerender(
+      <CommentaryPanel
+        headingId="commentary-heading"
+        reference={{ book: 'Exodus', chapter: 2 }}
+        verses={[1, 2]}
+        loadSources={loadSources}
+        loadEntries={loadEntries}
+      />,
+    )
+
+    expect(screen.queryByText('Owned chapter response')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand commentary reading view' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Loading commentary for Exodus 2/)).toBeVisible()
+  })
+
+  it('immediately removes the previous source result when another source is chosen', async () => {
+    const user = userEvent.setup()
+    const second = deferred()
+    const loadEntries = vi.fn()
+      .mockResolvedValueOnce(result({ entries: [entry({ body: 'John Gill owned note' })] }))
+      .mockReturnValueOnce(second.promise)
+    renderPanel({ loadEntries })
+    await screen.findByText('John Gill owned note')
+    await user.click(screen.getByRole('button', { name: 'Expand commentary reading view' }))
+    expect(screen.getByRole('dialog')).toBeVisible()
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Commentary source' }), 'matthew-henry')
+    expect(screen.queryByText('John Gill owned note')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Expand commentary reading view' })).not.toBeInTheDocument()
+  })
 })
 
 describe('CommentaryPanel availability and reading tools', () => {
@@ -272,6 +317,66 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(screen.getByText('More matching commentary is available than can be shown here.')).toBeVisible()
   })
 
+  it('offers working next actions for missing, incomplete, wider-range, and truncated results', async () => {
+    const user = userEvent.setup()
+    const onSelectVerse = vi.fn()
+    const loadEntries = vi.fn().mockResolvedValue(result({ availability: 'no_entry', entries: [] }))
+    const view = renderPanel({
+      reference: { book: 'Genesis', chapter: 1, verse: 2 },
+      onSelectVerse,
+      loadEntries,
+    })
+    await user.click(await screen.findByRole('button', { name: 'View chapter overview' }))
+    expect(onSelectVerse).toHaveBeenCalledWith(null)
+    await user.click(screen.getByRole('button', { name: 'Choose another commentary source' }))
+    expect(screen.getByRole('combobox', { name: 'Commentary source' })).toHaveValue('matthew-henry')
+
+    const widerLoader = vi.fn().mockResolvedValue(result({
+      availability: 'wider_range',
+      entries: [entry({ start: 1, end: 3 })],
+    }))
+    view.rerender(
+      <CommentaryPanel
+        headingId="commentary-heading"
+        reference={{ book: 'Genesis', chapter: 1, verse: 2 }}
+        verses={[1, 2, 3]}
+        onSelectVerse={onSelectVerse}
+        loadSources={vi.fn().mockResolvedValue(sources)}
+        loadEntries={widerLoader}
+      />,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Read covered passage from verse 1' }))
+    expect(onSelectVerse).toHaveBeenLastCalledWith(1)
+
+    const truncatedLoader = vi.fn().mockResolvedValue(result({ truncated: true }))
+    view.rerender(
+      <CommentaryPanel
+        headingId="commentary-heading"
+        reference={{ book: 'Genesis', chapter: 1 }}
+        verses={[3, 1, 2]}
+        onSelectVerse={onSelectVerse}
+        loadSources={vi.fn().mockResolvedValue(sources)}
+        loadEntries={truncatedLoader}
+      />,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Narrow commentary to verse 1' }))
+    expect(onSelectVerse).toHaveBeenLastCalledWith(1)
+  })
+
+  it('offers overview for incomplete coverage and disables source switching when no alternative exists', async () => {
+    const user = userEvent.setup()
+    const onSelectVerse = vi.fn()
+    renderPanel({
+      reference: { book: 'Genesis', chapter: 1, verse: 2 },
+      onSelectVerse,
+      loadSources: vi.fn().mockResolvedValue([sources[0]]),
+      loadEntries: vi.fn().mockResolvedValue(result({ availability: 'coverage_incomplete', entries: [] })),
+    })
+    await user.click(await screen.findByRole('button', { name: 'View chapter overview' }))
+    expect(onSelectVerse).toHaveBeenCalledWith(null)
+    expect(screen.getByRole('button', { name: 'Choose another commentary source' })).toBeDisabled()
+  })
+
   it('shows a safe error and retries the exact request', async () => {
     const user = userEvent.setup()
     const loadEntries = vi.fn()
@@ -297,6 +402,19 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(await screen.findByRole('combobox', { name: 'Commentary source' })).toHaveValue('john-gill')
   })
 
+  it('distinguishes a rejected source request from an empty catalog and recovers on retry', async () => {
+    const user = userEvent.setup()
+    const loadSources = vi.fn()
+      .mockRejectedValueOnce(new Error('private upstream detail'))
+      .mockResolvedValueOnce(sources)
+    renderPanel({ loadSources })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Commentary sources could not be loaded')
+    expect(screen.queryByText('No commentary sources are installed.')).not.toBeInTheDocument()
+    expect(screen.queryByText(/private upstream/i)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry loading commentary sources' }))
+    expect(await screen.findByRole('combobox', { name: 'Commentary source' })).toHaveValue('john-gill')
+  })
+
   it('filters as plain text without interpreting or injecting markup', async () => {
     const user = userEvent.setup()
     renderPanel({ loadEntries: vi.fn().mockResolvedValue(result({ entries: [
@@ -306,7 +424,9 @@ describe('CommentaryPanel availability and reading tools', () => {
 
     const search = await screen.findByRole('searchbox', { name: 'Search this commentary' })
     await user.type(search, '<img')
-    expect(screen.getByText('<img src=x onerror=alert(1)> literal record')).toBeVisible()
+    const literal = screen.getByText('<img src=x onerror=alert(1)> literal record')
+    expect(literal).toBeVisible()
+    expect(literal.closest('article')).toHaveClass('commentary-panel__entry--search-match')
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
     expect(screen.queryByText('A separate meditation')).not.toBeInTheDocument()
     expect(document.querySelector('mark')).toBeNull()
@@ -343,6 +463,30 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(screen.queryByRole('dialog', { name: /Expanded Genesis/ })).not.toBeInTheDocument()
     expect(open).toHaveFocus()
   })
+
+  it('closes the expanded dialog with Escape and restores focus to the word-labelled opener', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    const open = await screen.findByRole('button', { name: 'Expand commentary reading view' })
+    await user.click(open)
+    expect(screen.getByRole('dialog')).toBeVisible()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(open).toHaveFocus()
+  })
+
+  it('preserves body paragraphs, omits absent headings, and identifies the source on every article', async () => {
+    renderPanel({ loadEntries: vi.fn().mockResolvedValue(result({ entries: [entry({ heading: '', body: 'First paragraph.\n\nSecond paragraph.' })] })) })
+    const article = await screen.findByRole('article')
+    expect(within(article).queryByRole('heading')).not.toBeInTheDocument()
+    expect(within(article).getAllByText(/paragraph\./)).toHaveLength(2)
+    expect(within(article).getByText('John Gill’s Exposition')).toBeVisible()
+    expect(within(article).getByText('Gill')).toBeVisible()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Expand commentary reading view' }))
+    const dialogArticle = within(screen.getByRole('dialog')).getByRole('article')
+    expect(within(dialogArticle).getByText('John Gill’s Exposition')).toBeVisible()
+  })
 })
 
 describe('CommentaryPanel presentation contract', () => {
@@ -356,5 +500,13 @@ describe('CommentaryPanel presentation contract', () => {
     expect(readerTokensCss).toMatch(/@media\s*\(max-width:\s*767px\)[\s\S]*\.commentary-panel/i)
     expect(readerTokensCss).toMatch(/\.commentary-panel\s*\{[^}]*min-width:\s*0/i)
     expect(readerTokensCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.commentary-panel/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__entry\s*\{[^}]*var\(--reader-surface\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__callout--incomplete\s*\{[^}]*var\(--reader-gold\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__callout--truncated\s*\{[^}]*var\(--reader-gold\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__range-badge\s*\{[^}]*var\(--reader-teal\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__entry--search-match\s*\{[^}]*var\(--reader-teal\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__tab\[aria-selected='true'\]\s*\{[^}]*box-shadow:\s*inset\s+0\s+-3px\s+0\s+var\(--reader-gold\)/i)
+    expect(readerTokensCss).toMatch(/@media\s*\(max-width:\s*767px\)[\s\S]*\.commentary-panel\s*\{[^}]*env\(safe-area-inset-bottom\)/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__expanded\s*\{[^}]*overflow-x:\s*hidden/i)
   })
 })

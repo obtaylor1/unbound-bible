@@ -53,14 +53,22 @@ function paragraphs(body) {
     .filter(Boolean)
 }
 
-function EntryArticle({ entry, availability, onCopy }) {
+function EntryArticle({ entry, availability, onCopy, searchMatched, source }) {
   const range = scopeLabel(entry, availability)
   return (
-    <article className="commentary-panel__entry">
-      <header className="commentary-panel__entry-header">
-        {entry.heading ? <h4>{entry.heading}</h4> : <h4>Commentary note</h4>}
-        {range ? <span className="commentary-panel__range-badge">{range}</span> : null}
-      </header>
+    <article className={`commentary-panel__entry${searchMatched ? ' commentary-panel__entry--search-match' : ''}`}>
+      {source ? (
+        <p className="commentary-panel__entry-source">
+          <strong>{source.title}</strong>
+          {source.abbreviation ? <span>{source.abbreviation}</span> : null}
+        </p>
+      ) : null}
+      {entry.heading || range ? (
+        <header className="commentary-panel__entry-header">
+          {entry.heading ? <h4>{entry.heading}</h4> : null}
+          {range ? <span className="commentary-panel__range-badge">{range}</span> : null}
+        </header>
+      ) : null}
       <div className="commentary-panel__body">
         {paragraphs(entry.body).map((paragraph, index) => (
           <p key={`${index}-${paragraph.slice(0, 32)}`}>{paragraph}</p>
@@ -89,7 +97,7 @@ function EntryArticle({ entry, availability, onCopy }) {
   )
 }
 
-function ExpandedCommentary({ open, title, entries, availability, onCopy, onClose, openerRef }) {
+function ExpandedCommentary({ open, title, entries, availability, onCopy, onClose, openerRef, searchMatched, source }) {
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
   const titleId = useId()
@@ -134,6 +142,8 @@ function ExpandedCommentary({ open, title, entries, availability, onCopy, onClos
               entry={entry}
               availability={availability}
               onCopy={onCopy}
+              searchMatched={searchMatched}
+              source={source}
             />
           ))}
         </div>
@@ -161,6 +171,7 @@ export default function CommentaryPanel({
   const [sourceStatus, setSourceStatus] = useState('loading')
   const [sourceRetry, setSourceRetry] = useState(0)
   const [result, setResult] = useState(null)
+  const [resultOwnership, setResultOwnership] = useState('')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
   const [requestRetry, setRequestRetry] = useState(0)
@@ -197,10 +208,12 @@ export default function CommentaryPanel({
     return () => controller.abort()
   }, [loadSources, sourceRetry])
 
-  const requestKey = `${sourceId}|${book}|${chapter}|${verse ?? ''}|${requestRetry}`
+  const requestOwnership = `${sourceId}|${book}|${chapter}|${verse ?? ''}`
+  const requestKey = `${requestOwnership}|${requestRetry}`
   useEffect(() => {
     if (!sourceId || !book || !chapter) {
       setResult(null)
+      setResultOwnership('')
       setStatus('idle')
       return undefined
     }
@@ -214,6 +227,7 @@ export default function CommentaryPanel({
       .then((nextResult) => {
         if (generation !== requestGeneration.current || controller.signal.aborted) return
         setResult(nextResult)
+        setResultOwnership(requestOwnership)
         setStatus('ready')
       })
       .catch((nextError) => {
@@ -223,11 +237,16 @@ export default function CommentaryPanel({
           || nextError?.name === 'AbortError'
         ) return
         setResult(null)
+        setResultOwnership('')
         setError(nextError)
         setStatus('error')
       })
     return () => controller.abort()
-  }, [loadEntries, requestKey, sourceId, book, chapter, verse])
+  }, [loadEntries, requestKey, requestOwnership, sourceId, book, chapter, verse])
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [requestOwnership])
 
   const validVerses = useMemo(() => positiveVerseList(verses), [verses])
   const currentIndex = verse ? validVerses.indexOf(verse) : -1
@@ -241,9 +260,13 @@ export default function CommentaryPanel({
         ? validVerses[currentIndex + 1]
         : validVerses.find((candidate) => candidate > verse))
     : null
-  const selectedSource = sources.find(({ id }) => id === sourceId) ?? result?.source ?? null
+  const ownedResult = resultOwnership === requestOwnership ? result : null
+  const displayStatus = sourceId && resultOwnership !== requestOwnership && status !== 'error'
+    ? 'loading'
+    : status
+  const selectedSource = sources.find(({ id }) => id === sourceId) ?? ownedResult?.source ?? null
   const normalizedQuery = query.toLocaleLowerCase()
-  const filteredEntries = (Array.isArray(result?.entries) ? result.entries : [])
+  const filteredEntries = (Array.isArray(ownedResult?.entries) ? ownedResult.entries : [])
     .filter((item) => typeof item?.body === 'string')
     .filter((item) => item.body.toLocaleLowerCase().includes(normalizedQuery))
 
@@ -256,6 +279,12 @@ export default function CommentaryPanel({
     } catch {
       // The selection still works for this session when storage is unavailable.
     }
+  }
+
+  const chooseAnotherSource = () => {
+    if (sources.length < 2) return
+    const index = Math.max(0, sources.findIndex(({ id }) => id === sourceId))
+    chooseSource(sources[(index + 1) % sources.length].id)
   }
 
   const copyText = async (text, label) => {
@@ -272,12 +301,16 @@ export default function CommentaryPanel({
     if (typeof onSelectVerse === 'function') onSelectVerse(nextVerse)
   }
 
+  const firstCoveredVerse = filteredEntries
+    .map((item) => item?.scope?.verse_start)
+    .find((candidate) => validVerses.includes(candidate))
+
   return (
     <section
       className="commentary-panel"
       role="region"
       aria-labelledby={resolvedHeadingId}
-      aria-busy={status === 'loading' || sourceStatus === 'loading'}
+      aria-busy={displayStatus === 'loading' || sourceStatus === 'loading'}
     >
       <header className="commentary-panel__masthead">
         <div>
@@ -285,7 +318,7 @@ export default function CommentaryPanel({
           <h3 id={resolvedHeadingId}>{title}</h3>
           <p className="commentary-panel__reference">Commentary for {referenceLabel}</p>
         </div>
-        {filteredEntries.length > 0 ? (
+        {displayStatus === 'ready' && filteredEntries.length > 0 ? (
           <button
             ref={expandButtonRef}
             type="button"
@@ -394,14 +427,14 @@ export default function CommentaryPanel({
         </nav>
       ) : null}
 
-      {status === 'loading' ? (
+      {displayStatus === 'loading' ? (
         <div className="commentary-panel__loading" role="status" aria-live="polite">
           <span className="commentary-panel__loading-mark" aria-hidden="true" />
           Loading commentary for {referenceLabel}…
         </div>
       ) : null}
 
-      {status === 'error' ? (
+      {displayStatus === 'error' ? (
         <div className="commentary-panel__callout commentary-panel__callout--error" role="alert">
           <h4>Commentary could not be loaded</h4>
           <p>The source is temporarily unavailable. Your Scripture reading has not been interrupted.</p>
@@ -416,33 +449,98 @@ export default function CommentaryPanel({
         </div>
       ) : null}
 
-      {status === 'ready' && result?.availability === 'no_entry' ? (
+      {displayStatus === 'ready' && ownedResult?.availability === 'no_entry' ? (
         <div className="commentary-panel__callout" role="status">
           <h4>No commentary entry for {referenceLabel}</h4>
           <p>This verified source does not include a note for the selected passage.</p>
+          <div className="commentary-panel__next-actions">
+            {verse && typeof onSelectVerse === 'function' ? (
+              <button type="button" className="commentary-panel__control" onClick={() => selectVerse(null)}>
+                View chapter overview
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="commentary-panel__control"
+              disabled={sources.length < 2}
+              onClick={chooseAnotherSource}
+            >
+              Choose another commentary source
+            </button>
+          </div>
         </div>
       ) : null}
 
-      {status === 'ready' && result?.availability === 'coverage_incomplete' ? (
+      {displayStatus === 'ready' && ownedResult?.availability === 'coverage_incomplete' ? (
         <div className="commentary-panel__callout commentary-panel__callout--incomplete" role="status">
           <h4>This source has incomplete coverage for {referenceLabel}</h4>
           <p>The passage is part of the source, but a verified entry has not yet been published.</p>
+          <div className="commentary-panel__next-actions">
+            {verse && typeof onSelectVerse === 'function' ? (
+              <button type="button" className="commentary-panel__control" onClick={() => selectVerse(null)}>
+                View chapter overview
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="commentary-panel__control"
+              disabled={sources.length < 2}
+              onClick={chooseAnotherSource}
+            >
+              Choose another commentary source
+            </button>
+          </div>
         </div>
       ) : null}
 
-      {status === 'ready' && result?.availability === 'wider_range' ? (
+      {displayStatus === 'ready' && ownedResult?.availability === 'wider_range' ? (
         <div className="commentary-panel__callout commentary-panel__callout--range" role="status">
-          This note discusses a wider passage that includes {referenceLabel}.
+          <p>This note discusses a wider passage that includes {referenceLabel}.</p>
+          <div className="commentary-panel__next-actions">
+            {verse && typeof onSelectVerse === 'function' ? (
+              <button type="button" className="commentary-panel__control" onClick={() => selectVerse(null)}>
+                View chapter overview
+              </button>
+            ) : null}
+            {firstCoveredVerse && typeof onSelectVerse === 'function' ? (
+              <button
+                type="button"
+                className="commentary-panel__control"
+                onClick={() => selectVerse(firstCoveredVerse)}
+              >
+                Read covered passage from verse {firstCoveredVerse}
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
-      {status === 'ready' && result?.truncated ? (
-        <div className="commentary-panel__callout commentary-panel__callout--incomplete" role="status">
-          More matching commentary is available than can be shown here.
+      {displayStatus === 'ready' && ownedResult?.truncated ? (
+        <div className="commentary-panel__callout commentary-panel__callout--truncated" role="status">
+          <p>More matching commentary is available than can be shown here.</p>
+          <div className="commentary-panel__next-actions">
+            {!verse && validVerses.length > 0 && typeof onSelectVerse === 'function' ? (
+              <button
+                type="button"
+                className="commentary-panel__control"
+                onClick={() => selectVerse(validVerses[0])}
+              >
+                Narrow commentary to verse {validVerses[0]}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="commentary-panel__control"
+              disabled={sources.length < 2}
+              onClick={chooseAnotherSource}
+            >
+              Choose another commentary source
+            </button>
+          </div>
         </div>
       ) : null}
 
-      {status === 'ready' && Array.isArray(result?.entries) && result.entries.length > 0 ? (
+      {displayStatus === 'ready' && Array.isArray(ownedResult?.entries) && ownedResult.entries.length > 0 ? (
         <div className="commentary-panel__library">
           <div className="commentary-panel__search">
             <label htmlFor={`${resolvedHeadingId}-search`}>Search this commentary</label>
@@ -462,8 +560,10 @@ export default function CommentaryPanel({
                 <EntryArticle
                   key={`${item.citation}-${index}`}
                   entry={item}
-                  availability={result.availability}
+                  availability={ownedResult.availability}
                   onCopy={copyText}
+                  searchMatched={Boolean(query)}
+                  source={ownedResult.source ?? selectedSource}
                 />
               ))}
             </div>
@@ -488,13 +588,15 @@ export default function CommentaryPanel({
       ) : null}
 
       <ExpandedCommentary
-        open={expanded}
+        open={expanded && Boolean(ownedResult)}
         title={title}
         entries={filteredEntries}
-        availability={result?.availability}
+        availability={ownedResult?.availability}
         onCopy={copyText}
         onClose={() => setExpanded(false)}
         openerRef={expandButtonRef}
+        searchMatched={Boolean(query)}
+        source={ownedResult?.source ?? selectedSource}
       />
     </section>
   )
