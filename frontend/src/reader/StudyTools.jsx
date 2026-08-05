@@ -604,6 +604,7 @@ export default function StudyTools({
   const panelId = useId()
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
+  const drawerOpenerRef = useRef(null)
   const normalizedReference = useMemo(
     () => normalizeStudyReference(reference),
     [reference],
@@ -619,19 +620,13 @@ export default function StudyTools({
     referenceKey,
   }))
 
-  useDialogFocus({
-    open,
-    containerRef: dialogRef,
-    initialRef: closeRef,
-    onClose,
-  })
-
   if (ownershipRef.current.lastReferenceKey !== referenceKey) {
     ownershipRef.current.lastReferenceKey = referenceKey
     ownershipRef.current.referenceChanged = true
   }
   const freshOpen = open && !wasOpenRef.current
   wasOpenRef.current = open
+  if (freshOpen) drawerOpenerRef.current = document.activeElement
   const referenceChanged = activeSelection.referenceKey !== referenceKey
   const preserveCommentary = referenceChanged && activeSelection.id === 'commentary' && !freshOpen
   const resetActiveTool = (referenceChanged && !preserveCommentary) || freshOpen
@@ -647,6 +642,23 @@ export default function StudyTools({
   const effectiveActiveToolId = resetActiveTool
     ? CONTEXT_TOOL.id
     : activeSelection.id
+  const commentaryDocked = effectiveActiveToolId === 'commentary'
+
+  const closeStudyTools = () => {
+    const restoreTarget = commentaryDocked ? drawerOpenerRef.current : null
+    if (typeof onClose === 'function') onClose()
+    if (restoreTarget instanceof HTMLElement && restoreTarget.isConnected) {
+      queueMicrotask(() => restoreTarget.focus())
+    }
+  }
+
+  useDialogFocus({
+    open: open && !commentaryDocked,
+    containerRef: dialogRef,
+    initialRef: closeRef,
+    onClose: closeStudyTools,
+    restoreFocus: !open || !commentaryDocked,
+  })
 
   useEffect(() => {
     if (preserveCommentary) {
@@ -688,13 +700,16 @@ export default function StudyTools({
   const navigationAvailable = typeof onNavigate === 'function'
 
   return (
-    <div className="study-tools" aria-hidden="false">
-      <div className="study-tools__backdrop" aria-hidden="true" />
+    <div
+      className={`study-tools${commentaryDocked ? ' study-tools--docked' : ''}`}
+      aria-hidden="false"
+    >
+      {!commentaryDocked ? <div className="study-tools__backdrop" aria-hidden="true" /> : null}
       <aside
         ref={dialogRef}
-        className="study-tools__dialog"
-        role="dialog"
-        aria-modal="true"
+        className={`study-tools__dialog${commentaryDocked ? ' study-tools__dialog--docked' : ''}`}
+        role={commentaryDocked ? 'complementary' : 'dialog'}
+        aria-modal={commentaryDocked ? undefined : 'true'}
         aria-labelledby={titleId}
         tabIndex={-1}
       >
@@ -709,9 +724,7 @@ export default function StudyTools({
             type="button"
             className="study-tools__control study-tools__close"
             aria-label="Close study tools"
-            onClick={() => {
-              if (typeof onClose === 'function') onClose()
-            }}
+            onClick={closeStudyTools}
           >
             <span aria-hidden="true">×</span>
           </button>

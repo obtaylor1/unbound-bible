@@ -816,6 +816,14 @@ button.scripture-pane__verse:focus-visible {
   overflow: hidden;
 }
 
+.study-tools--docked {
+  pointer-events: none;
+}
+
+.study-tools--docked .study-tools__backdrop {
+  display: none;
+}
+
 .study-tools__backdrop {
   position: absolute;
   inset: 0;
@@ -841,6 +849,10 @@ button.scripture-pane__verse:focus-visible {
   border-inline-start: 1px solid var(--reader-border);
   box-shadow: -1rem 0 3rem color-mix(in srgb, var(--reader-canvas) 72%, transparent);
   overscroll-behavior: contain;
+}
+
+.study-tools__dialog--docked {
+  pointer-events: auto;
 }
 
 .study-tools__drag-handle {
@@ -1762,6 +1774,11 @@ button.scripture-pane__verse:focus-visible {
     border-inline-start: 0;
     border-radius: 1rem 1rem 0 0;
     box-shadow: 0 -1rem 3rem color-mix(in srgb, var(--reader-canvas) 72%, transparent);
+  }
+
+  .study-tools__dialog--docked {
+    max-height: min(52dvh, 34rem);
+    pointer-events: auto;
   }
 
   .study-tools__drag-handle {

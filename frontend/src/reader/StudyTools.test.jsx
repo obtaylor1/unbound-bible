@@ -203,6 +203,13 @@ describe('StudyTools', () => {
     )
 
     await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    const dockedPanel = screen.getByRole('complementary', { name: 'Genesis 1:2' })
+    expect(screen.queryByRole('dialog', { name: 'Genesis 1:2' })).not.toBeInTheDocument()
+    expect(dockedPanel).not.toHaveAttribute('aria-modal')
+    expect(dockedPanel).toHaveClass('study-tools__dialog--docked')
+    expect(dockedPanel.closest('.study-tools')).toHaveClass('study-tools--docked')
+    expect(dockedPanel.previousElementSibling).toBeNull()
+    expect(document.body.style.overflow).toBe('')
     const commentaryRegion = screen.getByRole('region', { name: 'Genesis 1 commentary' })
     expect(commentaryRegion.getAttribute('aria-labelledby')).toMatch(/-commentary$/)
     expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
@@ -228,6 +235,39 @@ describe('StudyTools', () => {
     )
     expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('Commentary for Genesis 1:3')).toBeInTheDocument()
+  })
+
+  it('keeps docked Commentary keyboard accessible without trapping focus and safely restores modal mode', async () => {
+    const user = userEvent.setup()
+    render(
+      <>
+        <button type="button">Outside reader control</button>
+        <StudyTools
+          open
+          reference={reference}
+          verses={[1, 2]}
+          details={{ historical_context: 'Setting' }}
+          onClose={vi.fn()}
+          commentaryLoadSources={() => Promise.resolve([])}
+        />
+      </>,
+    )
+
+    const commentaryChoice = screen.getByRole('button', { name: 'Commentary' })
+    await user.click(commentaryChoice)
+    expect(commentaryChoice).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Close study tools' })).toBeVisible()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Compare translations' })).toHaveFocus()
+    const outsideControl = screen.getByRole('button', { name: 'Outside reader control' })
+    outsideControl.focus()
+    expect(fireEvent.keyDown(document, { key: 'Tab', cancelable: true })).toBe(true)
+    expect(outsideControl).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: 'Context' }))
+    expect(screen.getByRole('dialog', { name: 'Genesis 1:2' })).toHaveAttribute('aria-modal', 'true')
+    expect(screen.getByRole('button', { name: 'Close study tools' })).toHaveFocus()
+    expect(document.body.style.overflow).toBe('hidden')
   })
 
   it('calls route destinations with a normalized reference without changing the inline panel', async () => {
@@ -966,6 +1006,14 @@ describe('StudyTools', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(opener).toHaveFocus()
+
+    await user.click(opener)
+    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    expect(screen.getByRole('complementary')).toBeInTheDocument()
+    expect(document.body.style.overflow).toBe('')
+    await user.click(screen.getByRole('button', { name: 'Close study tools' }))
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
   })
 
   it('resets Context on reopen and reference changes but not details rerenders or route actions', async () => {
@@ -1029,5 +1077,23 @@ describe('StudyTools responsive styles', () => {
       .split('@media (prefers-reduced-motion: reduce)')[0]
     expect(studyToolsCss).not.toContain('!important')
     expect(studyToolsCss).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+  })
+
+  it('lets pointer input pass outside the docked Commentary panel at every viewport', () => {
+    expect(readerTokensCss).toMatch(
+      /\.study-tools--docked\s*\{[^}]*pointer-events:\s*none/i,
+    )
+    expect(readerTokensCss).toMatch(
+      /\.study-tools__dialog--docked\s*\{[^}]*pointer-events:\s*auto/i,
+    )
+    expect(readerTokensCss).toMatch(
+      /\.study-tools--docked\s+\.study-tools__backdrop\s*\{[^}]*display:\s*none/i,
+    )
+    expect(readerTokensCss).toMatch(
+      /@media\s*\(max-width:\s*767px\)[\s\S]*\.study-tools__dialog--docked\s*\{[^}]*pointer-events:\s*auto/i,
+    )
+    expect(readerTokensCss).toMatch(
+      /@media\s*\(max-width:\s*767px\)[\s\S]*\.study-tools__dialog--docked\s*\{[^}]*max-height:\s*min\(52dvh,\s*34rem\)/i,
+    )
   })
 })

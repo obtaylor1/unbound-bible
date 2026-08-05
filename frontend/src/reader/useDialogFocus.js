@@ -108,12 +108,15 @@ export default function useDialogFocus({
   initialRef,
   onClose,
   restoreRef,
+  restoreFocus = true,
 }) {
   const onCloseRef = useRef(onClose)
+  const restoreFocusRef = useRef(restoreFocus)
 
   useLayoutEffect(() => {
     onCloseRef.current = onClose
-  }, [onClose])
+    restoreFocusRef.current = restoreFocus
+  }, [onClose, restoreFocus])
 
   useEffect(() => {
     if (!open) return undefined
@@ -210,6 +213,16 @@ export default function useDialogFocus({
       dialogStack.forEach((activeToken) => {
         if (activeToken.parent === token) activeToken.parent = token.parent
       })
+
+      if (!restoreFocusRef.current) {
+        token.containerRef = null
+        token.opener = null
+        token.parent = null
+        token.restoreChain = []
+        token.restoreRef = null
+        token.restoreSnapshot = null
+        return
+      }
 
       if (!wasTopDialog) {
         token.containerRef = null

@@ -644,9 +644,15 @@ describe('ScriptureReaderPage', () => {
     getVerseDetails.mockClear()
     expect(screen.getByRole('status', { name: 'Commentary selection status' })).toBeEmptyDOMElement()
 
+    const pointerTargets = []
+    const recordPointerTarget = (event) => pointerTargets.push(event.target)
+    document.addEventListener('click', recordPointerTarget)
+    const secondVerse = screen.getByRole('button', { name: /Genesis 1 verse 2/ })
     await user.click(screen.getByRole('button', { name: /Genesis 1 verse 2/ }))
+    document.removeEventListener('click', recordPointerTarget)
 
-    expect(screen.getByRole('dialog', { name: 'Genesis 1:2' })).toBeInTheDocument()
+    expect(pointerTargets).toContain(secondVerse)
+    expect(screen.getByRole('complementary', { name: 'Genesis 1:2' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('Commentary for Genesis 1:2')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Genesis 1 verse 2/ })).toHaveAttribute('aria-pressed', 'true')
@@ -657,7 +663,7 @@ describe('ScriptureReaderPage', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Chapter overview' }))
     expect(window.location.hash).not.toContain('verse=')
-    expect(screen.getByRole('dialog', { name: 'Genesis 1' })).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: 'Genesis 1' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
     expect(getVerseDetails).not.toHaveBeenCalled()
   })
