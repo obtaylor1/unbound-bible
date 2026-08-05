@@ -19,7 +19,7 @@ describe('commentary API', () => {
   it('requests a verse with encoded source and reference and forwards the signal', async () => {
     const signal = new AbortController().signal
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      availability: 'no_entry', entries: [],
+      availability: 'no_entry', truncated: false, entries: [],
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -35,7 +35,7 @@ describe('commentary API', () => {
 
   it('omits verse from chapter requests', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      availability: 'no_entry', entries: [],
+      availability: 'no_entry', truncated: false, entries: [],
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -73,7 +73,7 @@ describe('commentary API', () => {
 
   it('accepts canonical base-10 coordinate strings', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      availability: 'available', entries: [],
+      availability: 'available', truncated: false, entries: [],
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -171,12 +171,15 @@ describe('commentary API', () => {
       })
   })
 
-  it('defaults an absent truncated flag to false', async () => {
+  it('rejects an absent truncated flag', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       availability: 'available', entries: [],
     })))
     await expect(getCommentaryEntries({ source: 'john-gill', book: 'Genesis', chapter: 1 }))
-      .resolves.toMatchObject({ truncated: false })
+      .rejects.toMatchObject({
+        name: 'CommentaryRequestError', message: 'Commentary response was invalid',
+        status: 200, code: 'invalid_commentary_response',
+      })
   })
 
   it.each([null, 0, 1, 'false', {}, []])('rejects a malformed truncated flag', async (truncated) => {
@@ -195,7 +198,7 @@ describe('commentary API', () => {
     [{ book: 'Genesis', chapter: 1 }, { book: 'Genesis', chapter: 1 }],
   ])('normalizes malformed reference fields', async (reference, expected) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
-      reference, availability: 'no_entry', entries: [],
+      reference, availability: 'no_entry', truncated: false, entries: [],
     })))
     const result = await getCommentaryEntries({ source: 'john-gill', book: 'Genesis', chapter: 1 })
     expect(result.reference).toEqual(expected)

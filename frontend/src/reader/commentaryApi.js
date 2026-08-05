@@ -199,15 +199,15 @@ export async function getCommentaryEntries({ source, book, chapter, verse } = {}
   const document = isRecord(payload) ? payload : {}
   if (!AVAILABILITY_STATES.has(document.availability)) throw invalidResponse()
   if (
-    Object.prototype.hasOwnProperty.call(document, 'truncated')
-    && typeof document.truncated !== 'boolean'
+    !Object.prototype.hasOwnProperty.call(document, 'truncated')
+    || typeof document.truncated !== 'boolean'
   ) {
     throw invalidResponse()
   }
   return {
     reference: normalizeReference(document.reference),
     availability: document.availability,
-    truncated: document.truncated ?? false,
+    truncated: document.truncated,
     source: normalizeSource(document.source),
     entries: Array.isArray(document.entries)
       ? document.entries.map(normalizeEntry).filter(Boolean)
