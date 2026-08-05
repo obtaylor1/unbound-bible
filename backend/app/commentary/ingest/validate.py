@@ -218,7 +218,7 @@ def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | N
     by_work = previous_coverage['by_work']
     if (
         type(books) is not int or type(chapters) is not int or type(entries) is not int
-        or books < 0 or chapters < 0 or entries < 0 or not isinstance(by_work, Mapping)
+        or books < 0 or chapters < 0 or entries <= 0 or not isinstance(by_work, Mapping)
     ):
         raise ValueError('previous_coverage must contain nonnegative exact integer counts.')
     work_chapters = 0
@@ -232,9 +232,8 @@ def _previous_entries(previous_coverage: Mapping[str, object] | None) -> int | N
         work_entry_count = work_coverage['entries']
         if (
             type(work_chapter_count) is not int or type(work_entry_count) is not int
-            or work_chapter_count < 0 or work_entry_count < 0
+            or work_chapter_count < 0 or work_entry_count <= 0
             or work_chapter_count > work_entry_count
-            or (work_entry_count == 0 and work_chapter_count != 0)
         ):
             raise ValueError('previous_coverage by_work counts are inconsistent.')
         work_chapters += work_chapter_count

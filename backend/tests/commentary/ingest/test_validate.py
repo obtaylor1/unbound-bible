@@ -108,16 +108,22 @@ def test_duplicate_ignores_position_and_range_boundaries_are_precise():
     assert 'duplicate_identity' in {f.code for f in repeated.findings}
 
 
-def test_adversarial_rows_are_validation_errors_not_crashes():
+def test_non_normalized_row_has_only_its_intended_blocker():
     from app.commentary.ingest.validate import validate_commentary
 
-    invalid = _row()
-    object.__setattr__(invalid, 'body', '   ')
-    result = validate_commentary([object(), invalid], {'genesis'})
+    result = validate_commentary([_row(), object()], {'genesis'})
 
-    assert result.error_count >= 2
-    assert 'invalid_row_type' in {finding.code for finding in result.findings}
-    assert 'unsafe_normalized_row' in {finding.code for finding in result.findings}
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'invalid_row_type'}
+
+
+def test_bypassed_normalized_row_has_only_its_intended_blocker():
+    from app.commentary.ingest.validate import validate_commentary
+
+    unsafe = _row(start=2, end=2, position=2)
+    object.__setattr__(unsafe, 'body', '   ')
+    result = validate_commentary([_intro(), unsafe], {'genesis'})
+
+    assert {finding.code for finding in result.findings if finding.severity == 'error'} == {'unsafe_normalized_row'}
 
 
 @pytest.mark.parametrize('expected', [set(), ['genesis'], {'Genesis'}, {True}, {'unknown'}])
@@ -156,6 +162,27 @@ def test_prior_full_coverage_mapping_is_accepted_for_regression_checks():
     prior = {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}}
 
     assert validate_commentary([_row()], {'genesis'}, prior).publishable
+
+
+def test_prior_full_coverage_rejects_zero_total_entries():
+    from app.commentary.ingest.validate import validate_commentary
+
+    with pytest.raises(ValueError, match='previous_coverage'):
+        validate_commentary([_row()], {'genesis'}, {'books': 0, 'chapters': 0, 'entries': 0, 'by_work': {}})
+
+
+def test_prior_full_coverage_rejects_zero_entry_work():
+    from app.commentary.ingest.validate import validate_commentary
+
+    previous = {
+        'books': 2, 'chapters': 1, 'entries': 2,
+        'by_work': {
+            'genesis': {'chapters': 0, 'entries': 0},
+            'exodus': {'chapters': 1, 'entries': 2},
+        },
+    }
+    with pytest.raises(ValueError, match='previous_coverage'):
+        validate_commentary([_row()], {'genesis'}, previous)
 
 
 @pytest.mark.parametrize('previous', [
