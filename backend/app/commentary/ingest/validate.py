@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,13 @@ _PUBLIC_DOMAIN_SPDX = 'LicenseRef-Public-Domain'
 _PUBLIC_DOMAIN_URL = 'https://creativecommons.org/publicdomain/mark/1.0/'
 _MAX_REGISTRY_BYTES = 256 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
+_REVIEWED_RECORD_FINGERPRINTS = {
+    'matthew-henry': '9c9260c8a9a350be9e13622bba29e090fa283e54b4015038ae77fb97baa0f91f',
+    'john-gill': '13f33d7294b7821d9dc9a01d3e651b26a6d41f4987af11d8bd08106db2938061',
+    'adam-clarke': '881eefc52f0d7d54efabf1c61623c79b1f4e164462f3042e0b1f2123d204f0e5',
+    'jamieson-fausset-brown': 'ef527311e9dc79b769a43f8c5d2e06ad021c7125d6c2d36367183f2dbb620773',
+    'keil-delitzsch': '8b4ab311ea1ab112f22d5f612be6858c12186c32cfa8b8f9612653cf148ba901',
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,20 +88,37 @@ def _finding_key(finding: ValidationFinding) -> tuple[object, ...]:
 
 
 def _freeze_coverage(coverage: Mapping[str, Any]) -> Mapping[str, Any]:
-    by_work = coverage.get('by_work')
-    if not isinstance(by_work, Mapping):
-        raise ValueError('coverage must contain by_work.')
+    if not isinstance(coverage, Mapping) or set(coverage) != {'books', 'chapters', 'entries', 'by_work'}:
+        raise ValueError('coverage must have exactly books, chapters, entries, and by_work.')
+    books, chapters, entries, by_work = (
+        coverage['books'], coverage['chapters'], coverage['entries'], coverage['by_work'],
+    )
+    if (
+        type(books) is not int or type(chapters) is not int or type(entries) is not int
+        or books < 0 or chapters < 0 or entries < 0 or not isinstance(by_work, Mapping)
+    ):
+        raise ValueError('coverage must contain nonnegative exact integer counts.')
     copied_by_work: dict[str, Mapping[str, int]] = {}
     for work_id, values in by_work.items():
-        if type(work_id) is not str or not isinstance(values, Mapping):
-            raise ValueError('coverage must contain valid by_work values.')
-        chapters, entries = values.get('chapters'), values.get('entries')
-        if type(chapters) is not int or type(entries) is not int or chapters < 0 or entries < 0:
-            raise ValueError('coverage must contain nonnegative counts.')
-        copied_by_work[work_id] = MappingProxyType({'chapters': chapters, 'entries': entries})
-    books, chapters, entries = coverage.get('books'), coverage.get('chapters'), coverage.get('entries')
-    if any(type(value) is not int or value < 0 for value in (books, chapters, entries)):
-        raise ValueError('coverage must contain nonnegative counts.')
+        if type(work_id) is not str or work_id not in _KNOWN_WORK_IDS:
+            raise ValueError('coverage by_work must use known canonical work IDs.')
+        if not isinstance(values, Mapping) or set(values) != {'chapters', 'entries'}:
+            raise ValueError('coverage by_work values must contain chapters and entries only.')
+        work_chapters, work_entries = values['chapters'], values['entries']
+        if (
+            type(work_chapters) is not int or type(work_entries) is not int
+            or work_chapters < 0 or work_entries <= 0 or work_chapters > work_entries
+        ):
+            raise ValueError('coverage by_work counts are inconsistent.')
+        copied_by_work[work_id] = MappingProxyType({'chapters': work_chapters, 'entries': work_entries})
+    if (
+        books != len(copied_by_work)
+        or chapters != sum(value['chapters'] for value in copied_by_work.values())
+        or entries != sum(value['entries'] for value in copied_by_work.values())
+        or chapters > entries
+        or (entries == 0 and (books != 0 or chapters != 0 or copied_by_work))
+    ):
+        raise ValueError('coverage totals must match by_work.')
     return MappingProxyType({
         'books': books, 'chapters': chapters, 'entries': entries,
         'by_work': MappingProxyType(copied_by_work),
@@ -449,6 +474,11 @@ def _metadata(source_id: str, value: object) -> SourceMetadata:
         raise ValueError('expected source books must be nonempty uppercase source IDs.')
     if len(codes) != len(set(codes)) or count != len(codes):
         raise ValueError('expected source book count must equal unique listed source IDs.')
+    fingerprint = sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')).hexdigest()
+    if fingerprint != _REVIEWED_RECORD_FINGERPRINTS[source_id]:
+        raise ValueError('registry does not match the reviewed source record.')
     return SourceMetadata(
         title, abbreviation, author, publication_period, tradition, language, attribution, upstream_url,
         license_spdx, license_url, license_basis, reviewed, checksum, count, tuple(codes),

@@ -247,6 +247,20 @@ def test_result_coverage_is_deeply_copied_and_immutable():
     assert validate_commentary([_row()], {'genesis'}).coverage['entries'] == 1
 
 
+@pytest.mark.parametrize('coverage', [
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'unknown': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1, 'extra': 1}}},
+    {'books': 2, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}},
+    {'books': 1, 'chapters': 2, 'entries': 1, 'by_work': {'genesis': {'chapters': 2, 'entries': 1}}},
+    {'books': 1, 'chapters': 1, 'entries': 1, 'by_work': {'genesis': {'chapters': 1, 'entries': 1}}, 'extra': 1},
+])
+def test_public_validation_result_rejects_nonsensical_coverage(coverage):
+    from app.commentary.ingest.validate import CommentaryValidationResult
+
+    with pytest.raises(ValueError, match='coverage'):
+        CommentaryValidationResult((), coverage)
+
+
 def test_source_registry_loads_exact_live_catalog_in_stable_order():
     from app.commentary.ingest.validate import load_source_registry
 
@@ -312,6 +326,19 @@ def test_source_registry_rejects_hostile_metadata(tmp_path, mutator):
     from app.commentary.ingest.validate import load_source_registry
 
     with pytest.raises(ValueError):
+        load_source_registry(_raw_registry(tmp_path, mutator(REGISTRY.read_text(encoding='utf-8'))))
+
+
+@pytest.mark.parametrize('mutator', [
+    lambda text: text.replace('Matthew Henry Bible Commentary', 'Tampered Commentary', 1),
+    lambda text: text.replace('https://bible.helloao.org/api/c/matthew-henry/books.json', 'https://evil.example/api/c/matthew-henry/books.json', 1),
+    lambda text: text.replace('https://bible.helloao.org/api/c/matthew-henry/books.json', 'https://bible.helloao.org/api/c/john-gill/books.json', 1),
+    lambda text: text.replace('"GEN",', '"ZZZ",', 1),
+])
+def test_source_registry_rejects_any_reviewed_record_tampering(tmp_path, mutator):
+    from app.commentary.ingest.validate import load_source_registry
+
+    with pytest.raises(ValueError, match='reviewed source record'):
         load_source_registry(_raw_registry(tmp_path, mutator(REGISTRY.read_text(encoding='utf-8'))))
 
 
