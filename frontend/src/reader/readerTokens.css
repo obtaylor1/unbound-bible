@@ -1161,7 +1161,7 @@ button.scripture-pane__verse:focus-visible {
 .commentary-panel__eyebrow {
   margin: 0 0 0.45rem;
   color: var(--reader-gold);
-  font-size: 0.72rem;
+  font-size: 0.875rem;
   font-weight: 850;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -1234,7 +1234,7 @@ button.scripture-pane__verse:focus-visible {
   margin-top: 0.18rem;
   color: var(--reader-gold);
   content: 'Selected';
-  font-size: 0.64rem;
+  font-size: 0.875rem;
   font-weight: 850;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1300,7 +1300,7 @@ button.scripture-pane__verse:focus-visible {
 .commentary-panel__source-card dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 0.82rem;
+  font-size: 0.875rem;
   line-height: 1.45;
 }
 
@@ -1323,7 +1323,7 @@ button.scripture-pane__verse:focus-visible {
 
 .commentary-panel__verse-nav span {
   color: var(--reader-secondary);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
   font-weight: 750;
   text-align: center;
@@ -1421,7 +1421,7 @@ button.scripture-pane__verse:focus-visible {
 
 .commentary-panel__search > span {
   color: var(--reader-secondary);
-  font-size: 0.78rem;
+  font-size: 0.875rem;
 }
 
 .commentary-panel__entries,
@@ -1479,7 +1479,7 @@ button.scripture-pane__verse:focus-visible {
   overflow-wrap: anywhere;
   color: var(--reader-text);
   border-bottom: 1px solid var(--reader-border);
-  font-size: 0.84rem;
+  font-size: 0.875rem;
   line-height: 1.35;
 }
 
@@ -1494,7 +1494,7 @@ button.scripture-pane__verse:focus-visible {
   background: var(--reader-elevated);
   border: 1px solid var(--reader-gold);
   border-radius: 0.35rem;
-  font-size: 0.7rem;
+  font-size: 0.875rem;
   font-weight: 850;
 }
 
@@ -1512,7 +1512,7 @@ button.scripture-pane__verse:focus-visible {
   background: color-mix(in srgb, var(--reader-teal) 18%, var(--reader-elevated));
   border: 1px solid var(--reader-teal);
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.875rem;
   font-weight: 800;
 }
 
@@ -1546,7 +1546,7 @@ button.scripture-pane__verse:focus-visible {
 .commentary-panel__citation cite {
   overflow-wrap: anywhere;
   color: var(--reader-secondary);
-  font-size: 0.78rem;
+  font-size: 0.875rem;
   line-height: 1.5;
 }
 
@@ -1558,7 +1558,7 @@ button.scripture-pane__verse:focus-visible {
 
 .commentary-panel__quiet-action {
   padding-inline: 0.55rem;
-  font-size: 0.78rem;
+  font-size: 0.875rem;
 }
 
 .commentary-panel__expanded-layer {

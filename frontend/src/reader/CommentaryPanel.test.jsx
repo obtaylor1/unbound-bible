@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { useState } from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -230,8 +230,12 @@ describe('CommentaryPanel requests and navigation', () => {
     await waitFor(() => expect(requests).toHaveLength(2))
     requests[1].resolve(result({ entries: [entry({ body: 'New verse response' })] }))
     expect(await screen.findByText('New verse response')).toBeVisible()
-    requests[0].resolve(result({ entries: [entry({ body: 'Stale chapter response' })] }))
-    await waitFor(() => expect(screen.queryByText('Stale chapter response')).not.toBeInTheDocument())
+    await act(async () => {
+      requests[0].resolve(result({ entries: [entry({ body: 'Stale chapter response' })] }))
+      await requests[0].promise
+    })
+    expect(screen.getByText('New verse response')).toBeVisible()
+    expect(screen.queryByText('Stale chapter response')).not.toBeInTheDocument()
   })
 
   it('immediately removes owned entries and an expanded dialog when the reference changes', async () => {
@@ -276,6 +280,87 @@ describe('CommentaryPanel requests and navigation', () => {
     expect(screen.queryByText('John Gill owned note')).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Expand commentary reading view' })).not.toBeInTheDocument()
+  })
+
+  it('never shows an error owned by an old reference or source', async () => {
+    const user = userEvent.setup()
+    const delayedReference = deferred()
+    const delayedSource = deferred()
+    const loadSources = vi.fn().mockResolvedValue(sources)
+    const loadEntries = vi.fn()
+      .mockRejectedValueOnce(new Error('old request'))
+      .mockReturnValueOnce(delayedReference.promise)
+      .mockRejectedValueOnce(new Error('old source'))
+      .mockReturnValueOnce(delayedSource.promise)
+    const view = renderPanel({ loadSources, loadEntries })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Commentary could not be loaded')
+
+    view.rerender(
+      <CommentaryPanel
+        headingId="commentary-heading"
+        reference={{ book: 'Exodus', chapter: 2 }}
+        verses={[1]}
+        loadSources={loadSources}
+        loadEntries={loadEntries}
+      />,
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText(/Loading commentary for Exodus 2/)).toBeVisible()
+
+    await act(async () => {
+      delayedReference.resolve(result())
+      await delayedReference.promise
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Expand commentary reading view' })).toBeVisible())
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Commentary source' }), 'matthew-henry')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Commentary could not be loaded')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Commentary source' }), 'john-gill')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText(/Loading commentary for Exodus 2/)).toBeVisible()
+  })
+
+  it('implements labelled controlled tabpanels and keyboard tab activation', async () => {
+    const user = userEvent.setup()
+    const onSelectVerse = vi.fn()
+    renderPanel({
+      reference: { book: 'Genesis', chapter: 1, verse: 2 },
+      onSelectVerse,
+    })
+    const overview = await screen.findByRole('tab', { name: 'Chapter overview' })
+    const selected = screen.getByRole('tab', { name: 'Selected verse' })
+    const panel = screen.getByRole('tabpanel')
+    expect(selected).toHaveAttribute('tabindex', '0')
+    expect(overview).toHaveAttribute('tabindex', '-1')
+    expect(selected).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toHaveAttribute('aria-labelledby', selected.id)
+    const overviewPanel = document.getElementById(overview.getAttribute('aria-controls'))
+    expect(overviewPanel).toHaveAttribute('role', 'tabpanel')
+    expect(overviewPanel).toHaveAttribute('hidden')
+
+    selected.focus()
+    await user.keyboard('{End}')
+    expect(onSelectVerse).not.toHaveBeenCalled()
+    await user.keyboard('{Home}')
+    expect(onSelectVerse).toHaveBeenCalledWith(null)
+  })
+
+  it('moves between enabled tabs with ArrowLeft and ArrowRight', async () => {
+    const user = userEvent.setup()
+    const onSelectVerse = vi.fn()
+    renderPanel({
+      reference: { book: 'Genesis', chapter: 1, verse: 2 },
+      onSelectVerse,
+    })
+    const overview = await screen.findByRole('tab', { name: 'Chapter overview' })
+    const selected = screen.getByRole('tab', { name: 'Selected verse' })
+    selected.focus()
+    await user.keyboard('{ArrowLeft}')
+    expect(overview).toHaveFocus()
+    expect(onSelectVerse).toHaveBeenLastCalledWith(null)
+    const calls = onSelectVerse.mock.calls.length
+    await user.keyboard('{ArrowRight}')
+    expect(selected).toHaveFocus()
+    expect(onSelectVerse).toHaveBeenCalledTimes(calls)
   })
 })
 
@@ -448,6 +533,21 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(screen.getByRole('status', { name: 'Copy status' })).toHaveTextContent('Citation could not be copied')
   })
 
+  it('replaces the live status node when an identical copy outcome repeats', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    renderPanel()
+    const copy = await screen.findByRole('button', { name: 'Copy commentary text' })
+    await user.click(copy)
+    const firstAnnouncement = screen.getByRole('status', { name: 'Copy status' })
+    await user.click(copy)
+    const secondAnnouncement = screen.getByRole('status', { name: 'Copy status' })
+    expect(secondAnnouncement).not.toBe(firstAnnouncement)
+    expect(secondAnnouncement).toHaveTextContent('Commentary text copied')
+    expect(writeText).toHaveBeenCalledTimes(2)
+  })
+
   it('opens an accessible expanded dialog, repeats filtered articles, and restores focus when closed', async () => {
     const user = userEvent.setup()
     renderPanel()
@@ -456,6 +556,7 @@ describe('CommentaryPanel availability and reading tools', () => {
     await user.click(open)
 
     const dialog = screen.getByRole('dialog', { name: 'Expanded Genesis 1 commentary' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(within(dialog).getByText('The first verse establishes God as the author of creation.')).toBeVisible()
     const close = within(dialog).getByRole('button', { name: 'Close expanded commentary' })
     expect(close).toHaveFocus()
@@ -508,5 +609,8 @@ describe('CommentaryPanel presentation contract', () => {
     expect(readerTokensCss).toMatch(/\.commentary-panel__tab\[aria-selected='true'\]\s*\{[^}]*box-shadow:\s*inset\s+0\s+-3px\s+0\s+var\(--reader-gold\)/i)
     expect(readerTokensCss).toMatch(/@media\s*\(max-width:\s*767px\)[\s\S]*\.commentary-panel\s*\{[^}]*env\(safe-area-inset-bottom\)/i)
     expect(readerTokensCss).toMatch(/\.commentary-panel__expanded\s*\{[^}]*overflow-x:\s*hidden/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__eyebrow\s*\{[^}]*font-size:\s*0\.875rem/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__citation cite\s*\{[^}]*font-size:\s*0\.875rem/i)
+    expect(readerTokensCss).toMatch(/\.commentary-panel__quiet-action\s*\{[^}]*font-size:\s*0\.875rem/i)
   })
 })

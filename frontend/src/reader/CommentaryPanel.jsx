@@ -118,6 +118,8 @@ function ExpandedCommentary({ open, title, entries, availability, onCopy, onClos
         ref={dialogRef}
         open
         className="commentary-panel__expanded"
+        role="dialog"
+        aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
       >
@@ -161,6 +163,7 @@ export default function CommentaryPanel({
   loadEntries = getCommentaryEntries,
 }) {
   const generatedHeadingId = useId()
+  const tabIds = useId()
   const resolvedHeadingId = headingId || generatedHeadingId
   const normalizedReference = safeReference(reference)
   const { book, chapter, verse } = normalizedReference
@@ -173,13 +176,15 @@ export default function CommentaryPanel({
   const [result, setResult] = useState(null)
   const [resultOwnership, setResultOwnership] = useState('')
   const [status, setStatus] = useState('idle')
-  const [error, setError] = useState(null)
+  const [errorOwnership, setErrorOwnership] = useState('')
   const [requestRetry, setRequestRetry] = useState(0)
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState(false)
-  const [copyStatus, setCopyStatus] = useState('')
+  const [copyNotice, setCopyNotice] = useState({ message: '', revision: 0 })
   const requestGeneration = useRef(0)
   const expandButtonRef = useRef(null)
+  const overviewTabRef = useRef(null)
+  const verseTabRef = useRef(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -220,7 +225,7 @@ export default function CommentaryPanel({
     const controller = new AbortController()
     const generation = ++requestGeneration.current
     setStatus('loading')
-    setError(null)
+    setErrorOwnership('')
     const request = { source: sourceId, book, chapter }
     if (verse) request.verse = verse
     Promise.resolve().then(() => loadEntries(request, controller.signal))
@@ -228,6 +233,7 @@ export default function CommentaryPanel({
         if (generation !== requestGeneration.current || controller.signal.aborted) return
         setResult(nextResult)
         setResultOwnership(requestOwnership)
+        setErrorOwnership('')
         setStatus('ready')
       })
       .catch((nextError) => {
@@ -238,7 +244,7 @@ export default function CommentaryPanel({
         ) return
         setResult(null)
         setResultOwnership('')
-        setError(nextError)
+        setErrorOwnership(requestOwnership)
         setStatus('error')
       })
     return () => controller.abort()
@@ -246,6 +252,9 @@ export default function CommentaryPanel({
 
   useEffect(() => {
     setExpanded(false)
+    setCopyNotice((current) => current.message
+      ? { message: '', revision: current.revision + 1 }
+      : current)
   }, [requestOwnership])
 
   const validVerses = useMemo(() => positiveVerseList(verses), [verses])
@@ -261,9 +270,14 @@ export default function CommentaryPanel({
         : validVerses.find((candidate) => candidate > verse))
     : null
   const ownedResult = resultOwnership === requestOwnership ? result : null
-  const displayStatus = sourceId && resultOwnership !== requestOwnership && status !== 'error'
-    ? 'loading'
-    : status
+  const ownsError = status === 'error' && errorOwnership === requestOwnership
+  const displayStatus = ownsError
+    ? 'error'
+    : resultOwnership === requestOwnership
+      ? status
+      : sourceId
+        ? 'loading'
+        : status
   const selectedSource = sources.find(({ id }) => id === sourceId) ?? ownedResult?.source ?? null
   const normalizedQuery = query.toLocaleLowerCase()
   const filteredEntries = (Array.isArray(ownedResult?.entries) ? ownedResult.entries : [])
@@ -291,9 +305,15 @@ export default function CommentaryPanel({
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
       await navigator.clipboard.writeText(String(text))
-      setCopyStatus(`${label} copied`)
+      setCopyNotice((current) => ({
+        message: `${label} copied`,
+        revision: current.revision + 1,
+      }))
     } catch {
-      setCopyStatus(`${label} could not be copied`)
+      setCopyNotice((current) => ({
+        message: `${label} could not be copied`,
+        revision: current.revision + 1,
+      }))
     }
   }
 
@@ -304,6 +324,27 @@ export default function CommentaryPanel({
   const firstCoveredVerse = filteredEntries
     .map((item) => item?.scope?.verse_start)
     .find((candidate) => validVerses.includes(candidate))
+  const overviewTabId = `${tabIds}-overview-tab`
+  const verseTabId = `${tabIds}-verse-tab`
+  const activePanelId = `${tabIds}-${verse ? 'verse' : 'overview'}-panel`
+  const activeTabId = verse ? verseTabId : overviewTabId
+  const inactivePanelId = `${tabIds}-${verse ? 'overview' : 'verse'}-panel`
+  const inactiveTabId = verse ? overviewTabId : verseTabId
+
+  const handleTabKeyDown = (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    const activeIndex = verse ? 1 : 0
+    const focusedIndex = event.currentTarget === verseTabRef.current ? 1 : 0
+    let targetIndex = focusedIndex
+    if (event.key === 'Home') targetIndex = 0
+    else if (event.key === 'End') targetIndex = verse ? 1 : 0
+    else if (event.key === 'ArrowLeft') targetIndex = focusedIndex === 0 ? (verse ? 1 : 0) : 0
+    else if (event.key === 'ArrowRight') targetIndex = focusedIndex === 1 ? 0 : (verse ? 1 : 0)
+    event.preventDefault()
+    const target = targetIndex === 0 ? overviewTabRef.current : verseTabRef.current
+    target?.focus()
+    if (targetIndex !== activeIndex) selectVerse(targetIndex === 0 ? null : verse)
+  }
 
   return (
     <section
@@ -332,24 +373,48 @@ export default function CommentaryPanel({
 
       <div className="commentary-panel__tabs" role="tablist" aria-label="Commentary scope">
         <button
+          ref={overviewTabRef}
+          id={overviewTabId}
           type="button"
           role="tab"
           className="commentary-panel__control commentary-panel__tab"
           aria-selected={!verse}
+          aria-controls={`${tabIds}-overview-panel`}
+          tabIndex={verse ? -1 : 0}
+          onKeyDown={handleTabKeyDown}
           onClick={() => selectVerse(null)}
         >
           Chapter overview
         </button>
         <button
+          ref={verseTabRef}
+          id={verseTabId}
           type="button"
           role="tab"
           className="commentary-panel__control commentary-panel__tab"
           aria-selected={Boolean(verse)}
+          aria-controls={`${tabIds}-verse-panel`}
+          tabIndex={verse ? 0 : -1}
+          onKeyDown={handleTabKeyDown}
           disabled={!verse}
         >
           Selected verse
         </button>
       </div>
+
+      <div
+        id={inactivePanelId}
+        role="tabpanel"
+        aria-labelledby={inactiveTabId}
+        hidden
+      />
+      <div
+        id={activePanelId}
+        className="commentary-panel__tabpanel"
+        role="tabpanel"
+        aria-labelledby={activeTabId}
+        tabIndex={0}
+      >
 
       {sourceStatus === 'error' ? (
         <div className="commentary-panel__callout commentary-panel__callout--error" role="alert">
@@ -445,7 +510,6 @@ export default function CommentaryPanel({
           >
             Retry loading commentary
           </button>
-          <span className="commentary-panel__visually-hidden">{error ? 'A request error occurred.' : ''}</span>
         </div>
       ) : null}
 
@@ -575,17 +639,19 @@ export default function CommentaryPanel({
         </div>
       ) : null}
 
-      {copyStatus ? (
+      {copyNotice.message ? (
         <p
+          key={copyNotice.revision}
           className="commentary-panel__visually-hidden"
           role="status"
           aria-label="Copy status"
           aria-live="polite"
           aria-atomic="true"
         >
-          {copyStatus}
+          {copyNotice.message}
         </p>
       ) : null}
+      </div>
 
       <ExpandedCommentary
         open={expanded && Boolean(ownedResult)}
