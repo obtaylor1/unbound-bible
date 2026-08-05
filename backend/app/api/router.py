@@ -9,6 +9,7 @@ from app.notifications.router import router as notifications_router
 from app.community.router import router as community_router
 from app.sermons.router import router as sermon_router
 from app.library.router import router as library_router
+from app.commentary.router import router as commentary_router
 
 
 api_router = APIRouter()
@@ -21,6 +22,7 @@ api_router.include_router(notifications_router)
 api_router.include_router(community_router)
 api_router.include_router(sermon_router)
 api_router.include_router(library_router)
+api_router.include_router(commentary_router)
 
 
 @api_router.get("/health", tags=["system"])
