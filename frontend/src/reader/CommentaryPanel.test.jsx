@@ -602,6 +602,24 @@ describe('CommentaryPanel availability and reading tools', () => {
     )
   })
 
+  it('does not move an old copy announcement between the base panel and modal', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    renderPanel()
+    await user.click(await screen.findByRole('button', { name: 'Copy commentary text' }))
+    expect(screen.getByRole('status', { name: 'Copy status' })).toHaveTextContent('Commentary text copied')
+
+    await user.click(screen.getByRole('button', { name: 'Expand commentary reading view' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Copy commentary citation' }))
+    expect(within(dialog).getByRole('status', { name: 'Copy status' })).toHaveTextContent('Citation copied')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close expanded commentary' }))
+    expect(screen.queryByRole('status', { name: 'Copy status' })).not.toBeInTheDocument()
+  })
+
   it('preserves body paragraphs, omits absent headings, and identifies the source on every article', async () => {
     renderPanel({ loadEntries: vi.fn().mockResolvedValue(result({ entries: [entry({ heading: '', body: 'First paragraph.\n\nSecond paragraph.' })] })) })
     const article = await screen.findByRole('article')

@@ -53,7 +53,7 @@ function paragraphs(body) {
     .filter(Boolean)
 }
 
-function EntryArticle({ entry, availability, onCopy, searchMatched, source }) {
+function EntryArticle({ entry, availability, onCopy, searchMatched, source, surface = 'base' }) {
   const range = scopeLabel(entry, availability)
   return (
     <article className={`commentary-panel__entry${searchMatched ? ' commentary-panel__entry--search-match' : ''}`}>
@@ -80,14 +80,14 @@ function EntryArticle({ entry, availability, onCopy, searchMatched, source }) {
           <button
             type="button"
             className="commentary-panel__control commentary-panel__quiet-action"
-            onClick={() => onCopy(entry.body, 'Commentary text')}
+            onClick={() => onCopy(entry.body, 'Commentary text', surface)}
           >
             Copy commentary text
           </button>
           <button
             type="button"
             className="commentary-panel__control commentary-panel__quiet-action"
-            onClick={() => onCopy(entry.citation, 'Citation')}
+            onClick={() => onCopy(entry.citation, 'Citation', surface)}
           >
             Copy commentary citation
           </button>
@@ -157,10 +157,11 @@ function ExpandedCommentary({
               onCopy={onCopy}
               searchMatched={searchMatched}
               source={source}
+              surface="modal"
             />
           ))}
         </div>
-        {copyNotice.message ? (
+        {copyNotice.message && copyNotice.surface === 'modal' ? (
           <p
             key={copyNotice.revision}
             className="commentary-panel__visually-hidden"
@@ -203,7 +204,7 @@ export default function CommentaryPanel({
   const [requestRetry, setRequestRetry] = useState(0)
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState(false)
-  const [copyNotice, setCopyNotice] = useState({ message: '', revision: 0 })
+  const [copyNotice, setCopyNotice] = useState({ message: '', revision: 0, surface: null })
   const requestGeneration = useRef(0)
   const expandButtonRef = useRef(null)
   const overviewTabRef = useRef(null)
@@ -276,7 +277,7 @@ export default function CommentaryPanel({
   useEffect(() => {
     setExpanded(false)
     setCopyNotice((current) => current.message
-      ? { message: '', revision: current.revision + 1 }
+      ? { message: '', revision: current.revision + 1, surface: null }
       : current)
   }, [requestOwnership])
 
@@ -324,18 +325,20 @@ export default function CommentaryPanel({
     chooseSource(sources[(index + 1) % sources.length].id)
   }
 
-  const copyText = async (text, label) => {
+  const copyText = async (text, label, surface = 'base') => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
       await navigator.clipboard.writeText(String(text))
       setCopyNotice((current) => ({
         message: `${label} copied`,
         revision: current.revision + 1,
+        surface,
       }))
     } catch {
       setCopyNotice((current) => ({
         message: `${label} could not be copied`,
         revision: current.revision + 1,
+        surface,
       }))
     }
   }
@@ -652,6 +655,7 @@ export default function CommentaryPanel({
                   onCopy={copyText}
                   searchMatched={Boolean(query)}
                   source={ownedResult.source ?? selectedSource}
+                  surface="base"
                 />
               ))}
             </div>
@@ -663,7 +667,7 @@ export default function CommentaryPanel({
         </div>
       ) : null}
 
-      {copyNotice.message && !expandedOpen ? (
+      {copyNotice.message && copyNotice.surface === 'base' && !expandedOpen ? (
         <p
           key={copyNotice.revision}
           className="commentary-panel__visually-hidden"
