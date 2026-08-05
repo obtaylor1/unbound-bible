@@ -97,7 +97,18 @@ function EntryArticle({ entry, availability, onCopy, searchMatched, source }) {
   )
 }
 
-function ExpandedCommentary({ open, title, entries, availability, onCopy, onClose, openerRef, searchMatched, source }) {
+function ExpandedCommentary({
+  open,
+  title,
+  entries,
+  availability,
+  onCopy,
+  onClose,
+  openerRef,
+  searchMatched,
+  source,
+  copyNotice,
+}) {
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
   const titleId = useId()
@@ -149,6 +160,18 @@ function ExpandedCommentary({ open, title, entries, availability, onCopy, onClos
             />
           ))}
         </div>
+        {copyNotice.message ? (
+          <p
+            key={copyNotice.revision}
+            className="commentary-panel__visually-hidden"
+            role="status"
+            aria-label="Copy status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {copyNotice.message}
+          </p>
+        ) : null}
       </dialog>
     </div>
   )
@@ -330,6 +353,7 @@ export default function CommentaryPanel({
   const activeTabId = verse ? verseTabId : overviewTabId
   const inactivePanelId = `${tabIds}-${verse ? 'overview' : 'verse'}-panel`
   const inactiveTabId = verse ? overviewTabId : verseTabId
+  const expandedOpen = expanded && Boolean(ownedResult)
 
   const handleTabKeyDown = (event) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -639,7 +663,7 @@ export default function CommentaryPanel({
         </div>
       ) : null}
 
-      {copyNotice.message ? (
+      {copyNotice.message && !expandedOpen ? (
         <p
           key={copyNotice.revision}
           className="commentary-panel__visually-hidden"
@@ -654,7 +678,7 @@ export default function CommentaryPanel({
       </div>
 
       <ExpandedCommentary
-        open={expanded && Boolean(ownedResult)}
+        open={expandedOpen}
         title={title}
         entries={filteredEntries}
         availability={ownedResult?.availability}
@@ -663,6 +687,7 @@ export default function CommentaryPanel({
         openerRef={expandButtonRef}
         searchMatched={Boolean(query)}
         source={ownedResult?.source ?? selectedSource}
+        copyNotice={copyNotice}
       />
     </section>
   )

@@ -576,6 +576,32 @@ describe('CommentaryPanel availability and reading tools', () => {
     expect(open).toHaveFocus()
   })
 
+  it('announces success, failure, and repeated copy outcomes inside the modal dialog only', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    renderPanel()
+    await user.click(await screen.findByRole('button', { name: 'Expand commentary reading view' }))
+    const dialog = screen.getByRole('dialog')
+    const dialogCopy = within(dialog).getByRole('button', { name: 'Copy commentary text' })
+
+    await user.click(dialogCopy)
+    const first = within(dialog).getByRole('status', { name: 'Copy status' })
+    expect(first).toHaveTextContent('Commentary text copied')
+    expect(screen.getAllByRole('status', { name: 'Copy status' })).toHaveLength(1)
+    await user.click(dialogCopy)
+    const second = within(dialog).getByRole('status', { name: 'Copy status' })
+    expect(second).not.toBe(first)
+    expect(second).toHaveTextContent('Commentary text copied')
+    await user.click(dialogCopy)
+    expect(within(dialog).getByRole('status', { name: 'Copy status' })).toHaveTextContent(
+      'Commentary text could not be copied',
+    )
+  })
+
   it('preserves body paragraphs, omits absent headings, and identifies the source on every article', async () => {
     renderPanel({ loadEntries: vi.fn().mockResolvedValue(result({ entries: [entry({ heading: '', body: 'First paragraph.\n\nSecond paragraph.' })] })) })
     const article = await screen.findByRole('article')
