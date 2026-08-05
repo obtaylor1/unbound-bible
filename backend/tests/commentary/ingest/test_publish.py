@@ -1,8 +1,11 @@
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.commentary.ingest.types import NormalizedCommentaryEntry
 from app.commentary.models import (
@@ -13,6 +16,8 @@ from app.commentary.models import (
     CommentaryValidationFinding,
     StagedCommentaryEntry,
 )
+from app.database import Base, ensure_sqlite_foreign_keys
+from app.library.seed import seed_ethiopian_canon
 
 
 def _row(*, body='Commentary text.', position=0, start=1):
@@ -221,9 +226,40 @@ def test_publish_copies_exact_rows_coverage_and_checksum(commentary_session, com
     assert edition.source_checksum == run.source_checksum
     assert edition.record_count == 2
     assert edition.coverage == run.metadata_snapshot['coverage']
-    assert [(entry.body, entry.position, entry.row_checksum) for entry in entries] == [
-        (row.body, row.position, row.row_checksum) for row in rows
+    assert [(
+        entry.work_id, entry.chapter, entry.verse_start, entry.verse_end,
+        entry.entry_type, entry.heading, entry.body, entry.source_locator,
+        entry.position, entry.row_checksum,
+    ) for entry in entries] == [(
+        row.work_id, row.chapter, row.verse_start, row.verse_end,
+        row.entry_type, row.heading, row.body, row.source_locator,
+        row.position, row.row_checksum,
+    ) for row in rows
     ]
+
+
+@pytest.mark.parametrize('finish', ['close', 'rollback'])
+def test_publish_is_rolled_back_when_fresh_caller_does_not_commit(
+    commentary_session, commentary_source, finish,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    commentary_session.commit()
+    factory = sessionmaker(bind=commentary_session.bind, autoflush=False, expire_on_commit=False)
+
+    caller = factory()
+    try:
+        publish_run(caller, run.id)
+        if finish == 'rollback':
+            caller.rollback()
+    finally:
+        caller.close()
+
+    with factory() as observer:
+        assert observer.scalar(select(CommentaryPublication)) is None
+        assert observer.scalar(select(CommentaryEdition)) is None
+        assert observer.get(CommentaryImportRun, run.id).status == 'verified'
 
 
 def test_publish_switches_active_publication_and_versions_monotonically(
@@ -327,6 +363,39 @@ def test_publish_failure_rolls_back_its_savepoint_and_preserves_previous_active(
     assert commentary_session.scalar(select(func.count()).select_from(CommentaryEdition)) == 1
 
 
+def test_failure_after_deactivation_restores_every_publication_write(
+    commentary_session, commentary_source, monkeypatch,
+):
+    import app.commentary.ingest.publish as publisher
+
+    previous = publisher.publish_run(
+        commentary_session, _verified(commentary_session, commentary_source).id
+    )
+    run = _verified(
+        commentary_session, commentary_source, [_row(body='Replacement.')], dataset_version='v2'
+    )
+    original_flush = commentary_session.flush
+
+    def fail_final_flush(objects=None):
+        pending_publication = any(
+            isinstance(item, CommentaryPublication) and item.id is None
+            for item in commentary_session.new
+        )
+        if previous.active is False and pending_publication:
+            raise RuntimeError('injected final publication failure')
+        return original_flush(objects)
+
+    monkeypatch.setattr(commentary_session, 'flush', fail_final_flush)
+    with pytest.raises(RuntimeError, match='final publication'):
+        publisher.publish_run(commentary_session, run.id)
+
+    commentary_session.expire_all()
+    assert commentary_session.get(CommentaryPublication, previous.id).active is True
+    assert commentary_session.get(CommentaryImportRun, run.id).status == 'verified'
+    assert commentary_session.scalar(select(func.count()).select_from(CommentaryEdition)) == 1
+    assert commentary_session.scalar(select(func.count()).select_from(CommentaryEntry)) == 1
+
+
 def test_database_constraints_protect_against_duplicate_active_or_version(
     commentary_session, commentary_source,
 ):
@@ -367,6 +436,127 @@ def test_rollback_creates_new_active_version_for_selected_prior_edition(
     assert commentary_session.scalar(select(func.count()).select_from(CommentaryEdition)) == 2
     assert commentary_session.get(CommentaryEdition, previous.edition_id).status == 'published'
     assert commentary_session.get(CommentaryEdition, current.edition_id).status == 'published'
+
+
+@pytest.mark.parametrize('finish', ['close', 'rollback'])
+def test_rollback_is_rolled_back_when_fresh_caller_does_not_commit(
+    commentary_session, commentary_source, finish,
+):
+    from app.commentary.ingest.publish import publish_run, rollback_publication
+
+    publish_run(commentary_session, _verified(commentary_session, commentary_source).id)
+    current = publish_run(
+        commentary_session,
+        _verified(commentary_session, commentary_source, [_row(body='Current.')]).id,
+    )
+    commentary_session.commit()
+    factory = sessionmaker(bind=commentary_session.bind, autoflush=False, expire_on_commit=False)
+
+    caller = factory()
+    try:
+        rollback_publication(caller, current.id)
+        if finish == 'rollback':
+            caller.rollback()
+    finally:
+        caller.close()
+
+    with factory() as observer:
+        active = observer.scalar(select(CommentaryPublication).where(
+            CommentaryPublication.active.is_(True)
+        ))
+        assert active.id == current.id
+        assert observer.scalar(select(func.count()).select_from(CommentaryPublication)) == 2
+
+
+def _race_database(tmp_path):
+    path = tmp_path / 'commentary-race.db'
+    engine = create_engine(
+        f'sqlite:///{path}',
+        connect_args={'check_same_thread': False, 'timeout': 15},
+    )
+    ensure_sqlite_foreign_keys(engine)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with factory() as session:
+        seed_ethiopian_canon(session)
+        from app.commentary.models import CommentarySource
+        session.add(CommentarySource(
+            id='race-source', title='Race Source', abbreviation='RS', author='Author',
+            publication_period='1900', tradition='Test', language='eng',
+            license_spdx='LicenseRef-Public-Domain',
+            license_url='https://creativecommons.org/publicdomain/mark/1.0/',
+            attribution='Public domain.', provenance_url='https://example.test/source',
+        ))
+        session.commit()
+        source = session.get(CommentarySource, 'race-source')
+        first = _verified(session, source, [_row(body='First.')])
+        second = _verified(session, source, [_row(body='Second.')])
+        session.commit()
+        ids = first.id, second.id
+    return engine, factory, ids
+
+
+def test_independent_sessions_publish_two_runs_with_one_monotonic_active_result(tmp_path):
+    from app.commentary.ingest.publish import publish_run
+
+    engine, factory, run_ids = _race_database(tmp_path)
+    barrier = Barrier(2)
+
+    def publish(run_id):
+        with factory() as session:
+            barrier.wait()
+            publication = publish_run(session, run_id)
+            session.commit()
+            return publication.id
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            publication_ids = list(executor.map(publish, run_ids))
+        with factory() as observer:
+            publications = observer.scalars(select(CommentaryPublication).order_by(
+                CommentaryPublication.version
+            )).all()
+            assert [item.version for item in publications] == [1, 2]
+            assert sum(item.active for item in publications) == 1
+            assert {item.id for item in publications} == set(publication_ids)
+            assert observer.scalar(select(func.count()).select_from(CommentaryEdition)) == 2
+            assert observer.scalar(select(func.count()).select_from(CommentaryEntry)) == 2
+            assert set(observer.scalars(select(CommentaryImportRun.status))) == {'published'}
+    finally:
+        engine.dispose()
+
+
+def test_independent_sessions_duplicate_publish_has_one_winner_and_no_orphans(tmp_path):
+    from app.commentary.ingest.publish import publish_run
+
+    engine, factory, run_ids = _race_database(tmp_path)
+    run_id = run_ids[0]
+    barrier = Barrier(2)
+
+    def publish():
+        with factory() as session:
+            barrier.wait()
+            try:
+                publication = publish_run(session, run_id)
+                session.commit()
+                return ('published', publication.id)
+            except (ValueError, IntegrityError) as exc:
+                session.rollback()
+                return ('rejected', type(exc).__name__)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _: publish(), range(2)))
+        assert sorted(item[0] for item in outcomes) == ['published', 'rejected']
+        with factory() as observer:
+            active = observer.scalars(select(CommentaryPublication)).all()
+            assert len(active) == 1 and active[0].active and active[0].version == 1
+            assert observer.scalar(select(func.count()).select_from(CommentaryEdition)) == 1
+            assert observer.scalar(select(func.count()).select_from(CommentaryEntry)) == 1
+            assert observer.get(CommentaryImportRun, run_id).status == 'published'
+            assert observer.get(CommentaryImportRun, run_ids[1]).status == 'verified'
+    finally:
+        engine.dispose()
 
 
 def test_rollback_rejects_missing_current_or_cross_source_target(

@@ -28,6 +28,22 @@ from .validate import validate_commentary
 _CHECKSUM = re.compile(r'^[0-9a-f]{64}$')
 
 
+def _ensure_caller_owned_outer_transaction(session: Session) -> None:
+    """Materialize SQLite's deferred outer transaction before a SAVEPOINT.
+
+    Python's SQLite driver otherwise lets a first SAVEPOINT become the physical
+    top-level transaction; releasing it would commit despite the Session still
+    appearing to own a transaction. ``BEGIN IMMEDIATE`` also serializes writers
+    before they read publication state, matching the row lock used elsewhere.
+    """
+    connection = session.connection()
+    if connection.dialect.name != 'sqlite':
+        return
+    driver_connection = connection.connection.driver_connection
+    if not driver_connection.in_transaction:
+        connection.exec_driver_sql('BEGIN IMMEDIATE')
+
+
 def _json_snapshot(value: object) -> dict:
     if type(value) is not dict:
         raise ValueError('metadata_snapshot must be a JSON object.')
@@ -216,6 +232,7 @@ def _copy_staged_entries(session: Session, run: CommentaryImportRun, edition: Co
 
 def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
     """Atomically publish one verified run inside a rollback-capable savepoint."""
+    _ensure_caller_owned_outer_transaction(session)
     existing = session.get(CommentaryImportRun, run_id)
     if existing is None:
         raise ValueError('Commentary import run was not found.')
@@ -300,6 +317,7 @@ def publish_run(session: Session, run_id: UUID) -> CommentaryPublication:
 
 def rollback_publication(session: Session, publication_id: int) -> CommentaryPublication:
     """Roll back an active publication to its immediately preceding immutable edition."""
+    _ensure_caller_owned_outer_transaction(session)
     requested = session.scalar(
         select(CommentaryPublication)
         .where(CommentaryPublication.id == publication_id)
