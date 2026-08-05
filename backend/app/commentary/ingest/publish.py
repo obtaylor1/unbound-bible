@@ -118,12 +118,29 @@ def stage_bundle(
     return run
 
 
-def _normalized_staged_rows(session: Session, run_id: UUID) -> list[NormalizedCommentaryEntry]:
-    staged = session.scalars(
+def _staged_order_key(row: StagedCommentaryEntry) -> tuple[object, ...]:
+    """Canonical semantic order shared by validation, manifests, and copying."""
+    return (
+        row.work_id,
+        row.chapter if row.chapter is not None else -1,
+        row.verse_start if row.verse_start is not None else -1,
+        row.verse_end if row.verse_end is not None else -1,
+        row.entry_type,
+        row.position,
+        row.id,
+    )
+
+
+def _staged_records(session: Session, run_id: UUID) -> list[StagedCommentaryEntry]:
+    records = session.scalars(
         select(StagedCommentaryEntry)
         .where(StagedCommentaryEntry.run_id == run_id)
         .order_by(StagedCommentaryEntry.id)
     ).all()
+    return sorted(records, key=_staged_order_key)
+
+
+def _normalized_staged_rows(session: Session, run_id: UUID) -> list[NormalizedCommentaryEntry]:
     return [
         NormalizedCommentaryEntry(
             row.work_id,
@@ -136,11 +153,12 @@ def _normalized_staged_rows(session: Session, run_id: UUID) -> list[NormalizedCo
             row.source_locator,
             row.position,
         )
-        for row in staged
+        for row in _staged_records(session, run_id)
     ]
 
 
 def _manifest(
+    source_id: str,
     source_checksum: str,
     metadata: Mapping[str, object],
     rows: Iterable[NormalizedCommentaryEntry],
@@ -149,6 +167,7 @@ def _manifest(
     relevant_metadata.pop('validation_manifest', None)
     payload = [
         'commentary-verified-run-v1',
+        source_id,
         source_checksum,
         relevant_metadata,
         [[
@@ -223,7 +242,9 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
             work_id: dict(values) for work_id, values in result.coverage['by_work'].items()
         },
     }
-    metadata['validation_manifest'] = _manifest(run.source_checksum, metadata, normalized_rows)
+    metadata['validation_manifest'] = _manifest(
+        run.source_id, run.source_checksum, metadata, normalized_rows,
+    )
     run.metadata_snapshot = metadata
     run.error_count = result.error_count
     run.warning_count = result.warning_count
@@ -235,11 +256,7 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
 def _verified_staged_rows(
     session: Session, run: CommentaryImportRun, metadata: Mapping[str, object],
 ) -> list[NormalizedCommentaryEntry]:
-    staged = session.scalars(
-        select(StagedCommentaryEntry)
-        .where(StagedCommentaryEntry.run_id == run.id)
-        .order_by(StagedCommentaryEntry.position, StagedCommentaryEntry.id)
-    ).all()
+    staged = _staged_records(session, run.id)
     if len(staged) != run.staged_count:
         raise ValueError('Staged commentary row count no longer matches the verified run.')
     normalized_rows: list[NormalizedCommentaryEntry] = []
@@ -255,7 +272,7 @@ def _verified_staged_rows(
     if (
         type(expected_manifest) is not str
         or _CHECKSUM.fullmatch(expected_manifest) is None
-        or _manifest(run.source_checksum, metadata, normalized_rows) != expected_manifest
+        or _manifest(run.source_id, run.source_checksum, metadata, normalized_rows) != expected_manifest
     ):
         raise ValueError('Verified commentary run manifest no longer matches staged content.')
     return normalized_rows

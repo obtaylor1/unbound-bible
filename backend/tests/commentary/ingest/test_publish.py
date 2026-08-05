@@ -256,6 +256,24 @@ def test_publish_copies_exact_rows_coverage_and_checksum(commentary_session, com
     ]
 
 
+def test_publish_accepts_legitimate_rows_staged_out_of_position_order(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    rows = [_row(body='Position nine.', position=9, start=2), _row(body='Position four.', position=4)]
+    run = _verified(commentary_session, commentary_source, rows)
+
+    publication = publish_run(commentary_session, run.id)
+
+    entries = commentary_session.scalars(select(CommentaryEntry).where(
+        CommentaryEntry.edition_id == publication.edition_id
+    ).order_by(CommentaryEntry.position)).all()
+    assert [(entry.position, entry.body) for entry in entries] == [
+        (4, 'Position four.'), (9, 'Position nine.'),
+    ]
+
+
 @pytest.mark.parametrize('finish', ['close', 'rollback'])
 def test_publish_is_rolled_back_when_fresh_caller_does_not_commit(
     commentary_session, commentary_source, finish,
@@ -371,6 +389,25 @@ def test_publish_rejects_scalar_and_checksum_changed_together_after_verification
     assert commentary_session.scalar(select(CommentaryPublication)) is None
 
 
+def test_publish_manifest_rejects_position_reordering_with_matching_checksum(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    staged = commentary_session.scalar(select(StagedCommentaryEntry).where(
+        StagedCommentaryEntry.run_id == run.id
+    ))
+    reordered = _row(position=8)
+    staged.position = reordered.position
+    staged.row_checksum = reordered.row_checksum
+    commentary_session.flush()
+
+    with pytest.raises(ValueError, match='manifest'):
+        publish_run(commentary_session, run.id)
+    assert commentary_session.scalar(select(CommentaryPublication)) is None
+
+
 @pytest.mark.parametrize('mutation', ['source_checksum', 'coverage', 'expected_books'])
 def test_publish_rejects_verified_run_metadata_mutation(
     commentary_session, commentary_source, mutation,
@@ -394,6 +431,22 @@ def test_publish_rejects_verified_run_metadata_mutation(
 
     with pytest.raises(ValueError, match='manifest'):
         publish_run(commentary_session, run.id)
+
+
+def test_publish_rejects_verified_run_reassigned_to_another_existing_source(
+    commentary_session, commentary_source, make_commentary_source,
+):
+    from app.commentary.ingest.publish import publish_run
+
+    run = _verified(commentary_session, commentary_source)
+    other = make_commentary_source('other-existing-source')
+    run.source_id = other.id
+    commentary_session.flush()
+
+    with pytest.raises(ValueError, match='manifest'):
+        publish_run(commentary_session, run.id)
+    assert commentary_session.scalar(select(CommentaryPublication)) is None
+    assert commentary_session.scalar(select(CommentaryEdition)) is None
 
 
 def test_publish_copies_reconstructed_normalized_values_not_raw_staging_scalars(
