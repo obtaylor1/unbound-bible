@@ -503,3 +503,107 @@ def test_output_directory_swap_cannot_redirect_authoritative_marker(tmp_path):
 
     assert list(attacker.iterdir()) == []
     assert not (output / 'original-source' / 'GEN.json.current.json').exists()
+
+
+@pytest.mark.parametrize('swap_level', ['source', 'ancestor'])
+def test_network_callback_swap_cannot_redirect_partial_files(tmp_path, swap_level):
+    from app.commentary.ingest.acquire import acquire_source
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    output = tmp_path / 'output'
+    attacker = tmp_path / 'attacker'
+    attacker_source = attacker / 'matthew-henry'
+    attacker_source.mkdir(parents=True)
+    hostile_part = attacker_source / 'GEN.json.part'
+    hostile_meta = attacker_source / 'GEN.json.part.meta'
+    hostile_part.write_bytes(b'hostile-part')
+    hostile_meta.write_bytes(b'hostile-meta')
+
+    def opener(_request, *, timeout):
+        assert timeout == 10
+        if swap_level == 'source':
+            (output / 'matthew-henry').rename(output / 'original-source')
+            (output / 'matthew-henry').symlink_to(
+                attacker_source, target_is_directory=True,
+            )
+        else:
+            output.rename(tmp_path / 'original-output')
+            output.symlink_to(attacker, target_is_directory=True)
+        return Response(b'{"safe":true}', url=url, headers={
+            'Content-Type': 'application/json', 'ETag': '"v1"',
+        })
+
+    with pytest.raises(ValueError, match='changed during finalization'):
+        acquire_source('matthew-henry', url, output, opener=opener)
+
+    assert hostile_part.read_bytes() == b'hostile-part'
+    assert hostile_meta.read_bytes() == b'hostile-meta'
+
+
+def test_fresh_generation_fsyncs_each_new_parent_before_marker(monkeypatch, tmp_path):
+    from app.commentary.ingest import acquire
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    body = b'{"durable":true}'
+    digest = sha256(body).hexdigest()
+    events = []
+
+    def track(descriptor):
+        info = acquire.os.fstat(descriptor)
+        candidates = {
+            'output': tmp_path,
+            'source': tmp_path / 'matthew-henry',
+            'generations': tmp_path / 'matthew-henry' / 'generations',
+            'artifact-root': tmp_path / 'matthew-henry' / 'generations' / 'GEN.json',
+            'generation': (
+                tmp_path / 'matthew-henry' / 'generations' / 'GEN.json' / digest
+            ),
+        }
+        for label, path in candidates.items():
+            if path.exists():
+                current = path.stat()
+                if (info.st_dev, info.st_ino) == (current.st_dev, current.st_ino):
+                    events.append(label)
+                    return
+        raise AssertionError('unexpected directory fsync')
+
+    monkeypatch.setattr(acquire, '_fsync_directory', track)
+    acquire.acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(body, url=url),
+    )
+
+    assert events == [
+        'output', 'source', 'generations', 'artifact-root', 'generation', 'source',
+    ]
+
+
+def test_existing_generation_only_fsyncs_contents_and_marker_parent(monkeypatch, tmp_path):
+    from app.commentary.ingest import acquire
+
+    url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    body = b'{"durable":true}'
+    acquire.acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(body, url=url),
+    )
+    events = []
+    source = tmp_path / 'matthew-henry'
+    generation = source / 'generations' / 'GEN.json' / sha256(body).hexdigest()
+
+    def track(descriptor):
+        info = acquire.os.fstat(descriptor)
+        for label, path in (('generation', generation), ('source', source)):
+            current = path.stat()
+            if (info.st_dev, info.st_ino) == (current.st_dev, current.st_ino):
+                events.append(label)
+                return
+        raise AssertionError('existing parent was unnecessarily fsynced')
+
+    monkeypatch.setattr(acquire, '_fsync_directory', track)
+    acquire.acquire_source(
+        'matthew-henry', url, tmp_path,
+        opener=lambda *_args, **_kwargs: Response(body, url=url),
+    )
+
+    assert events == ['generation', 'source']

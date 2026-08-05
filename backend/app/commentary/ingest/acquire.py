@@ -140,31 +140,12 @@ def _validate_json(raw: bytes) -> None:
         raise ValueError('artifact must contain valid JSON.') from exc
 
 
-def _check_path_components(path: Path) -> None:
-    absolute = path.expanduser().absolute()
-    for component in reversed((absolute, *absolute.parents)):
-        try:
-            info = os.lstat(component)
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError('output path must not contain a symlink.')
-
-
-def _ensure_directory(path: Path) -> None:
-    _check_path_components(path)
-    path.mkdir(parents=True, exist_ok=True)
-    info = os.lstat(path)
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise ValueError('output path must be a real directory, not a symlink or special file.')
-
-
-def _regular_size(path: Path) -> int:
+def _regular_size_at(directory_fd: int, name: str) -> int:
     try:
-        info = os.lstat(path)
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return 0
-    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError('partial artifact must be a regular file.')
     if info.st_size > MAX_ARTIFACT_BYTES:
         raise ValueError('artifact must be no larger than 5 MiB.')
@@ -219,15 +200,19 @@ def _response_validator(response: object) -> _RepresentationValidator | None:
     return None
 
 
-def _read_resume_metadata(path: Path, url: str) -> _RepresentationValidator | None:
+def _read_resume_metadata(
+    directory_fd: int, name: str, url: str,
+) -> _RepresentationValidator | None:
     try:
-        info = os.lstat(path)
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return None
-    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 1024:
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024:
         raise ValueError('partial artifact metadata must be a small regular file.')
     descriptor = os.open(
-        path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+        name,
+        os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0),
+        dir_fd=directory_fd,
     )
     try:
         opened = os.fstat(descriptor)
@@ -262,49 +247,19 @@ def _read_resume_metadata(path: Path, url: str) -> _RepresentationValidator | No
 
 
 def _write_resume_metadata(
-    path: Path, url: str, validator: _RepresentationValidator,
+    directory_fd: int, name: str, url: str, validator: _RepresentationValidator,
 ) -> None:
     key = 'etag' if validator.header == 'ETag' else 'last_modified'
     raw = json.dumps(
         {'url': url, key: validator.value}, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')
-    temporary = path.with_name(path.name + '.part')
-    if temporary.exists() or temporary.is_symlink():
-        _regular_size(temporary)
-        temporary.unlink()
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
-        0o600,
-    )
-    try:
-        view = memoryview(raw)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError('partial metadata write made no progress.')
-            view = view[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.replace(temporary, path)
+    _write_atomic_at(directory_fd, name, raw)
 
 
-def _remove_regular(path: Path) -> None:
-    try:
-        info = os.lstat(path)
-    except FileNotFoundError:
-        return
-    if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
-        path.unlink()
-        return
-    raise ValueError(f'unsafe cleanup path: {path.name}.')
-
-
-def _cleanup_artifacts(*paths: Path) -> None:
-    for path in paths:
+def _cleanup_artifacts_at(directory_fd: int, *names: str) -> None:
+    for name in names:
         try:
-            _remove_regular(path)
+            _unlink_at(directory_fd, name)
         except (OSError, ValueError):
             # Cleanup is best effort here; the original safety failure remains
             # the command result and unsafe nodes are never followed.
@@ -337,7 +292,9 @@ def _resume_mode(response: object, existing: int) -> tuple[bool, int | None]:
     return True, total
 
 
-def _read_response(response: BinaryIO, part: Path, existing: int) -> tuple[bytes, int]:
+def _read_response(
+    response: BinaryIO, directory_fd: int, part_name: str, existing: int,
+) -> tuple[bytes, int]:
     _content_type(response)
     append, declared_total = _resume_mode(response, existing)
     offset = existing if append else 0
@@ -350,7 +307,7 @@ def _read_response(response: BinaryIO, part: Path, existing: int) -> tuple[bytes
         | getattr(os, 'O_NONBLOCK', 0)
     )
     flags |= os.O_APPEND if append else os.O_TRUNC
-    descriptor = os.open(part, flags, 0o600)
+    descriptor = os.open(part_name, flags, 0o600, dir_fd=directory_fd)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError('partial artifact must be a regular file.')
@@ -414,17 +371,15 @@ def _open_directory_nofollow(path: Path, *, create: bool = False) -> int:
     descriptor = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
         for name in absolute.parts[1:]:
-            if create:
-                try:
-                    os.mkdir(name, 0o700, dir_fd=descriptor)
-                except FileExistsError:
-                    pass
-            child = os.open(
-                name,
-                os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
-                | getattr(os, 'O_NOFOLLOW', 0),
-                dir_fd=descriptor,
+            child, created = _open_or_create_child(
+                descriptor, name, create=create,
             )
+            try:
+                if created:
+                    _fsync_directory(descriptor)
+            except Exception:
+                os.close(child)
+                raise
             os.close(descriptor)
             descriptor = child
         return descriptor
@@ -433,19 +388,31 @@ def _open_directory_nofollow(path: Path, *, create: bool = False) -> int:
         raise
 
 
-def _open_child_directory(parent_fd: int, name: str, *, create: bool = False) -> int:
+def _open_or_create_child(
+    parent_fd: int, name: str, *, create: bool,
+) -> tuple[int, bool]:
     if '/' in name or name in {'', '.', '..'}:
         raise ValueError('directory name is invalid.')
+    created = False
     if create:
         try:
             os.mkdir(name, 0o700, dir_fd=parent_fd)
+            created = True
         except FileExistsError:
             pass
-    return os.open(
-        name,
-        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0),
-        dir_fd=parent_fd,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0),
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        raise ValueError('output path must not contain a symlink or special node.') from exc
+    return descriptor, created
+
+
+def _open_child_directory(parent_fd: int, name: str, *, create: bool = False) -> int:
+    return _open_or_create_child(parent_fd, name, create=create)[0]
 
 
 def _read_regular_at(directory_fd: int, name: str, maximum: int) -> bytes | None:
@@ -544,6 +511,7 @@ def _marker_document(
 def _finalize_generation(
     *,
     destination: Path,
+    destination_fd: int,
     source_id: str,
     filename: str,
     url: str,
@@ -557,13 +525,24 @@ def _finalize_generation(
     artifact = generation / filename
     sidecar = generation / f'{filename}.sha256'
     marker_name = f'{filename}.current.json'
-    destination_fd = _open_directory_nofollow(destination)
     generations_fd = artifact_root_fd = generation_fd = None
     switched = False
     try:
-        generations_fd = _open_child_directory(destination_fd, 'generations', create=True)
-        artifact_root_fd = _open_child_directory(generations_fd, filename, create=True)
-        generation_fd = _open_child_directory(artifact_root_fd, checksum, create=True)
+        generations_fd, created = _open_or_create_child(
+            destination_fd, 'generations', create=True,
+        )
+        if created:
+            _fsync_directory(destination_fd)
+        artifact_root_fd, created = _open_or_create_child(
+            generations_fd, filename, create=True,
+        )
+        if created:
+            _fsync_directory(generations_fd)
+        generation_fd, created = _open_or_create_child(
+            artifact_root_fd, checksum, create=True,
+        )
+        if created:
+            _fsync_directory(artifact_root_fd)
         previous_marker = _read_regular_at(destination_fd, marker_name, 4096)
         _write_atomic_at(generation_fd, filename, raw)
         checkpoint('generation_data')
@@ -605,7 +584,7 @@ def _finalize_generation(
         # follow the durable marker. Leave them for operator cleanup.
         raise
     finally:
-        for descriptor in (generation_fd, artifact_root_fd, generations_fd, destination_fd):
+        for descriptor in (generation_fd, artifact_root_fd, generations_fd):
             if descriptor is not None:
                 os.close(descriptor)
 
@@ -668,20 +647,60 @@ def acquire_source(
     filename, book_id = _validate_url(source_id, url, registry)
     if not isinstance(output, Path):
         output = Path(output)
-    _ensure_directory(output)
     destination = output / source_id
-    _ensure_directory(destination)
-    part = destination / f'{filename}.part'
-    resume_metadata = destination / f'{filename}.part.meta'
-    existing = _regular_size(part)
+    output_fd = _open_directory_nofollow(output, create=True)
+    destination_fd = None
+    try:
+        destination_fd, created = _open_or_create_child(
+            output_fd, source_id, create=True,
+        )
+        if created:
+            _fsync_directory(output_fd)
+    except Exception:
+        if destination_fd is not None:
+            os.close(destination_fd)
+            destination_fd = None
+        raise
+    finally:
+        os.close(output_fd)
+    try:
+        return _acquire_source_from_directory(
+            source_id=source_id, url=url, destination=destination,
+            destination_fd=destination_fd, filename=filename, book_id=book_id,
+            registry=registry, opener=opener, sleeper=sleeper,
+            finalization_hook=finalization_hook,
+        )
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+
+
+def _acquire_source_from_directory(
+    *,
+    source_id: str,
+    url: str,
+    destination: Path,
+    destination_fd: int,
+    filename: str,
+    book_id: str | None,
+    registry: dict[str, SourceMetadata],
+    opener: Callable[..., object] | None,
+    sleeper: Callable[[float], None],
+    finalization_hook: _FinalizationHook | None,
+) -> AcquiredArtifact:
+    """Acquire while every mutable file operation stays below one open directory."""
+    part_name = f'{filename}.part'
+    metadata_name = f'{filename}.part.meta'
+    metadata_temporary = metadata_name + '.part'
+    existing = _regular_size_at(destination_fd, part_name)
     resume_validator: _RepresentationValidator | None = None
     if existing:
-        resume_validator = _read_resume_metadata(resume_metadata, url)
+        resume_validator = _read_resume_metadata(destination_fd, metadata_name, url)
         if resume_validator is None:
-            _cleanup_artifacts(part, resume_metadata)
+            _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
             existing = 0
-    elif resume_metadata.exists() or resume_metadata.is_symlink():
-        _cleanup_artifacts(resume_metadata)
+    else:
+        _cleanup_artifacts_at(destination_fd, metadata_name)
     transport = opener or _default_opener(source_id, registry)
 
     last_network_error: Exception | None = None
@@ -713,44 +732,50 @@ def acquire_source(
                 elif status == 200:
                     resume_validator = response_validator
                     if response_validator is not None:
-                        _write_resume_metadata(resume_metadata, url, response_validator)
+                        _write_resume_metadata(
+                            destination_fd, metadata_name, url, response_validator,
+                        )
                     else:
-                        _cleanup_artifacts(resume_metadata)
-                raw, size = _read_response(response, part, existing)  # type: ignore[arg-type]
+                        _cleanup_artifacts_at(destination_fd, metadata_name)
+                raw, size = _read_response(
+                    response, destination_fd, part_name, existing,  # type: ignore[arg-type]
+                )
             break
         except _RestartDownload as exc:
             last_network_error = exc
-            _cleanup_artifacts(part, resume_metadata)
+            _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
             existing = 0
             resume_validator = None
         except _PartialDurabilityError as exc:
             last_network_error = exc
-            _cleanup_artifacts(part, resume_metadata)
+            _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
             existing = 0
             resume_validator = None
         except HTTPError as exc:
             last_network_error = exc
-            if exc.code == 416 and part.exists():
-                _cleanup_artifacts(part, resume_metadata)
+            if exc.code == 416 and _regular_size_at(destination_fd, part_name):
+                _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
                 existing = 0
                 resume_validator = None
         except (URLError, TimeoutError, socket.timeout, ConnectionError, OSError) as exc:
             last_network_error = exc
             # A read timeout can occur after durable bytes were appended. Resume
             # from the descriptor's actual size, never from a stale request offset.
-            existing = _regular_size(part)
+            existing = _regular_size_at(destination_fd, part_name)
             if existing:
                 if resume_validator is None:
-                    _cleanup_artifacts(part, resume_metadata)
+                    _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
                     existing = 0
                 else:
-                    persisted = _read_resume_metadata(resume_metadata, url)
+                    persisted = _read_resume_metadata(
+                        destination_fd, metadata_name, url,
+                    )
                     if persisted != resume_validator:
-                        _cleanup_artifacts(part, resume_metadata)
+                        _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
                         existing = 0
                         resume_validator = None
         except ValueError:
-            _cleanup_artifacts(part, resume_metadata)
+            _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
             raise
         if attempt < MAX_ATTEMPTS - 1:
             sleeper(float(attempt + 1))
@@ -764,15 +789,14 @@ def acquire_source(
         if expected is not None and checksum != expected:
             raise ValueError('artifact checksum does not match the reviewed registry checksum.')
         artifact, sidecar = _finalize_generation(
-            destination=destination, source_id=source_id, filename=filename,
-            url=url, raw=raw, checksum=checksum, hook=finalization_hook,
+            destination=destination, destination_fd=destination_fd,
+            source_id=source_id, filename=filename, url=url, raw=raw,
+            checksum=checksum, hook=finalization_hook,
         )
-        _cleanup_artifacts(part)
-        _cleanup_artifacts(resume_metadata)
+        _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
     except Exception:
-        _cleanup_artifacts(
-            part, resume_metadata,
-            resume_metadata.with_name(resume_metadata.name + '.part'),
+        _cleanup_artifacts_at(
+            destination_fd, part_name, metadata_name, metadata_temporary,
         )
         raise
     return AcquiredArtifact(artifact, sidecar, checksum, size, url)

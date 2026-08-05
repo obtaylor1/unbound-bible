@@ -369,24 +369,52 @@ def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
     }
 
 
+def _open_report_parent(path: Path, hook=None) -> int:
+    descriptor = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        for component in path.expanduser().absolute().parts[1:]:
+            if component in {'', '.', '..'}:
+                raise ValueError('report output path contains an invalid component.')
+            created = False
+            try:
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                created = True
+            except FileExistsError:
+                pass
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                    | getattr(os, 'O_NOFOLLOW', 0),
+                    dir_fd=descriptor,
+                )
+            except OSError as exc:
+                raise ValueError(
+                    'report output path must not contain a symlink or special node.'
+                ) from exc
+            try:
+                if created:
+                    os.fsync(descriptor)
+            except Exception:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+            if hook is not None:
+                hook(component)
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def _atomic_json(
     path: Path, value: dict[str, object], *, _before_replace=None,
+    _during_directory_open=None,
 ) -> None:
-    path = path.expanduser()
+    path = path.expanduser().absolute()
     parent = path.parent
-    absolute = path.absolute()
-    for component in reversed((absolute, *absolute.parents)):
-        try:
-            info = os.lstat(component)
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError('report output path must not contain a symlink.')
-    parent.mkdir(parents=True, exist_ok=True)
-    directory = os.open(
-        parent,
-        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0),
-    )
+    directory = _open_report_parent(parent, _during_directory_open)
     opened_parent = os.fstat(directory)
     name = path.name
     temporary = name + '.part'

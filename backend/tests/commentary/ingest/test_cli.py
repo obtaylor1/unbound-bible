@@ -226,6 +226,29 @@ def test_report_parent_swap_cannot_redirect_final_report(tmp_path):
     assert not (tmp_path / 'original-reports' / 'report.json').exists()
 
 
+def test_report_ancestor_swap_during_nofollow_walk_cannot_redirect_output(tmp_path):
+    from app.commentary.ingest.cli import _atomic_json
+
+    safe = tmp_path / 'safe'
+    (safe / 'reports').mkdir(parents=True)
+    attacker = tmp_path / 'attacker'
+    (attacker / 'reports').mkdir(parents=True)
+
+    def swap(component):
+        if component == 'safe':
+            safe.rename(tmp_path / 'original-safe')
+            safe.symlink_to(attacker, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='changed during report creation'):
+        _atomic_json(
+            safe / 'reports' / 'report.json', {'status': 'verified'},
+            _during_directory_open=swap,
+        )
+
+    assert not (attacker / 'reports' / 'report.json').exists()
+    assert not (tmp_path / 'original-safe' / 'reports' / 'report.json').exists()
+
+
 def test_stage_artifact_verification_rejects_oversized_files_before_reading(tmp_path):
     from app.commentary.ingest.cli import MAX_ARTIFACT_BYTES, _read_bounded_regular
 
