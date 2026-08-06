@@ -12,10 +12,11 @@ Add the supplied `Ethiopian Orthodox Bible (Non-KJV Edition).zip` as a separatel
 
 The supplied ZIP has SHA-256 checksum `0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27026066dbb9f92ce34b183a2`. A read-only inspection found:
 
-- 83 populated book files;
+- 83 populated book files: 82 map to established Ethiopian canon works and
+  Prayer of Manasseh maps to a supplemental related work;
 - 1,520 chapters;
 - 44,114 verses;
-- 11 additional canon-navigation records with no English text;
+- 11 archive placeholder records with no English text;
 - no unsafe absolute or parent-traversal archive paths;
 - six source groups: World Messianic Bible, Murdock Peshitta, World English Bible, KJV fallback, Wikisource Meqabyan, and R. H. Charles;
 - six books explicitly identified by the archive as KJV fallbacks;
@@ -36,12 +37,15 @@ The archive is a composite collection, not a single translation. Its source desc
 
 ## Coverage and missing works
 
-All 83 populated books are imported after explicit mapping to the canonical work identifiers in `app.library.canon`. Chapter and verse coverage must be derived from and verified against the frozen archive.
+All 83 populated books are imported after explicit mapping to reviewed library work identifiers. Eighty-two contribute coverage to `ETHIO81`; Prayer of Manasseh is stored as a supplemental related work and is not inserted into or counted as part of the established Ethiopian canon. Chapter and verse coverage must be derived from and verified against the frozen archive.
 
-The following eleven records remain visible in Ethiopian canon navigation but are not represented as translated text:
+The archive's placeholder count cannot be used as the app's missing-canon count. Its `Metsihafe Tibeb` placeholder overlaps the populated Wisdom of Solomon mapping, while it omits separate placeholders for three established canon works. The following thirteen canonical works remain visible in Ethiopian canon navigation but are not represented as translated text:
 
+- Esther (Greek Additions);
+- Psalm 151;
 - Josephas son of Bengorion;
 - Tegsats;
+- Paralipomena of Jeremiah;
 - Sirate Tsion;
 - Tizaz;
 - Gitsew;
@@ -49,8 +53,7 @@ The following eleven records remain visible in Ethiopian canon navigation but ar
 - I Book of Dominos;
 - II Book of Dominos;
 - Book of Clement;
-- Didascalia;
-- the archive's separate `Metsihafe Tibeb` placeholder where it does not supply a distinct text beyond the mapped Wisdom tradition.
+- Didascalia.
 
 The importer must not generate, infer, or copy substitute verses for unavailable works. The catalog and reader show an `English text not yet available` state with the canon work's name and a short explanation. Unavailable works do not count toward installed edition coverage and do not appear as selectable comparison sources.
 
@@ -69,7 +72,7 @@ The existing edition-level provenance is insufficient for a mixed collection. Ad
 - whether the archive compiler modified or standardized the text;
 - an optional modification note.
 
-The 83 populated books map to these source groups:
+The 83 populated books map to these source groups; Prayer of Manasseh is one of the six KJV fallback records and is supplemental rather than `ETHIO81` coverage:
 
 | Books | Source label | Source language | License treatment | UI badge |
 | ---: | --- | --- | --- | --- |
@@ -92,12 +95,12 @@ Add a dedicated adapter for this archive format rather than weakening the strict
 2. never executes archive code or extracts archive members to disk;
 3. rejects encrypted, linked, absolute, backslash, empty, dot, and parent-traversal members;
 4. enforces member-count and total-uncompressed-size limits;
-5. requires an explicit source-book-to-canonical-work mapping;
+5. requires an explicit source-book-to-reviewed-library-work mapping and records whether each target is canon or supplemental;
 6. rejects duplicate source IDs, duplicate canonical targets, missing mapped files, mismatched book identities, invalid chapters, invalid verses, empty text, and duplicate verse positions;
 7. validates actual coverage against the manifest before allowing publication;
 8. records a deterministic locator and checksum for every normalized verse;
 9. stages and publishes through the existing atomic verified-ingest pipeline;
-10. records unavailable navigation entries as coverage information, never as empty verse rows.
+10. derives the thirteen unavailable canon works from the difference between installed coverage and the established canon, never from archive placeholder count and never as empty verse rows.
 
 The original archive is stored as an immutable source artifact outside application-served paths. Its checksum is committed in the manifest. A checksum change requires a new reviewed ingest run and cannot silently update the edition.
 
@@ -155,13 +158,14 @@ Automated coverage includes:
 
 - archive safety and checksum failures;
 - all 83 explicit book mappings;
+- exact separation of 82 Ethiopian canon works and one supplemental Prayer of Manasseh work;
 - exact aggregate counts of 1,520 chapters and 44,114 verses;
 - Genesis from the WMB group;
 - one Murdock New Testament passage;
 - all three Meqabyan books and their attribution;
 - Enoch and Jubilees source records;
 - all six KJV fallback badges;
-- all eleven unavailable navigation records;
+- all thirteen unavailable canonical works;
 - preservation of `GEEZ1980-RESEARCH`;
 - atomic publication and rollback isolation;
 - reader edition selection, source disclosure, and unavailable states;
