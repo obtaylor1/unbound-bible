@@ -57,7 +57,7 @@ def test_clean_migrated_database_supports_full_fixture_publication_lifecycle(
     hostile_database_path = tmp_path / 'ambient-database-must-not-be-touched.db'
     monkeypatch.setenv('DATABASE_URL', f'sqlite:///{hostile_database_path}')
 
-    assert set(cli.ADAPTERS) == {'weahadu_bundle'}
+    assert set(cli.ADAPTERS) == {'weahadu_bundle', 'composite_english_bundle'}
     assert callable(cli.ADAPTERS['weahadu_bundle'])
     monkeypatch.setattr(cli, 'ADAPTERS', {'usfm': _fixture_adapter})
 

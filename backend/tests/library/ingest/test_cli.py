@@ -10,6 +10,12 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+def test_installed_adapters_are_explicitly_registered():
+    from app.library.ingest.cli import ADAPTERS
+
+    assert set(ADAPTERS) == {'weahadu_bundle', 'composite_english_bundle'}
+
+
 def _database_url(test_settings):
     return test_settings.database_url
 

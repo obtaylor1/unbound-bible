@@ -18,7 +18,11 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.library.canon import SUPPLEMENTAL_LIBRARY_WORKS, WORKS
-from app.library.ingest.manifest import SourceManifest
+from app.library.ingest.manifest import (
+    CompositeEnglishBundleAdapterOptions,
+    SourceManifest,
+    WorkSourceManifest,
+)
 from app.library.ingest.models import (
     ScriptureIngestRun,
     ScripturePublication,
@@ -27,7 +31,7 @@ from app.library.ingest.models import (
     StagedScriptureVerse,
 )
 from app.library.ingest.types import row_checksum
-from app.library.models import EditionCoverage, TextEdition
+from app.library.models import EditionCoverage, EditionWorkSource, TextEdition
 
 
 _LEGACY_TABLE = 'biblical_texts'
@@ -314,7 +318,7 @@ def _promote_manifest_metadata(
         work_id: coverage.model_dump(mode='json')
         for work_id, coverage in manifest.expected_works.items()
     }
-    edition.verification_status = 'verified'
+    edition.verification_status = manifest.source_verification
     edition.source_checksum = run.source_checksum
 
 
@@ -341,9 +345,94 @@ def _manifest_matches_promoted_edition(
             work_id: coverage.model_dump(mode='json')
             for work_id, coverage in manifest.expected_works.items()
         }
-        and edition.verification_status == 'verified'
+        and edition.verification_status == manifest.source_verification
         and edition.source_checksum == source_checksum
     )
+
+
+def _manifest_work_sources(
+    manifest: SourceManifest,
+) -> dict[str, WorkSourceManifest]:
+    options = manifest.adapter_options
+    if not isinstance(options, CompositeEnglishBundleAdapterOptions):
+        return {}
+    return options.work_sources
+
+
+def _work_source_values(
+    source: EditionWorkSource | WorkSourceManifest,
+) -> tuple[object, ...]:
+    return (
+        source.source_key,
+        source.source_label,
+        source.translator,
+        source.source_language,
+        source.source_tradition,
+        source.published_year,
+        source.license_spdx,
+        source.attribution,
+        str(source.provenance_url) if source.provenance_url is not None else None,
+        source.fallback,
+        source.modified,
+        source.modification_note,
+        source.verification_status,
+        source.canon_scope,
+    )
+
+
+def _work_source_snapshot_matches(
+    session: Session,
+    edition_code: str,
+    manifest: SourceManifest,
+) -> bool:
+    persisted = tuple(session.scalars(
+        select(EditionWorkSource)
+        .where(EditionWorkSource.edition_code == edition_code)
+        .order_by(EditionWorkSource.work_id)
+    ))
+    expected = _manifest_work_sources(manifest)
+    return tuple(
+        (row.work_id, *_work_source_values(row)) for row in persisted
+    ) == tuple(
+        (work_id, *_work_source_values(expected[work_id]))
+        for work_id in sorted(expected)
+    )
+
+
+def _replace_work_sources(
+    session: Session,
+    edition_code: str,
+    manifest: SourceManifest,
+) -> None:
+    session.execute(delete(EditionWorkSource).where(
+        EditionWorkSource.edition_code == edition_code
+    ))
+    sources = _manifest_work_sources(manifest)
+    for work_id in sorted(sources):
+        source = sources[work_id]
+        session.add(EditionWorkSource(
+            edition_code=edition_code,
+            work_id=work_id,
+            source_key=source.source_key,
+            source_label=source.source_label,
+            translator=source.translator,
+            source_language=source.source_language,
+            source_tradition=source.source_tradition,
+            published_year=source.published_year,
+            license_spdx=source.license_spdx,
+            attribution=source.attribution,
+            provenance_url=(
+                str(source.provenance_url)
+                if source.provenance_url is not None
+                else None
+            ),
+            fallback=source.fallback,
+            modified=source.modified,
+            modification_note=source.modification_note,
+            verification_status=source.verification_status,
+            canon_scope=source.canon_scope,
+        ))
+    session.flush()
 
 
 def _verse_fingerprint(
@@ -379,6 +468,9 @@ def _is_identical_to_active_publication(
         and _verse_fingerprint(candidate_rows) == _verse_fingerprint(active_rows)
         and _manifest_matches_promoted_edition(
             active_manifest, edition, active_run.source_checksum
+        )
+        and _work_source_snapshot_matches(
+            session, edition.edition_code, active_manifest
         )
     )
 
@@ -528,9 +620,12 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                 _snapshot_rows(session, active.id)
                 if not _manifest_matches_promoted_edition(
                     active_manifest, edition, run.source_checksum
+                ) or not _work_source_snapshot_matches(
+                    session, edition.edition_code, active_manifest
                 ):
                     raise PublicationBlocked(
-                        'Cannot reuse active publication: promoted edition metadata differs.'
+                        'Cannot reuse active publication: promoted metadata or work '
+                        'source snapshot differs.'
                     )
                 return PublicationResult(
                     edition.edition_code,
@@ -573,6 +668,7 @@ def publish_run(session: Session, run_id: UUID) -> PublicationResult:
                 # new active row is inserted on every supported dialect.
                 session.flush()
             _promote_manifest_metadata(edition, run, manifest)
+            _replace_work_sources(session, edition.edition_code, manifest)
             _replace_legacy_rows(session, edition.edition_code, rows)
             _rebuild_coverage(session, edition, run, rows)
             publication = ScripturePublication(
@@ -663,6 +759,9 @@ def rollback_edition(session: Session, edition_code: str) -> RollbackResult:
             active.active = False
             session.flush()
             _promote_manifest_metadata(edition, restored, restored_manifest)
+            _replace_work_sources(
+                session, edition.edition_code, restored_manifest
+            )
             _replace_legacy_rows(session, edition.edition_code, rows)
             _rebuild_coverage(session, edition, restored, rows)
             publication = ScripturePublication(

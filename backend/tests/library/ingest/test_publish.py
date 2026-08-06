@@ -11,7 +11,7 @@ from app.library.ingest.models import (
     ScripturePublicationVerse,
     StagedScriptureVerse,
 )
-from app.library.models import EditionCoverage, TextEdition
+from app.library.models import EditionCoverage, EditionWorkSource, TextEdition
 
 
 def create_legacy_texts(session):
@@ -51,6 +51,74 @@ def active_publication(session, edition_code):
 
 def set_run_manifest(run, **values):
     run.manifest_snapshot = {**run.manifest_snapshot, **values}
+
+
+def set_composite_manifest(
+    run,
+    *,
+    label='Genesis composite source',
+    source_verification='provisional',
+    work_verification='provisional',
+):
+    set_run_manifest(
+        run,
+        adapter='composite_english_bundle',
+        adapter_options={
+            'book_map': {'GEN': 'genesis'},
+            'work_sources': {
+                'genesis': {
+                    'source_key': 'wmb',
+                    'source_label': label,
+                    'translator': 'Test Translator',
+                    'source_language': 'Hebrew',
+                    'source_tradition': 'Masoretic',
+                    'published_year': 2024,
+                    'license_spdx': 'LicenseRef-Public-Domain',
+                    'attribution': 'Test composite source attribution.',
+                    'provenance_url': 'https://example.org/composite/genesis',
+                    'fallback': False,
+                    'modified': True,
+                    'modification_note': 'Normalized source formatting.',
+                    'verification_status': work_verification,
+                    'canon_scope': 'ethio81',
+                },
+            },
+            'supplemental_works': [],
+            'known_missing_verses': {},
+        },
+        source_verification=source_verification,
+    )
+
+
+def work_source_rows(session, edition_code):
+    return tuple(session.scalars(
+        select(EditionWorkSource)
+        .where(EditionWorkSource.edition_code == edition_code)
+        .order_by(EditionWorkSource.work_id)
+    ))
+
+
+def work_source_snapshot(session, edition_code):
+    return tuple(
+        (
+            source.work_id,
+            source.source_key,
+            source.source_label,
+            source.translator,
+            source.source_language,
+            source.source_tradition,
+            source.published_year,
+            source.license_spdx,
+            source.attribution,
+            source.provenance_url,
+            source.fallback,
+            source.modified,
+            source.modification_note,
+            source.verification_status,
+            source.canon_scope,
+        )
+        for source in work_source_rows(session, edition_code)
+    )
 
 
 def test_publish_result_is_immutable(ingest_session):
@@ -161,6 +229,245 @@ def test_publish_promotes_manifest_metadata_and_failure_preserves_live_catalog(
         'verified',
         run.source_checksum,
     )
+
+
+def test_publish_promotes_composite_source_snapshot_and_provisional_status(
+    ingest_session,
+):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Composite text')
+    set_composite_manifest(run)
+    ingest_session.flush()
+
+    publish_run(ingest_session, run.id)
+
+    edition = ingest_session.get(TextEdition, 'target')
+    assert edition.verification_status == 'provisional'
+    assert work_source_snapshot(ingest_session, 'target') == ((
+        'genesis',
+        'wmb',
+        'Genesis composite source',
+        'Test Translator',
+        'Hebrew',
+        'Masoretic',
+        2024,
+        'LicenseRef-Public-Domain',
+        'Test composite source attribution.',
+        'https://example.org/composite/genesis',
+        False,
+        True,
+        'Normalized source formatting.',
+        'provisional',
+        'ethio81',
+    ),)
+
+
+def test_publish_inserts_composite_work_sources_in_work_id_order(ingest_session):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    run = make_ingest_run(ingest_session, 'target', 'Composite text')
+    set_composite_manifest(run)
+    options = run.manifest_snapshot['adapter_options']
+    genesis_source = options['work_sources']['genesis']
+    set_run_manifest(
+        run,
+        expected_works={
+            **run.manifest_snapshot['expected_works'],
+            'exodus': {'chapters': 1, 'verse_counts': {}},
+        },
+        adapter_options={
+            **options,
+            'book_map': {'GEN': 'genesis', 'EXO': 'exodus'},
+            'work_sources': {
+                'genesis': genesis_source,
+                'exodus': {
+                    **genesis_source,
+                    'source_key': 'wmb-exodus',
+                    'source_label': 'Exodus composite source',
+                },
+            },
+        },
+    )
+    ingest_session.flush()
+
+    publish_run(ingest_session, run.id)
+
+    insertion_order = ingest_session.scalars(
+        select(EditionWorkSource)
+        .where(EditionWorkSource.edition_code == 'target')
+        .order_by(EditionWorkSource.id)
+    ).all()
+    assert [source.work_id for source in insertion_order] == ['exodus', 'genesis']
+
+
+def test_composite_source_replacement_is_idempotent_and_isolated_by_edition(
+    ingest_session,
+):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    geez = make_ingest_run(ingest_session, 'GEEZ1980-RESEARCH', 'Ge\'ez text')
+    set_composite_manifest(geez, label="Ge'ez preserved source")
+    publish_run(ingest_session, geez.id)
+    geez_before = work_source_snapshot(ingest_session, 'GEEZ1980-RESEARCH')
+    geez_edition_before = (
+        ingest_session.get(TextEdition, 'GEEZ1980-RESEARCH').verification_status,
+        legacy_rows(ingest_session, 'GEEZ1980-RESEARCH'),
+    )
+
+    first = make_ingest_run(
+        ingest_session, 'EOTC-COMPOSITE-EN', 'First English text'
+    )
+    set_composite_manifest(first, label='Stale English source')
+    publish_run(ingest_session, first.id)
+    replacement = make_ingest_run(
+        ingest_session, 'EOTC-COMPOSITE-EN', 'Replacement English text'
+    )
+    set_composite_manifest(replacement, label='Current English source')
+    publish_run(ingest_session, replacement.id)
+
+    snapshot = work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')
+    assert len(snapshot) == 1
+    assert snapshot[0][2] == 'Current English source'
+    retry = publish_run(ingest_session, replacement.id)
+    assert retry.changed is False
+    assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN') == snapshot
+    assert work_source_snapshot(ingest_session, 'GEEZ1980-RESEARCH') == geez_before
+    assert (
+        ingest_session.get(TextEdition, 'GEEZ1980-RESEARCH').verification_status,
+        legacy_rows(ingest_session, 'GEEZ1980-RESEARCH'),
+    ) == geez_edition_before
+
+
+def test_source_metadata_and_verses_rollback_together_after_injected_failure(
+    ingest_session, monkeypatch
+):
+    import app.library.ingest.publish as publisher
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    live = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Live text')
+    set_composite_manifest(live, label='Live source')
+    publisher.publish_run(ingest_session, live.id)
+    before_sources = work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')
+    before_edition = (
+        ingest_session.get(TextEdition, 'EOTC-COMPOSITE-EN').verification_status,
+        ingest_session.get(TextEdition, 'EOTC-COMPOSITE-EN').source_checksum,
+    )
+    before_verses = legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN')
+
+    candidate = make_ingest_run(
+        ingest_session, 'EOTC-COMPOSITE-EN', 'Candidate text'
+    )
+    set_composite_manifest(
+        candidate,
+        label='Candidate source',
+        source_verification='verified',
+        work_verification='verified',
+    )
+    ingest_session.flush()
+
+    source_seen_before_verse_replacement = []
+
+    def fail_after_source_replacement(*_args, **_kwargs):
+        source_seen_before_verse_replacement.extend(
+            work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')
+        )
+        raise RuntimeError('injected failure')
+
+    monkeypatch.setattr(
+        publisher,
+        '_insert_legacy_rows',
+        fail_after_source_replacement,
+    )
+
+    with pytest.raises(RuntimeError, match='injected failure'):
+        publisher.publish_run(ingest_session, candidate.id)
+
+    assert source_seen_before_verse_replacement[0][2] == 'Candidate source'
+    assert source_seen_before_verse_replacement[0][13] == 'verified'
+    ingest_session.expire_all()
+    assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN') == before_sources
+    assert (
+        ingest_session.get(TextEdition, 'EOTC-COMPOSITE-EN').verification_status,
+        ingest_session.get(TextEdition, 'EOTC-COMPOSITE-EN').source_checksum,
+    ) == before_edition
+    assert legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN') == before_verses
+
+
+def test_rollback_restores_composite_source_snapshot_and_verification_status(
+    ingest_session,
+):
+    from app.library.ingest.publish import publish_run, rollback_edition
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    preserved = make_ingest_run(ingest_session, 'GEEZ1980-RESEARCH', 'Preserved text')
+    set_composite_manifest(preserved, label='Preserved source')
+    publish_run(ingest_session, preserved.id)
+    preserved_before = work_source_snapshot(ingest_session, 'GEEZ1980-RESEARCH')
+
+    old = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Old text')
+    set_composite_manifest(old, label='Old provisional source')
+    publish_run(ingest_session, old.id)
+    new = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'New text')
+    set_composite_manifest(
+        new,
+        label='New verified source',
+        source_verification='verified',
+        work_verification='verified',
+    )
+    publish_run(ingest_session, new.id)
+    assert ingest_session.get(
+        TextEdition, 'EOTC-COMPOSITE-EN'
+    ).verification_status == 'verified'
+
+    rollback_edition(ingest_session, 'EOTC-COMPOSITE-EN')
+
+    assert ingest_session.get(
+        TextEdition, 'EOTC-COMPOSITE-EN'
+    ).verification_status == 'provisional'
+    assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')[0][2] == (
+        'Old provisional source'
+    )
+    assert legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN')[0].text == 'Old text'
+    assert work_source_snapshot(ingest_session, 'GEEZ1980-RESEARCH') == preserved_before
+
+
+def test_rollback_with_invalid_restored_manifest_preserves_live_source_snapshot(
+    ingest_session,
+):
+    from app.library.ingest.publish import (
+        PublicationBlocked,
+        publish_run,
+        rollback_edition,
+    )
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    old = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Old text')
+    set_composite_manifest(old, label='Old source')
+    publish_run(ingest_session, old.id)
+    new = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Live text')
+    set_composite_manifest(new, label='Live source')
+    publish_run(ingest_session, new.id)
+    old.manifest_snapshot = {**old.manifest_snapshot, 'adapter_options': {}}
+    ingest_session.flush()
+    before_sources = work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')
+    before_verses = legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN')
+
+    with pytest.raises(PublicationBlocked, match='manifest snapshot is invalid'):
+        rollback_edition(ingest_session, 'EOTC-COMPOSITE-EN')
+
+    assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN') == before_sources
+    assert legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN') == before_verses
+    assert active_publication(ingest_session, 'EOTC-COMPOSITE-EN').run_id == new.id
 
 
 def test_publish_replaces_only_target_edition_with_canonical_books_and_coverage(ingest_session):
