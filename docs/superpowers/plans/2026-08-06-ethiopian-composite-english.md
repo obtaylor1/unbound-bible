@@ -395,7 +395,12 @@ The test runs `build_bundle.py` in a temporary output directory and validates bo
     assert raw_report['conflicting_duplicate_excess'] == 17
     assert raw_report['raw_unique_positions'] == 38_845
     assert report['known_missing_verses'] == {
+        '2-corinthians': {'13': [14]},
         '2-meqabyan': {'16': [9], '21': [9]},
+        'acts': {'19': [41], '20': [17]},
+        'luke': {'18': [35]},
+        'mark': {'4': [10], '8': [19], '9': [31], '11': [19]},
+        'matthew': {'26': [30, 45]},
     }
     assert len(rows) == report['corrected_verse_count']
     assert len({(r.work_id, r.chapter, r.verse) for r in rows}) == len(rows)
@@ -408,9 +413,16 @@ Also assert all 108 Enoch chapters are nonempty, Enoch 80:1 exists, the six WEB 
 Create `build_bundle.py`. It verifies all three input checksums before reading. It copies unchanged archive book data except the six `web_apocrypha` works and `ENO`:
 
     WEB_BOOKS = {'1ES', '2ES', 'TOB', 'JDT', 'WIS', 'SIR'}
-    KNOWN_MISSING_VERSES = {'2-meqabyan': {'16': [9], '21': [9]}}
+    KNOWN_MISSING_VERSES = {
+        '2-corinthians': {'13': [14]},
+        '2-meqabyan': {'16': [9], '21': [9]},
+        'acts': {'19': [41], '20': [17]},
+        'luke': {'18': [35]},
+        'mark': {'4': [10], '8': [19], '9': [31], '11': [19]},
+        'matthew': {'26': [30, 45]},
+    }
 
-For WEB works, parse `eng-webbe_vpl.txt` lines with a full-line expression equivalent to `^(BOOK) ([1-9][0-9]*):([1-9][0-9]*) (TEXT)$`; reject duplicates, gaps, empty text, unexpected books, and chapter-count mismatches. For Enoch, parse only the `The Book of Enoch` section of Project Gutenberg's official plain-text artifact, recognize Roman-numeral chapter headings I through CVIII and numbered verse/subverse markers such as `6.`, `6 a.`, and `5 b.`. Join fragments carrying the same integer verse number in document order, discard Project Gutenberg boilerplate, presentation-only page numbers, and footnote blocks, preserve textual brackets and critical symbols, and reject missing/empty chapters, duplicate output positions, or a non-contiguous 1..N verse set. Do not use the damaged archive Enoch text in output.
+For WEB works, parse `eng-webbe_vpl.txt` lines with a full-line expression equivalent to `^(BOOK) ([1-9][0-9]*):([1-9][0-9]*) (TEXT)$`; reject duplicates, gaps, empty text, unexpected books, and chapter-count mismatches. For Enoch, parse only the `The Book of Enoch` section of Project Gutenberg's official plain-text artifact, recognize Roman-numeral chapter headings I through CVIII and numbered verse/subverse markers such as `6.`, `6 a.`, and `5 b.`. Join fragments carrying the same integer verse number in document order, discard Project Gutenberg boilerplate, presentation-only page numbers, and footnote blocks, preserve textual brackets and critical symbols, and reject missing/empty chapters, duplicate output positions, or a non-contiguous 1..N verse set. Do not use the damaged archive Enoch text in output. For Murdock, omit only the ten exactly reviewed blank alignment records, declare those positions, and replace U+000F line separators with spaces; reject every other empty/control-bearing source text.
 
 Write `corrected-bundle.zip` with sorted member names, UTF-8 canonical JSON, and fixed ZIP timestamps/permissions so repeated builds are byte-identical. Write `data-quality-report.json` containing every input/output checksum, raw findings, exact corrected count, replacement counts, the two declared omissions, and generator version. Never overwrite an input artifact.
 
@@ -429,7 +441,7 @@ Use the complete BOOK_MAP above and:
 
 All source records remain provisional. Mark archive-derived WMB and Murdock records modified because revision proof is absent and the archive documents name standardization. The six WEB records use the official eBible public-domain source URL and are unmodified apart from structural conversion. Mark KJV fallback true. Attribute each Meqabyan work to Wikisource contributors under CC-BY-SA-4.0 using permanent revision URLs ending in oldids 16044809, 16044810, and 16044811; disclose that 2 Meqabyan 16:9 and 21:9 are absent upstream. Enoch uses Project Gutenberg ebook 77935 and is modified with a note that subverse/layout fragments were deterministically joined; Jubilees remains archive-derived with exact upstream revision unavailable.
 
-The output uses edition EOTC-COMPOSITE-EN, English reading language, Mixed source language, Latin script, LicenseRef-Mixed, provisional source verification, general_reading relationship, composite adapter, prayer-of-manasseh as the sole supplemental work, and `known_missing_verses` exactly equal to the two 2 Meqabyan positions. Its sole ingest `source_files` entry is `corrected-bundle.zip` with the checksum generated in the committed quality report.
+The output uses edition EOTC-COMPOSITE-EN, English reading language, Mixed source language, Latin script, LicenseRef-Mixed, provisional source verification, general_reading relationship, composite adapter, prayer-of-manasseh as the sole supplemental work, and `known_missing_verses` exactly equal to the two 2 Meqabyan positions plus ten reviewed blank Murdock alignment positions. Its sole ingest `source_files` entry is `corrected-bundle.zip` with the checksum generated in the committed quality report.
 
 - [ ] **Step 5: Generate and validate**
 
@@ -437,7 +449,7 @@ The output uses edition EOTC-COMPOSITE-EN, English reading language, Mixed sourc
     /Users/obietaylor/.gemini/antigravity/scratch/unbound-bible/venv/bin/python backend/data/scripture/eotc-composite-en/build_manifest.py
     PYTHONPATH=backend /Users/obietaylor/.gemini/antigravity/scratch/unbound-bible/venv/bin/python -c "from pathlib import Path; from app.library.ingest.manifest import SourceManifest; p=Path('backend/data/scripture/eotc-composite-en/manifest.json'); m=SourceManifest.model_validate_json(p.read_text()); print(m.edition_code, len(m.expected_works), sum(v.chapters for v in m.expected_works.values()))"
 
-Expected: EOTC-COMPOSITE-EN, 83 works, 1,520 chapters. The adapter row count must equal `corrected_verse_count` in `data-quality-report.json`, with no duplicate position and no omission other than the two declared 2 Meqabyan labels.
+Expected: EOTC-COMPOSITE-EN, 83 works, 1,520 chapters, 38,938 publishable rows. The adapter row count must equal `corrected_verse_count` in `data-quality-report.json`, with no duplicate position and no omission other than the two declared 2 Meqabyan labels and ten blank Murdock alignment labels.
 
 - [ ] **Step 6: Add real-data assertions**
 
@@ -453,7 +465,7 @@ Expected: EOTC-COMPOSITE-EN, 83 works, 1,520 chapters. The adapter row count mus
 
 - [ ] **Step 7: Document and commit**
 
-README records all four checksums (three inputs plus corrected output), distinguishes 44,114 raw records from the corrected publishable count, records 82+1 scope, 13 unavailable works, seven precise source records (splitting corrected Enoch from archive Jubilees), six KJV fallbacks, CC BY-SA duties and permanent revisions, the two upstream Meqabyan omissions, all modifications, provisional status, and exact operator commands. It must state that this is not an official or complete uniform Ethiopian Orthodox translation.
+README records all four checksums (three inputs plus corrected output), distinguishes 44,114 raw records from 38,938 publishable rows, records 82+1 scope, 13 unavailable works, distinct Enoch and Jubilees provenance records under the broad R. H. Charles source-family key, six KJV fallbacks, CC BY-SA duties and permanent revisions, the two upstream Meqabyan omissions, ten blank Murdock alignment labels, U+000F normalization, all modifications, provisional status, and exact operator commands. It must state that this is not an official or complete uniform Ethiopian Orthodox translation.
 
     PYTHONPATH=backend /Users/obietaylor/.gemini/antigravity/scratch/unbound-bible/venv/bin/python -m pytest backend/tests/library/ingest/test_composite_english_bundle_adapter.py -q
     git add backend/data/scripture/eotc-composite-en backend/tests/library/ingest/test_composite_english_bundle_adapter.py
@@ -768,7 +780,7 @@ Save the emitted run ID as COMPOSITE_RUN_ID.
     PYTHONPATH=backend /Users/obietaylor/.gemini/antigravity/scratch/unbound-bible/venv/bin/python -m app.library.ingest.cli validate --run-id "$COMPOSITE_RUN_ID" --database-url "$COMPOSITE_TEST_DB"
     PYTHONPATH=backend /Users/obietaylor/.gemini/antigravity/scratch/unbound-bible/venv/bin/python -m app.library.ingest.cli publish --run-id "$COMPOSITE_RUN_ID" --confirm --database-url "$COMPOSITE_TEST_DB"
 
-Expected: the exact corrected row count from `data-quality-report.json`, zero errors, 83 source records, 82 Ethiopian scope, one supplemental, provisional status, and exactly two declared missing Meqabyan verse labels.
+Expected: 38,938 corrected rows, zero errors, 83 source records, 82 Ethiopian scope, one supplemental, provisional status, and exactly twelve declared absent labels (two Meqabyan, ten Murdock alignment positions).
 
 - [ ] **Step 4: Run all verification**
 

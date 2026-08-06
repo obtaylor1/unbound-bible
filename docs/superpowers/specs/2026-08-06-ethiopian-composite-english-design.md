@@ -33,8 +33,9 @@ Strict parsing found that the archive cannot be published unchanged:
 - the bundled Enoch file has 17 distinct fragments assigned to seven duplicate verse numbers, 83 missing verse labels, and an empty chapter 80;
 - the bundled Sirach has twelve missing verse labels;
 - the upstream Wikisource 2 Meqabyan revision itself omits verse label 9 in chapters 16 and 21.
+- the archive's Murdock data contains ten blank alignment labels whose wording is already combined with neighbouring source verses, plus three texts containing a legacy U+000F line separator.
 
-The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935's official plain-text artifact, the public-domain R. H. Charles text; identical repeats are never published; and the two upstream Meqabyan omissions are explicitly declared rather than filled with invented text. Every upstream artifact has a committed checksum and provenance URL. The plain-text artifact is used instead of HTML so presentation footnotes cannot corrupt parser nesting state.
+The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935's official plain-text artifact, the public-domain R. H. Charles text; identical repeats are never published; the two upstream Meqabyan omissions and ten blank Murdock alignment labels are explicitly declared rather than filled with invented text; and U+000F is normalized to a space. Every upstream artifact has a committed checksum and provenance URL. The plain-text artifact is used instead of HTML so presentation footnotes cannot corrupt parser nesting state.
 
 ## Edition identity
 
@@ -110,7 +111,7 @@ Add a dedicated adapter for this archive format rather than weakening the strict
 4. enforces member-count and total-uncompressed-size limits;
 5. requires an explicit source-book-to-reviewed-library-work mapping and records whether each target is canon or supplemental;
 6. rejects duplicate source IDs, duplicate canonical targets, missing mapped files, mismatched book identities, invalid chapters, invalid verses, empty text, and duplicate verse positions;
-7. permits a verse-number gap only when the manifest declares that exact missing position and the source record discloses the omission; undeclared gaps and declared-but-present positions fail ingestion;
+7. permits a verse-number gap only when the manifest declares that exact absent source/alignment position and the source record discloses it; undeclared gaps and declared-but-present positions fail ingestion;
 8. validates actual coverage against the manifest before allowing publication;
 9. records a deterministic locator and checksum for every normalized verse;
 10. stages and publishes through the existing atomic verified-ingest pipeline;
@@ -174,7 +175,8 @@ Automated coverage includes:
 - all 83 explicit book mappings;
 - exact separation of 82 Ethiopian canon works and one supplemental Prayer of Manasseh work;
 - exact audit count of 44,114 raw records in the supplied ZIP;
-- a corrected bundle with 1,520 chapters, no duplicate verse positions, no empty chapters, and no undeclared verse-number gaps;
+- a corrected bundle with 38,938 publishable rows across 1,520 chapters, no duplicate verse positions, no empty chapters, and no undeclared verse-number gaps;
+- exactly twelve declared absent labels: two upstream 2 Meqabyan omissions and ten blank Murdock alignment positions;
 - an exact corrected verse-row count frozen by the deterministic generator and asserted by ingestion tests;
 - Genesis from the WMB group;
 - one Murdock New Testament passage;
