@@ -23,6 +23,38 @@ function normalizedTaxonomy(value, kind) {
   return text
 }
 
+function normalizedIdentifier(value, fallbackName) {
+  const supplied = typeof value === 'string' ? value.trim() : ''
+  const source = supplied || fallbackName
+  return source
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function clonedJsonValue(value, seen = new WeakMap()) {
+  if (value === null || typeof value !== 'object') return value
+  if (seen.has(value)) return null
+
+  const clone = Array.isArray(value) ? [] : {}
+  seen.set(value, clone)
+  for (const [key, entry] of Object.entries(value)) {
+    Object.defineProperty(clone, key, {
+      configurable: true,
+      enumerable: true,
+      value: clonedJsonValue(entry, seen),
+      writable: true,
+    })
+  }
+  return clone
+}
+
+function normalizedOptionalText(value, { uppercase = false } = {}) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const text = value.trim()
+  return uppercase ? text.toUpperCase() : text
+}
+
 export async function getBookCatalog(canon, signal) {
   const normalizedCanon = String(canon ?? '').trim().toUpperCase() || 'ETHIO81'
   const params = new URLSearchParams({ canon: normalizedCanon })
@@ -36,9 +68,15 @@ export async function getBookCatalog(canon, signal) {
     if (seen.has(key)) return []
     seen.add(key)
     return [{
+      id: normalizedIdentifier(book?.id, name),
       name,
       testament: normalizedTaxonomy(book?.testament, 'testament'),
       collection: normalizedTaxonomy(book?.collection, 'collection'),
+      coverage: book?.coverage && typeof book.coverage === 'object'
+        ? clonedJsonValue(book.coverage)
+        : null,
+      recommendedEdition: normalizedOptionalText(book?.recommended_edition, { uppercase: true }),
+      unavailableReason: normalizedOptionalText(book?.unavailable_reason),
     }]
   })
 }

@@ -189,6 +189,21 @@ describe('ScriptureReaderPage', () => {
     expect(getChapter).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a valid explicitly linked translation when the catalog recommends another', async () => {
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+
+    renderReader()
+
+    expect(await screen.findByText('In the beginning.')).toBeInTheDocument()
+    expect(window.location.hash).toContain('translation=KJV')
+    expect(window.location.hash).toContain('canon=ETHIO81')
+  })
+
   it('labels a verified Ge\'ez edition by its human name', async () => {
     getChapter.mockResolvedValue([{
       id: 10,
@@ -399,6 +414,37 @@ describe('ScriptureReaderPage', () => {
     await user.click(within(picker).getByRole('button', { name: 'Tobit' }))
     await user.click(await within(picker).findByRole('button', { name: 'Chapter 1' }))
     expect(screen.queryByRole('dialog', { name: 'Choose a book and chapter' })).not.toBeInTheDocument()
+  })
+
+  it('uses a selected book recommendation instead of the first chapter translation', async () => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([
+      {
+        id: 'genesis', name: 'Genesis', recommendedEdition: 'EOTC-COMPOSITE-EN',
+        unavailableReason: null,
+      },
+      {
+        id: 'exodus', name: 'Exodus', recommendedEdition: 'EOTC-COMPOSITE-EN',
+        unavailableReason: null,
+      },
+    ])
+    getBookChapters.mockResolvedValue([1])
+    getChapter.mockImplementation(({ book }) => Promise.resolve(book === 'Exodus' ? [
+      { verse: 1, translation: 'KJV', text: 'KJV Exodus first row.' },
+      { verse: 1, translation: 'EOTC-COMPOSITE-EN', text: 'Composite English Exodus.' },
+    ] : rows))
+    renderReader()
+    await screen.findByText('In the beginning.')
+
+    await user.click(screen.getByRole('button', { name: 'Choose a book' }))
+    await user.click(screen.getByRole('button', { name: 'Exodus' }))
+    await user.click(await screen.findByRole('button', { name: 'Chapter 1' }))
+
+    expect(await screen.findByText('Composite English Exodus.')).toBeInTheDocument()
+    expect(screen.queryByText('KJV Exodus first row.')).not.toBeInTheDocument()
+    expect(window.location.hash).toContain('book=Exodus')
+    expect(window.location.hash).toContain('translation=EOTC-COMPOSITE-EN')
+    expect(window.location.hash).toContain('canon=ETHIO81')
   })
 
   it('atomically swaps canon catalogs before validating or fetching a passage', async () => {

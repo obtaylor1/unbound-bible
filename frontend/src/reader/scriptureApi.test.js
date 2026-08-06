@@ -35,9 +35,81 @@ describe('scripture API', () => {
     }))
 
     await expect(getBookCatalog('ethio81')).resolves.toEqual([
-      { name: 'Genesis', testament: 'Old Testament', collection: 'Pentateuch' },
-      { name: 'Matthew', testament: 'New Testament', collection: 'Gospels' },
-      { name: '1 Enoch', testament: null, collection: null },
+      {
+        id: 'genesis',
+        name: 'Genesis',
+        testament: 'Old Testament',
+        collection: 'Pentateuch',
+        coverage: null,
+        recommendedEdition: null,
+        unavailableReason: null,
+      },
+      {
+        id: 'matthew',
+        name: 'Matthew',
+        testament: 'New Testament',
+        collection: 'Gospels',
+        coverage: null,
+        recommendedEdition: null,
+        unavailableReason: null,
+      },
+      {
+        id: '1-enoch',
+        name: '1 Enoch',
+        testament: null,
+        collection: null,
+        coverage: null,
+        recommendedEdition: null,
+        unavailableReason: null,
+      },
+    ])
+  })
+
+  it('normalizes Ethiopian recommendations and safely clones coverage metadata', async () => {
+    const coverage = [{ edition_code: 'EOTC-COMPOSITE-EN', chapters: 50 }]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ books: [{
+        id: ' genesis ',
+        name: ' Genesis ',
+        testament: 'old',
+        collection: 'Pentateuch',
+        coverage,
+        recommended_edition: ' eotc-composite-en ',
+        unavailable_reason: null,
+      }] }),
+    }))
+
+    const catalog = await getBookCatalog('ETHIO81')
+
+    expect(catalog).toEqual([{
+      id: 'genesis',
+      name: 'Genesis',
+      testament: 'Old Testament',
+      collection: 'Pentateuch',
+      coverage: [{ edition_code: 'EOTC-COMPOSITE-EN', chapters: 50 }],
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    expect(catalog[0].coverage).not.toBe(coverage)
+    expect(catalog[0].coverage[0]).not.toBe(coverage[0])
+  })
+
+  it('keeps old string and sparse object book payloads compatible', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ books: ['Genesis', { name: '1 Enoch' }] }),
+    }))
+
+    await expect(getBookCatalog('ETHIO81')).resolves.toEqual([
+      {
+        id: 'genesis', name: 'Genesis', testament: null, collection: null,
+        coverage: null, recommendedEdition: null, unavailableReason: null,
+      },
+      {
+        id: '1-enoch', name: '1 Enoch', testament: null, collection: null,
+        coverage: null, recommendedEdition: null, unavailableReason: null,
+      },
     ])
   })
 

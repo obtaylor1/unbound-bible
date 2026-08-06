@@ -517,6 +517,71 @@ describe('BookPicker', () => {
     expect(onChoose).toHaveBeenCalledWith({ book: 'Genesis', chapter: 2 })
   })
 
+  it('chooses the catalog recommendation with the selected book object', async () => {
+    const user = userEvent.setup()
+    const onChoose = vi.fn()
+    const recommendedGenesis = {
+      id: 'genesis',
+      name: 'Genesis',
+      testament: 'Old Testament',
+      collection: 'Pentateuch',
+      coverage: [],
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }
+    render(
+      <BookPicker
+        open
+        books={[recommendedGenesis]}
+        selectedCanon="ETHIO81"
+        loadChapters={() => [1]}
+        onChoose={onChoose}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Genesis' }))
+    await user.click(await screen.findByRole('button', { name: 'Chapter 1' }))
+
+    expect(onChoose).toHaveBeenCalledWith({
+      book: 'Genesis',
+      chapter: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+    })
+  })
+
+  it('explains unavailable English text and never invents a recommendation', async () => {
+    const user = userEvent.setup()
+    const onChoose = vi.fn()
+    render(
+      <BookPicker
+        open
+        books={[{
+          id: 'tegsats',
+          name: 'Tegsats',
+          recommendedEdition: null,
+          unavailableReason: 'English text not yet available',
+        }]}
+        selectedCanon="ETHIO81"
+        loadChapters={() => [1]}
+        onChoose={onChoose}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const book = screen.getByRole('button', { name: /Tegsats.*English text not yet available/i })
+    book.focus()
+    await user.keyboard('{Enter}')
+    const chapter = await screen.findByRole('button', { name: 'Chapter 1' })
+    chapter.focus()
+    await user.keyboard('{Enter}')
+
+    expect(onChoose).toHaveBeenCalledWith({
+      book: 'Tegsats',
+      chapter: 1,
+    })
+  })
+
   it('announces loading, retries failures, and handles an empty chapter result', async () => {
     const user = userEvent.setup()
     const pending = deferred()

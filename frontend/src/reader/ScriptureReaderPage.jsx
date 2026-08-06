@@ -170,9 +170,14 @@ export default function ScriptureReaderPage({
 
   useEffect(() => {
     if (!catalogReady || currentBooks.length === 0 || routeBookValid) return
+    const fallbackBook = currentBooks[0]
+    const recommendedEdition = typeof fallbackBook === 'object'
+      ? fallbackBook?.recommendedEdition
+      : null
     navigate({
-      book: typeof currentBooks[0] === 'string' ? currentBooks[0] : currentBooks[0].name,
+      book: typeof fallbackBook === 'string' ? fallbackBook : fallbackBook.name,
       chapter: 1,
+      ...(recommendedEdition ? { translation: recommendedEdition } : {}),
       verse: null,
     })
   }, [catalogReady, currentBooks, navigate, routeBookValid])
@@ -488,9 +493,14 @@ export default function ScriptureReaderPage({
         loadChapters={(book, signal) => loadChapterMetadata(book, signal, route.canon)}
         onRetryBooks={() => setBooksRetryRevision((value) => value + 1)}
         onCanonChange={(canon) => navigate({ canon, chapter: 1, verse: null })}
-        onChoose={({ book, chapter }) => {
+        onChoose={({ book, chapter, translation }) => {
           setBookPickerOpen(false)
-          navigate({ book, chapter, verse: null })
+          navigate({
+            book,
+            chapter,
+            ...(translation ? { translation } : {}),
+            verse: null,
+          })
         }}
         onClose={() => setBookPickerOpen(false)}
       />

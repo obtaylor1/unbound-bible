@@ -20,12 +20,24 @@ function normalizeBooks(books) {
     seen.add(key)
     const metadata = typeof book === 'object' && book ? book : {}
     return [{
+      id: typeof metadata.id === 'string' && metadata.id.trim()
+        ? metadata.id.trim()
+        : null,
       name,
       testament: typeof metadata.testament === 'string' && metadata.testament.trim()
         ? metadata.testament.trim()
         : null,
       collection: typeof metadata.collection === 'string' && metadata.collection.trim()
         ? metadata.collection.trim()
+        : null,
+      coverage: metadata.coverage ?? null,
+      recommendedEdition: typeof metadata.recommendedEdition === 'string'
+        && metadata.recommendedEdition.trim()
+        ? metadata.recommendedEdition.trim().toUpperCase()
+        : null,
+      unavailableReason: typeof metadata.unavailableReason === 'string'
+        && metadata.unavailableReason.trim()
+        ? metadata.unavailableReason.trim()
         : null,
     }]
   })
@@ -211,7 +223,7 @@ export default function BookPicker({
         throw new Error('No chapter loader is available')
       }
 
-      const loadedChapters = await loadChapters(book, controller.signal)
+      const loadedChapters = await loadChapters(book.name, controller.signal)
       if (
         !mountedRef.current
         || !openRef.current
@@ -376,10 +388,13 @@ export default function BookPicker({
                   <button
                     className="book-picker__book book-picker__control"
                     type="button"
-                    key={book.name}
-                    onClick={() => chooseBook(book.name)}
+                    key={book.id || book.name}
+                    onClick={() => chooseBook(book)}
                   >
-                    {book.name}
+                    <span>{book.name}</span>
+                    {book.unavailableReason && (
+                      <span> — {book.unavailableReason}</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -402,18 +417,18 @@ export default function BookPicker({
               >
                 <span aria-hidden="true">←</span> Back to books
               </button>
-              <h3>{selectedBook} chapters</h3>
+              <h3>{selectedBook.name} chapters</h3>
             </div>
 
             {chapterState === 'loading' && (
               <p className="book-picker__message" role="status">
-                Loading chapters for {selectedBook}…
+                Loading chapters for {selectedBook.name}…
               </p>
             )}
 
             {chapterState === 'error' && (
               <div className="book-picker__message">
-                <p role="alert">We could not load chapters for {selectedBook}.</p>
+                <p role="alert">We could not load chapters for {selectedBook.name}.</p>
                 <button
                   className="book-picker__retry book-picker__control"
                   type="button"
@@ -426,7 +441,7 @@ export default function BookPicker({
 
             {chapterState === 'empty' && (
               <div className="book-picker__message">
-                <p role="status">No chapters are available for {selectedBook}.</p>
+                <p role="status">No chapters are available for {selectedBook.name}.</p>
                 <button
                   className="book-picker__retry book-picker__control"
                   type="button"
@@ -441,7 +456,7 @@ export default function BookPicker({
               <div
                 className="book-picker__chapters"
                 role="group"
-                aria-label={`${selectedBook} chapters`}
+                aria-label={`${selectedBook.name} chapters`}
               >
                 {chapters.map((chapter, index) => (
                   <button
@@ -451,7 +466,13 @@ export default function BookPicker({
                     key={chapter}
                     onClick={() => {
                       if (typeof onChoose === 'function') {
-                        onChoose({ book: selectedBook, chapter })
+                        onChoose({
+                          book: selectedBook.name,
+                          chapter,
+                          ...(selectedBook.recommendedEdition
+                            ? { translation: selectedBook.recommendedEdition }
+                            : {}),
+                        })
                       }
                     }}
                   >
