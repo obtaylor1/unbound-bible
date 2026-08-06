@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 
-**Status:** Approved
+**Status:** Approved with 2026-08-06 data-quality amendment
 
 ## Purpose
 
@@ -15,7 +15,7 @@ The supplied ZIP has SHA-256 checksum `0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27
 - 83 populated book files: 82 map to established Ethiopian canon works and
   Prayer of Manasseh maps to a supplemental related work;
 - 1,520 chapters;
-- 44,114 verses;
+- 44,114 raw verse-shaped records, not 44,114 publishable verses;
 - 11 archive placeholder records with no English text;
 - no unsafe absolute or parent-traversal archive paths;
 - six source groups: World Messianic Bible, Murdock Peshitta, World English Bible, KJV fallback, Wikisource Meqabyan, and R. H. Charles;
@@ -23,6 +23,18 @@ The supplied ZIP has SHA-256 checksum `0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27
 - 1,192 case-insensitive occurrences of `Yeshua` and no occurrences of `Jesus` in populated verse text.
 
 The archive is a composite collection, not a single translation. Its source descriptions are useful but do not include precise source URLs, source revision identifiers, or checksums for every contributing text. The edition must therefore be published as provisional until source-level provenance is completed.
+
+### Data-quality amendment
+
+Strict parsing found that the archive cannot be published unchanged:
+
+- 5,252 WEB-apocrypha records are exact repeated copies of earlier records;
+- the remaining raw records occupy 38,845 unique `(book, chapter, verse)` positions;
+- the bundled Enoch file has 17 distinct fragments assigned to seven duplicate verse numbers, 83 missing verse labels, and an empty chapter 80;
+- the bundled Sirach has twelve missing verse labels;
+- the upstream Wikisource 2 Meqabyan revision itself omits verse label 9 in chapters 16 and 21.
+
+The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935, the public-domain R. H. Charles text; identical repeats are never published; and the two upstream Meqabyan omissions are explicitly declared rather than filled with invented text. Every upstream artifact has a committed checksum and provenance URL.
 
 ## Edition identity
 
@@ -37,7 +49,7 @@ The archive is a composite collection, not a single translation. Its source desc
 
 ## Coverage and missing works
 
-All 83 populated books are imported after explicit mapping to reviewed library work identifiers. Eighty-two contribute coverage to `ETHIO81`; Prayer of Manasseh is stored as a supplemental related work and is not inserted into or counted as part of the established Ethiopian canon. Chapter and verse coverage must be derived from and verified against the frozen archive.
+All 83 populated books are imported after explicit mapping to reviewed library work identifiers and deterministic correction of the damaged source files. Eighty-two contribute coverage to `ETHIO81`; Prayer of Manasseh is stored as a supplemental related work and is not inserted into or counted as part of the established Ethiopian canon. Chapter and verse coverage must be derived from and verified against the corrected bundle, while the original raw counts remain separately auditable.
 
 The archive's placeholder count cannot be used as the app's missing-canon count. Its `Metsihafe Tibeb` placeholder overlaps the populated Wisdom of Solomon mapping, while it omits separate placeholders for three established canon works. The following thirteen canonical works remain visible in Ethiopian canon navigation but are not represented as translated text:
 
@@ -78,12 +90,13 @@ The 83 populated books map to these source groups; Prayer of Manasseh is one of 
 | ---: | --- | --- | --- | --- |
 | 39 | World Messianic Bible | Hebrew | Public domain | WMB |
 | 27 | Murdock Peshitta (1852) | Syriac Aramaic | Public domain | Murdock |
-| 6 | World English Bible | Greek/Hebrew | Public domain | WEB |
+| 6 | WEB British Edition with Deuterocanon | Greek/Hebrew | Public domain | WEB |
 | 6 | KJV 1611 fallback | Greek/Hebrew | Public domain | KJV fallback |
 | 3 | Wikisource Meqabyan | Ge'ez | CC BY-SA 4.0 | Ge'ez source |
-| 2 | R. H. Charles | Ethiopic/Greek | Public domain | R. H. Charles |
+| 1 | R. H. Charles (Project Gutenberg 77935) | Ethiopic | Public domain | R. H. Charles |
+| 1 | R. H. Charles (archive Jubilees) | Ethiopic/Greek | Public domain | R. H. Charles |
 
-The World English Bible name is only used for unchanged WEB source text. If the archive's `Yeshua` standardization altered a WEB-derived book, the source is described as `adapted from the World English Bible` instead. The same change disclosure applies to other source texts altered by the archive compiler.
+The World English Bible name is used only for text regenerated from the checksummed official eBible verse-per-line release. The build records the edition date and source URL. Archive-derived texts retain explicit archive-revision and name-standardization disclosures.
 
 The Meqabyan records must include appropriate credit, a link to CC BY-SA 4.0, an indication of changes, and the required ShareAlike treatment for distributed adaptations. Source-level attribution must remain available from the reader and comparison workspace.
 
@@ -97,12 +110,13 @@ Add a dedicated adapter for this archive format rather than weakening the strict
 4. enforces member-count and total-uncompressed-size limits;
 5. requires an explicit source-book-to-reviewed-library-work mapping and records whether each target is canon or supplemental;
 6. rejects duplicate source IDs, duplicate canonical targets, missing mapped files, mismatched book identities, invalid chapters, invalid verses, empty text, and duplicate verse positions;
-7. validates actual coverage against the manifest before allowing publication;
-8. records a deterministic locator and checksum for every normalized verse;
-9. stages and publishes through the existing atomic verified-ingest pipeline;
-10. derives the thirteen unavailable canon works from the difference between installed coverage and the established canon, never from archive placeholder count and never as empty verse rows.
+7. permits a verse-number gap only when the manifest declares that exact missing position and the source record discloses the omission; undeclared gaps and declared-but-present positions fail ingestion;
+8. validates actual coverage against the manifest before allowing publication;
+9. records a deterministic locator and checksum for every normalized verse;
+10. stages and publishes through the existing atomic verified-ingest pipeline;
+11. derives the thirteen unavailable canon works from the difference between installed coverage and the established canon, never from archive placeholder count and never as empty verse rows.
 
-The original archive is stored as an immutable source artifact outside application-served paths. Its checksum is committed in the manifest. A checksum change requires a new reviewed ingest run and cannot silently update the edition.
+The original archive and both repair sources are stored as immutable build inputs outside application-served paths. Their checksums are committed beside the generator. The ingest manifest references only the deterministically generated corrected bundle and its checksum. Any input or output checksum change requires a new reviewed build and ingest run and cannot silently update the edition.
 
 ## Verification lifecycle
 
@@ -125,7 +139,7 @@ The reader displays:
 - a concise source badge for the current book;
 - a prominent red `KJV fallback` badge on the six fallback books;
 - an `About this text` disclosure with translator, source language, tradition, date, license, provenance, modification note, and provisional status;
-- an accessible unavailable-text state for the eleven missing works;
+- an accessible unavailable-text state for the thirteen missing works;
 - an explanation that the collection combines sources and is not one uniform Ethiopian English translation.
 
 Source badges must have text labels and cannot communicate meaning by color alone. Licensing and provisional status remain readable in light mode, dark mode, at 200% zoom, by keyboard, and with a screen reader.
@@ -159,7 +173,9 @@ Automated coverage includes:
 - archive safety and checksum failures;
 - all 83 explicit book mappings;
 - exact separation of 82 Ethiopian canon works and one supplemental Prayer of Manasseh work;
-- exact aggregate counts of 1,520 chapters and 44,114 verses;
+- exact audit count of 44,114 raw records in the supplied ZIP;
+- a corrected bundle with 1,520 chapters, no duplicate verse positions, no empty chapters, and no undeclared verse-number gaps;
+- an exact corrected verse-row count frozen by the deterministic generator and asserted by ingestion tests;
 - Genesis from the WMB group;
 - one Murdock New Testament passage;
 - all three Meqabyan books and their attribution;
@@ -176,7 +192,7 @@ Before release, run the complete backend, frontend unit, lint, build, desktop Pl
 
 ## Non-goals
 
-- Translating the eleven unavailable works automatically.
+- Translating the thirteen unavailable works automatically.
 - Calling the collection an official or uniform Ethiopian Orthodox English translation.
 - Replacing the Ge'ez research edition.
 - Hiding KJV-derived content behind a generic Ethiopian label.
@@ -185,4 +201,4 @@ Before release, run the complete backend, frontend unit, lint, build, desktop Pl
 
 ## Future completion path
 
-The eleven unavailable works require a separate translation project using verified Ge'ez source texts, documented textual witnesses, qualified human review, reconciliation of disputed readings, and versioned publication. AI may assist transcription and draft analysis but no generated verse is published as authoritative without human scholarly verification.
+The thirteen unavailable works require a separate translation project using verified Ge'ez source texts, documented textual witnesses, qualified human review, reconciliation of disputed readings, and versioned publication. AI may assist transcription and draft analysis but no generated verse is published as authoritative without human scholarly verification.
