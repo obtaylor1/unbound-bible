@@ -138,9 +138,18 @@ function ChapterComparison({
             ? baseTranslation
             : selectedTranslations.find((key) => hasAvailableText(getText(key, verse))) ?? null
           const baseText = getText(verseBaseTranslation, verse) ?? ''
+          const verseTexts = selectedTranslations.map((key) => getText(key, verse))
+          const verseSummary = summarizeComparison(verseTexts, {
+            baseIndex: selectedTranslations.indexOf(verseBaseTranslation),
+          })
           return (
             <section className="comparison-chapter-row" key={verse} aria-labelledby={`compare-verse-${verse}`}>
-              <h3 id={`compare-verse-${verse}`}>Verse {verse}</h3>
+              <h3 id={`compare-verse-${verse}`}>
+                <span>Verse {verse}</span>
+                <small className="chapter-difference-count">
+                  {verseSummary.differenceCount} {verseSummary.differenceCount === 1 ? 'difference' : 'differences'}
+                </small>
+              </h3>
               <div style={{ '--chapter-columns': selectedTranslations.length }}>
                 {selectedTranslations.map((key) => {
                   const source = TRANSLATION_BY_KEY[key]
@@ -574,7 +583,7 @@ export default function TextualComparisonWorkspace() {
                 chapter={chapter}
                 verses={verseOptions}
                 selectedTranslations={activeTranslations}
-                baseTranslation={effectiveBaseTranslation}
+                baseTranslation={activeBaseTranslation}
                 rows={rows}
                 highlightDifferences={highlightDifferences}
               />

@@ -541,7 +541,8 @@
 .comparison-chapter-table { margin-top: 20px; border: 1px solid var(--compare-line); border-radius: 11px; overflow: hidden; }
 .comparison-chapter-row { display: grid; grid-template-columns: 82px minmax(0, 1fr); border-bottom: 1px solid var(--compare-line); }
 .comparison-chapter-row:last-child { border-bottom: 0; }
-.comparison-chapter-row h3 { margin: 0; padding: 19px 13px; color: var(--compare-gold); font-size: 0.82rem; background: rgba(231, 184, 79, 0.05); }
+.comparison-chapter-row h3 { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 19px 13px; color: var(--compare-gold); font-size: 0.82rem; background: rgba(231, 184, 79, 0.05); }
+.comparison-chapter-row .chapter-difference-count { color: var(--compare-faint); font-size: 0.68rem; font-weight: 600; }
 .comparison-chapter-row > div { display: grid; grid-template-columns: repeat(var(--chapter-columns), minmax(0, 1fr)); }
 .comparison-chapter-row article { min-width: 0; padding: 17px; border-left: 1px solid var(--compare-line); }
 .chapter-source-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }

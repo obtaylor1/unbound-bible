@@ -212,14 +212,14 @@ describe('TextualComparisonWorkspace', () => {
     expect(window.location.hash).toContain('translation=EOTC-COMPOSITE-EN')
   })
 
-  it('labels the effective base separately for each chapter verse when availability changes', async () => {
+  it('returns to the requested chapter base when its text becomes available on a later verse', async () => {
     const user = userEvent.setup()
     installFetch({ rows: [
       { ...compositeRow, text: '   ' },
       { ...genesisRows[0], text: 'one two three' },
       { ...genesisRows[1], text: 'one two four' },
-      { ...compositeRow, id: 40, verse: 2, text: null },
-      { ...genesisRows[0], id: 41, verse: 2, text: null },
+      { ...compositeRow, id: 40, verse: 2, text: 'alpha beta' },
+      { ...genesisRows[0], id: 41, verse: 2, text: 'alpha gamma delta' },
       { ...genesisRows[1], id: 42, verse: 2, text: 'alpha beta' },
     ] })
     render(<TextualComparisonWorkspace />)
@@ -228,8 +228,12 @@ describe('TextualComparisonWorkspace', () => {
     await user.click(screen.getByRole('button', { name: 'Chapter view' }))
 
     expect(screen.getByRole('article', { name: 'King James Version, verse 1' })).toHaveTextContent('Base reference')
+    expect(screen.getByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition, verse 1' })).not.toHaveTextContent('Base reference')
     expect(screen.getByRole('article', { name: 'King James Version, verse 2' })).not.toHaveTextContent('Base reference')
-    expect(screen.getByRole('article', { name: 'American Standard Version, verse 2' })).toHaveTextContent('Base reference')
+    expect(screen.getByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition, verse 2' })).toHaveTextContent('Base reference')
+    expect(screen.getByText('2 differences', { selector: '.chapter-difference-count' })).toBeVisible()
+    const kjvVerseTwo = screen.getByRole('article', { name: 'King James Version, verse 2' })
+    expect([...kjvVerseTwo.querySelectorAll('mark')].map((mark) => mark.textContent)).toEqual(['gamma', 'delta'])
   })
 
   it('calculates three-source difference totals from the active base translation', async () => {
