@@ -84,7 +84,7 @@ describe('comparisonModel', () => {
     ])
   })
 
-  it('preserves installed selections and prefers the composite edition as base', () => {
+  it('preserves an installed requested base and uses composite only when no valid base was requested', () => {
     const installed = buildInstalledSources([
       { translation: 'KJV', edition: { code: 'KJV' } },
       { translation: 'EOTC-COMPOSITE-EN', edition: { code: 'EOTC-COMPOSITE-EN' } },
@@ -96,8 +96,13 @@ describe('comparisonModel', () => {
       base: 'kjv',
     })).toEqual({
       selected: ['kjv', 'eotc-composite-en'],
-      base: 'eotc-composite-en',
+      base: 'kjv',
     })
+    expect(reconcileSourceSelection({
+      installed,
+      selected: ['kjv'],
+      base: null,
+    }).base).toBe('eotc-composite-en')
   })
 
   it('keeps the preferred composite source selected when four other sources were retained', () => {
@@ -114,7 +119,7 @@ describe('comparisonModel', () => {
     })
     expect(result.selected).toHaveLength(4)
     expect(result.selected).toContain('eotc-composite-en')
-    expect(result.base).toBe('eotc-composite-en')
+    expect(result.base).toBe('kjv')
   })
 
   it('limits a comparison to four sources', () => {

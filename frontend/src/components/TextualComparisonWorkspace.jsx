@@ -134,12 +134,10 @@ function ChapterComparison({
       <div className="comparison-chapter-table">
         {verses.map((verse) => {
           const preferredBaseText = getText(baseTranslation, verse)
-          const availableBaseText = selectedTranslations
-            .map((key) => getText(key, verse))
-            .find((text) => typeof text === 'string' && text.trim())
-          const baseText = hasAvailableText(preferredBaseText)
-            ? preferredBaseText
-            : availableBaseText || ''
+          const verseBaseTranslation = hasAvailableText(preferredBaseText)
+            ? baseTranslation
+            : selectedTranslations.find((key) => hasAvailableText(getText(key, verse))) ?? null
+          const baseText = getText(verseBaseTranslation, verse) ?? ''
           return (
             <section className="comparison-chapter-row" key={verse} aria-labelledby={`compare-verse-${verse}`}>
               <h3 id={`compare-verse-${verse}`}>Verse {verse}</h3>
@@ -149,7 +147,10 @@ function ChapterComparison({
                   const text = getText(key, verse)
                   return (
                     <article key={key} aria-label={`${source.name}, verse ${verse}`}>
-                      <strong>{source.code}</strong>
+                      <div className="chapter-source-heading">
+                        <strong>{source.code}</strong>
+                        {key === verseBaseTranslation && <span>Base reference</span>}
+                      </div>
                       {hasAvailableText(text) ? (
                         <p>{diffWords(text, highlightDifferences && baseText ? baseText : text).map((word, index) => (
                           word.differs ? <mark key={`${word.text}-${index}`}>{word.text}</mark> : word.text
@@ -182,7 +183,7 @@ export default function TextualComparisonWorkspace() {
       ? [initialRoute.translation, ...DEFAULT_TRANSLATIONS.filter((key) => key !== initialRoute.translation)]
       : DEFAULT_TRANSLATIONS
   ))
-  const [baseTranslation, setBaseTranslation] = useState(null)
+  const [baseTranslation, setBaseTranslation] = useState(initialRoute.translation)
   const [selectionSourceSignature, setSelectionSourceSignature] = useState('')
   const [highlightDifferences, setHighlightDifferences] = useState(true)
   const [viewMode, setViewMode] = useState('verse')
@@ -373,12 +374,15 @@ export default function TextualComparisonWorkspace() {
   }
 
   const selectedTexts = activeTranslations.map((key) => textFor(key))
+  const effectiveBaseTranslation = activeTranslations.find((key) => (
+    key === activeBaseTranslation && hasAvailableText(textFor(key))
+  )) ?? activeTranslations.find((key) => hasAvailableText(textFor(key))) ?? null
   const summary = summarizeComparison(selectedTexts, {
-    baseIndex: activeTranslations.indexOf(activeBaseTranslation),
+    baseIndex: activeTranslations.indexOf(effectiveBaseTranslation),
   })
   const selectedAvailableText = selectedTexts.find(hasAvailableText) ?? ''
-  const preferredBaseText = textFor(activeBaseTranslation)
-  const baseText = hasAvailableText(preferredBaseText) ? preferredBaseText : selectedAvailableText
+  const effectiveBaseText = textFor(effectiveBaseTranslation)
+  const baseText = hasAvailableText(effectiveBaseText) ? effectiveBaseText : selectedAvailableText
 
   const handleToggleTranslation = (key) => {
     const result = applyTranslationToggle(activeTranslations, key, activeBaseTranslation)
@@ -434,7 +438,7 @@ export default function TextualComparisonWorkspace() {
     type: 'Textual Comparison Workspace',
     content: {
       translationsCompared: activeTranslations.map((key) => TRANSLATION_BY_KEY[key]?.name ?? key),
-      baseTranslation: TRANSLATION_BY_KEY[activeBaseTranslation]?.name ?? activeBaseTranslation,
+      baseTranslation: TRANSLATION_BY_KEY[effectiveBaseTranslation]?.name ?? effectiveBaseTranslation,
       notes: comparisonNote,
     },
   }
@@ -461,7 +465,7 @@ export default function TextualComparisonWorkspace() {
         chapter={chapter}
         verse={verse}
         viewMode={viewMode}
-        baseTranslation={activeBaseTranslation ?? ''}
+        baseTranslation={effectiveBaseTranslation ?? ''}
         selectedTranslations={activeTranslations}
         highlightDifferences={highlightDifferences}
         onBookChange={handleBookChange}
@@ -508,7 +512,7 @@ export default function TextualComparisonWorkspace() {
           <TranslationSelector
             key={installedSourceSignature}
             selected={activeTranslations}
-            baseTranslation={activeBaseTranslation}
+            baseTranslation={effectiveBaseTranslation}
             onToggle={handleToggleTranslation}
           />
           <details className="comparison-note-panel">
@@ -551,7 +555,7 @@ export default function TextualComparisonWorkspace() {
                         source={source}
                         state={buildSourceState({ key, book, text })}
                         baseText={baseText}
-                        isBase={key === activeBaseTranslation}
+                        isBase={key === effectiveBaseTranslation}
                         highlightDifferences={highlightDifferences}
                         differenceCount={summary.differenceCount}
                         bookmarked={bookmarks.includes(referenceKey)}
@@ -570,7 +574,7 @@ export default function TextualComparisonWorkspace() {
                 chapter={chapter}
                 verses={verseOptions}
                 selectedTranslations={activeTranslations}
-                baseTranslation={activeBaseTranslation}
+                baseTranslation={effectiveBaseTranslation}
                 rows={rows}
                 highlightDifferences={highlightDifferences}
               />
@@ -583,7 +587,9 @@ export default function TextualComparisonWorkspace() {
 
       <p className="comparison-source-note">
         <span aria-hidden="true">i</span>
-        Differences are highlighted against {TRANSLATION_BY_KEY[activeBaseTranslation]?.name ?? 'the selected available source'}. Source availability reflects the local research database.
+        {viewMode === 'chapter'
+          ? `In chapter view, each verse is highlighted against its labeled available base. ${reference} currently uses ${TRANSLATION_BY_KEY[effectiveBaseTranslation]?.name ?? 'the selected available source'}.`
+          : `Differences are highlighted against ${TRANSLATION_BY_KEY[effectiveBaseTranslation]?.name ?? 'the selected available source'}.`} Source availability reflects the local research database.
       </p>
 
       <ComparisonStudyDrawer

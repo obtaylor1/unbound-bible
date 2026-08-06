@@ -150,6 +150,88 @@ describe('TextualComparisonWorkspace', () => {
     expect(card).toHaveTextContent('Translated by King James Version translators')
   })
 
+  it('keeps an explicit same-passage route source through hash navigation and browser back', async () => {
+    window.history.replaceState(null, '', '#compare?book=Genesis&chapter=1&verse=1&translation=KJV&canon=ETHIO81')
+    installFetch({ rows: [compositeRow, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+
+    const kjvHash = window.location.hash
+    expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('kjv')
+    expect(kjvHash).toContain('translation=KJV')
+
+    window.history.pushState(null, '', '#compare?book=Genesis&chapter=1&verse=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('eotc-composite-en'))
+    expect(window.location.hash).toContain('translation=EOTC-COMPOSITE-EN')
+
+    window.history.back()
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('kjv'))
+    expect(window.location.hash).toBe(kjvHash)
+  })
+
+  it('uses the first available verse source as the visible and mathematical base', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [
+      { ...compositeRow, text: '   ' },
+      { ...genesisRows[0], text: 'one two three' },
+      { ...genesisRows[1], text: 'one two four' },
+    ] })
+    render(<TextualComparisonWorkspace />)
+    const compositeCard = await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    await user.click(screen.getByRole('checkbox', { name: /American Standard Version/ }))
+
+    const kjvCard = screen.getByRole('article', { name: 'King James Version' })
+    expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('kjv')
+    expect(kjvCard).toHaveTextContent('Base reference')
+    expect(compositeCard).toHaveTextContent('Text unavailable')
+    expect(compositeCard).not.toHaveTextContent('Base reference')
+    expect(screen.getByText('1 wording difference found')).toBeVisible()
+    expect(screen.getByText('four', { selector: 'mark' })).toBeVisible()
+    expect(screen.getByText(/Differences are highlighted against King James Version/)).toBeVisible()
+    expect(window.location.hash).toContain('translation=EOTC-COMPOSITE-EN')
+  })
+
+  it('uses the effective available base consistently in chapter view', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [
+      { ...compositeRow, text: '   ' },
+      { ...genesisRows[0], text: 'one two three' },
+      { ...genesisRows[1], text: 'one two four' },
+    ] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    await user.click(screen.getByRole('checkbox', { name: /American Standard Version/ }))
+    await user.click(screen.getByRole('button', { name: 'Chapter view' }))
+
+    expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('kjv')
+    expect(screen.getByRole('article', { name: 'King James Version, verse 1' })).toHaveTextContent('Base reference')
+    expect(screen.getByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition, verse 1' })).not.toHaveTextContent('Base reference')
+    expect(screen.getByText('four', { selector: 'mark' })).toBeVisible()
+    expect(screen.getByText(/each verse is highlighted against its labeled available base.*Genesis 1:1 currently uses King James Version/i)).toBeVisible()
+    expect(window.location.hash).toContain('translation=EOTC-COMPOSITE-EN')
+  })
+
+  it('labels the effective base separately for each chapter verse when availability changes', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [
+      { ...compositeRow, text: '   ' },
+      { ...genesisRows[0], text: 'one two three' },
+      { ...genesisRows[1], text: 'one two four' },
+      { ...compositeRow, id: 40, verse: 2, text: null },
+      { ...genesisRows[0], id: 41, verse: 2, text: null },
+      { ...genesisRows[1], id: 42, verse: 2, text: 'alpha beta' },
+    ] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    await user.click(screen.getByRole('checkbox', { name: /American Standard Version/ }))
+    await user.click(screen.getByRole('button', { name: 'Chapter view' }))
+
+    expect(screen.getByRole('article', { name: 'King James Version, verse 1' })).toHaveTextContent('Base reference')
+    expect(screen.getByRole('article', { name: 'King James Version, verse 2' })).not.toHaveTextContent('Base reference')
+    expect(screen.getByRole('article', { name: 'American Standard Version, verse 2' })).toHaveTextContent('Base reference')
+  })
+
   it('calculates three-source difference totals from the active base translation', async () => {
     const user = userEvent.setup()
     installFetch({ rows: [

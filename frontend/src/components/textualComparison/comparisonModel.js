@@ -123,7 +123,9 @@ export function reconcileSourceSelection({ installed = [], selected = [], base =
 
   return {
     selected: next.slice(0, MAX_TRANSLATIONS),
-    base: preferred ?? (installedKeys.has(base) && next.includes(base) ? base : next[0] ?? null),
+    base: installedKeys.has(base) && next.includes(base)
+      ? base
+      : preferred ?? next[0] ?? null,
   }
 }
 
