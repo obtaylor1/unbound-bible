@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 from typing import Any
+import unicodedata
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from app.library.ingest.manifest import (
@@ -40,6 +41,10 @@ def _file_checksum(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_locator_normalization_stable(value: str) -> bool:
+    return value == " ".join(unicodedata.normalize("NFC", value).split())
+
+
 def _safe_relative_path(value: object, *, label: str) -> str:
     if type(value) is not str or not value:
         raise ValueError(f"{label} must be a nonempty relative POSIX path.")
@@ -52,6 +57,8 @@ def _safe_relative_path(value: object, *, label: str) -> str:
         or path.is_absolute()
     ):
         raise ValueError(f"{label} contains an unsafe source file path.")
+    if not _is_locator_normalization_stable(value):
+        raise ValueError(f"{label} must be normalization-stable.")
     return value
 
 
@@ -183,7 +190,7 @@ def _rows_for_book(
     member = _book_member(record)
     chapter_count = _strict_positive_integer(record.get("chapters"), "index chapters")
     source_family = record.get("src")
-    if source_family not in _SOURCE_KEYS:
+    if type(source_family) is not str or not source_family or source_family not in _SOURCE_KEYS:
         raise ValueError(f"book {source_id!r} has an unknown source family.")
     if _SOURCE_KEYS[source_family] != expected_source_key:
         raise ValueError(
@@ -227,13 +234,16 @@ def _rows_for_book(
                 f"book {source_id!r} chapter {chapter} verses must be contiguous from 1."
             )
         for verse in range(1, len(verses) + 1):
+            locator = f"{archive_name}!/{member}#{chapter}:{verse}"
             row = normalize_verse(
                 source_book,
                 chapter,
                 verse,
                 verses[verse].get("t"),
-                f"{archive_name}!/{member}#{chapter}:{verse}",
+                locator,
             )
+            if row.source_locator != locator:
+                raise ValueError("source locator must remain exact after normalization.")
             if row.work_id != work_id:
                 raise ValueError(
                     f"book {source_id!r} resolved to {row.work_id!r}, expected {work_id!r}."
@@ -257,6 +267,8 @@ def parse_composite_english_bundle(
         raise ValueError("book_map targets must exactly match expected_works keys.")
 
     source = manifest.source_files[0]
+    if not _is_locator_normalization_stable(source.path):
+        raise ValueError("source archive path must be normalization-stable.")
     manifest_root = manifest_directory.resolve()
     archive_path = manifest_directory / source.path
     if (

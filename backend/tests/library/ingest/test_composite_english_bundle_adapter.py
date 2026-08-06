@@ -3,6 +3,7 @@ from hashlib import sha256
 from pathlib import Path
 import stat
 import struct
+import unicodedata
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
@@ -260,6 +261,38 @@ def test_rejects_bad_zip(tmp_path):
         _parse(path, payload)
 
 
+def test_rejects_os_error_while_opening_archive(tmp_path, monkeypatch):
+    import app.library.ingest.adapters.composite_english_bundle as adapter
+
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path)
+
+    def fail_to_open(_path):
+        raise OSError("permission-safe simulated open failure")
+
+    monkeypatch.setattr(adapter, "ZipFile", fail_to_open)
+    with pytest.raises(ValueError, match="invalid source archive"):
+        _parse(path, payload)
+
+
+def test_rejects_archive_outside_manifest_directory(tmp_path):
+    outside_path = tmp_path / "outside.zip"
+    payload = _write_bundle(outside_path)
+    manifest_directory = tmp_path / "manifest"
+    manifest_directory.mkdir()
+    manifest = _manifest("bundle.zip", payload)
+    forged_source = manifest.source_files[0].model_copy(
+        update={"path": "../outside.zip"}
+    )
+    manifest = manifest.model_copy(update={"source_files": [forged_source]})
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+    with pytest.raises(ValueError, match="inside the manifest directory"):
+        parse_composite_english_bundle(manifest, manifest_directory)
+
+
 @pytest.mark.parametrize("name", ["", "/abs", "\\abs", "a\\b", ".", "..", "a/./b", "a/../b"])
 def test_rejects_unsafe_archive_member_names(tmp_path, name):
     path = tmp_path / "bundle.zip"
@@ -398,6 +431,79 @@ def test_rejects_source_family_mismatch_and_missing_file(tmp_path):
         _parse(path, payload)
 
 
+@pytest.mark.parametrize("source_family", [None, True, False, 1, 1.5, [], {}])
+def test_rejects_non_string_source_family_with_controlled_error(
+    tmp_path, source_family
+):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(
+        path, index={"books": [_index_record(src=source_family)]}
+    )
+    with pytest.raises(ValueError, match="source family"):
+        _parse(path, payload)
+
+
+@pytest.mark.parametrize("source_id", [None, True, False, 1, 1.5, [], {}])
+def test_rejects_non_string_index_ids(tmp_path, source_id):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(
+        path, index={"books": [_index_record(source_id)]}
+    )
+    with pytest.raises(ValueError, match="book id"):
+        _parse(path, payload)
+
+
+@pytest.mark.parametrize(
+    "book_payload",
+    [b"\xff", b"{"],
+    ids=["invalid-utf8", "invalid-json"],
+)
+def test_rejects_invalid_book_member_encoding_or_json(tmp_path, book_payload):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path, books={"data/gen.json": book_payload})
+    with pytest.raises(ValueError, match="UTF-8 JSON"):
+        _parse(path, payload)
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "data/repeated  space.json",
+        "data/tab\tname.json",
+        "data/" + unicodedata.normalize("NFD", "café") + ".json",
+    ],
+    ids=["repeated-space", "tab", "decomposed-unicode"],
+)
+def test_rejects_locator_unstable_book_member_paths(tmp_path, member):
+    path = tmp_path / "bundle.zip"
+    record = _index_record(file=member)
+    payload = _write_bundle(
+        path,
+        index={"books": [record]},
+        books={member: _book()},
+    )
+    with pytest.raises(ValueError, match="normalization-stable|unsafe archive member"):
+        _parse(path, payload)
+
+
+def test_rejects_locator_unstable_archive_path(tmp_path):
+    path = tmp_path / "bundle  name.zip"
+    payload = _write_bundle(path)
+    with pytest.raises(ValueError, match="normalization-stable"):
+        _parse(path, payload)
+
+
+def test_accepts_intended_archive_filename_with_single_spaces(tmp_path):
+    path = tmp_path / "Ethiopian Orthodox Bible (Non-KJV Edition).zip"
+    payload = _write_bundle(path)
+
+    rows = _parse(path, payload)
+
+    assert rows[0].source_locator == (
+        "Ethiopian Orthodox Bible (Non-KJV Edition).zip!/data/gen.json#1:1"
+    )
+
+
 @pytest.mark.parametrize(
     "chapters,message",
     [
@@ -484,6 +590,15 @@ def test_validates_manifest_adapter_options_and_expected_work_keys(tmp_path):
     wrong_adapter = manifest.model_copy(update={"adapter": "weahadu_bundle"})
     with pytest.raises(ValueError, match="adapter options"):
         parse_composite_english_bundle(wrong_adapter, tmp_path)
+
+    wrong_options = manifest.model_construct(
+        **{
+            **manifest.__dict__,
+            "adapter_options": {"book_map": {"GEN": "genesis"}},
+        }
+    )
+    with pytest.raises(ValueError, match="adapter options"):
+        parse_composite_english_bundle(wrong_options, tmp_path)
 
     wrong_expected = manifest.model_copy(update={"expected_works": {"exodus": {}}})
     with pytest.raises(ValueError, match="expected_works"):
