@@ -58,6 +58,28 @@ def _insert_supplemental_work() -> None:
     )
 
 
+def _refuse_provisional_edition_downgrade() -> None:
+    migration_context = op.get_context()
+    if migration_context.as_sql:
+        return
+    text_editions = sa.table(
+        'text_editions',
+        sa.column('edition_code', sa.String(length=100)),
+        sa.column('verification_status', sa.String(length=16)),
+    )
+    provisional_edition = op.get_bind().scalar(
+        sa.select(text_editions.c.edition_code)
+        .where(text_editions.c.verification_status == 'provisional')
+        .limit(1)
+    )
+    if provisional_edition is not None:
+        raise RuntimeError(
+            'Cannot downgrade 0009_composite_edition_sources while text_editions '
+            'contains provisional verification_status values. Change every provisional '
+            'edition to queued, staged, verified, or withdrawn before downgrading.'
+        )
+
+
 def upgrade() -> None:
     _replace_edition_status_check(
         ('queued', 'staged', 'provisional', 'verified', 'withdrawn')
@@ -115,40 +137,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _refuse_provisional_edition_downgrade()
     op.drop_index(
         'ix_edition_work_sources_work_id',
         table_name='edition_work_sources',
     )
     op.drop_table('edition_work_sources')
     _replace_edition_status_check(('queued', 'staged', 'verified', 'withdrawn'))
-    op.execute(sa.text("""
-        DELETE FROM library_works
-        WHERE id = :work_id
-          AND NOT EXISTS (
-              SELECT 1 FROM library_work_aliases WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM canon_entry_works WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM edition_coverage WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM staged_scripture_verses WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM scripture_validation_findings WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM scripture_publication_verses WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM commentary_entries WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM staged_commentary_entries WHERE work_id = :work_id
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM commentary_validation_findings WHERE work_id = :work_id
-          )
-    """).bindparams(work_id=_WORK_ID))
+    # Keep the supplemental catalog row: upgrade may have found a pre-existing,
+    # user-owned row, and this revision stores no durable migration ownership marker.

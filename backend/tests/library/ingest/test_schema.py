@@ -347,7 +347,141 @@ def test_composite_source_migration_adds_source_schema_and_supplemental_work(tmp
     with engine.connect() as connection:
         assert connection.execute(__import__('sqlalchemy').text(
             "SELECT title FROM library_works WHERE id = 'prayer-of-manasseh'"
-        )).scalar_one_or_none() is None
+        )).scalar_one() == 'Prayer of Manasseh'
+
+
+def test_composite_source_downgrade_refuses_provisional_editions_before_ddl(tmp_path):
+    config = _alembic_config(tmp_path / 'provisional-downgrade.db')
+    command.upgrade(config, COMPOSITE_REVISION)
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO text_editions (
+                edition_code, name, reading_language, source_language, script,
+                relationship, expected_coverage, verification_status
+            ) VALUES (
+                'PROVISIONAL', 'Provisional Edition', 'eng', 'gez', 'Latin',
+                'general_reading', '{}', 'provisional'
+            )
+        """))
+        connection.execute(text("""
+            INSERT INTO edition_work_sources (
+                edition_code, work_id, source_key, source_label, source_language,
+                source_tradition, license_spdx, attribution, verification_status, canon_scope
+            ) VALUES (
+                'PROVISIONAL', 'prayer-of-manasseh', 'source-key', 'Source Label', 'eng',
+                'Test Tradition', 'CC0-1.0', 'Test Attribution', 'provisional', 'supplemental'
+            )
+        """))
+
+    with pytest.raises(
+        RuntimeError,
+        match=r'Cannot downgrade 0009.*provisional.*verification_status',
+    ):
+        command.downgrade(config, '0008_commentary_library')
+
+    inspector = inspect(engine)
+    assert 'edition_work_sources' in inspector.get_table_names()
+    assert '_alembic_tmp_text_editions' not in inspector.get_table_names()
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text('SELECT version_num FROM alembic_version')
+        ) == COMPOSITE_REVISION
+        assert connection.execute(text("""
+            SELECT name, verification_status FROM text_editions
+            WHERE edition_code = 'PROVISIONAL'
+        """)).one() == ('Provisional Edition', 'provisional')
+        assert connection.execute(text("""
+            SELECT source_key, work_id FROM edition_work_sources
+            WHERE edition_code = 'PROVISIONAL'
+        """)).one() == ('source-key', 'prayer-of-manasseh')
+
+
+def test_composite_source_round_trip_preserves_preexisting_supplemental_work(tmp_path):
+    config = _alembic_config(tmp_path / 'preexisting-supplemental-work.db')
+    command.upgrade(config, '0008_commentary_library')
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO library_works (id, title)
+            VALUES ('prayer-of-manasseh', 'Original Custom Title')
+        """))
+
+    command.upgrade(config, COMPOSITE_REVISION)
+    command.downgrade(config, '0008_commentary_library')
+
+    with engine.connect() as connection:
+        assert connection.execute(text("""
+            SELECT title FROM library_works WHERE id = 'prayer-of-manasseh'
+        """)).scalar_one() == 'Original Custom Title'
+
+
+def test_composite_source_database_enforces_status_scope_uniqueness_and_foreign_keys(tmp_path):
+    config = _alembic_config(tmp_path / 'composite-source-constraints.db')
+    command.upgrade(config, COMPOSITE_REVISION)
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    with engine.begin() as connection:
+        connection.exec_driver_sql('PRAGMA foreign_keys=ON')
+        connection.execute(text("""
+            INSERT INTO library_works (id, title) VALUES
+                ('status-work', 'Status Work'),
+                ('scope-work', 'Scope Work')
+        """))
+        connection.execute(text("""
+            INSERT INTO text_editions (
+                edition_code, name, reading_language, source_language, script,
+                relationship, expected_coverage, verification_status
+            ) VALUES (
+                'CONSTRAINTS', 'Constraint Test', 'eng', 'gez', 'Latin',
+                'general_reading', '{}', 'verified'
+            )
+        """))
+        valid_source = {
+            'edition_code': 'CONSTRAINTS',
+            'work_id': 'prayer-of-manasseh',
+            'source_key': 'valid-source',
+            'source_label': 'Valid Source',
+            'source_language': 'eng',
+            'source_tradition': 'Test Tradition',
+            'license_spdx': 'CC0-1.0',
+            'attribution': 'Test Attribution',
+            'verification_status': 'verified',
+            'canon_scope': 'supplemental',
+        }
+        insert_source = text("""
+            INSERT INTO edition_work_sources (
+                edition_code, work_id, source_key, source_label, source_language,
+                source_tradition, license_spdx, attribution, verification_status, canon_scope
+            ) VALUES (
+                :edition_code, :work_id, :source_key, :source_label, :source_language,
+                :source_tradition, :license_spdx, :attribution,
+                :verification_status, :canon_scope
+            )
+        """)
+        connection.execute(insert_source, valid_source)
+
+        invalid_sources = (
+            {
+                **valid_source,
+                'work_id': 'status-work',
+                'verification_status': 'staged',
+            },
+            {**valid_source, 'work_id': 'scope-work', 'canon_scope': 'other'},
+            valid_source,
+            {**valid_source, 'work_id': 'missing-work'},
+        )
+        for invalid_source in invalid_sources:
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(insert_source, invalid_source)
+
+        connection.execute(text(
+            "DELETE FROM text_editions WHERE edition_code = 'CONSTRAINTS'"
+        ))
+        assert connection.scalar(text("""
+            SELECT COUNT(*) FROM edition_work_sources
+            WHERE edition_code = 'CONSTRAINTS'
+        """)) == 0
 
 
 def test_composite_source_migration_preserves_populated_dependent_rows_with_sqlite_fks(tmp_path):
