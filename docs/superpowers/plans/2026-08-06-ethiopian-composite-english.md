@@ -578,6 +578,7 @@ Resolve each reader row to a work with alias_target, preload by edition/work, an
         return {
             'source_key': source.source_key,
             'source_label': source.source_label,
+            'translator': source.translator,
             'source_language': source.source_language,
             'source_tradition': source.source_tradition,
             'published_year': source.published_year,
@@ -673,6 +674,7 @@ normalizeWorkSource converts API snake case once. TextSourceDisclosure shows sou
       return {
         sourceKey: value.source_key ?? null,
         sourceLabel: value.source_label ?? 'Source details unavailable',
+        translator: value.translator ?? null,
         sourceLanguage: value.source_language ?? null,
         sourceTradition: value.source_tradition ?? null,
         publishedYear: value.published_year ?? null,

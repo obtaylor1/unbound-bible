@@ -91,6 +91,7 @@ def _add_composite_coverage(application, work_id='genesis', *, canon_scope='ethi
             work_id=work_id,
             source_key='world-messianic-bible',
             source_label='World Messianic Bible',
+            translator='Michael Paul Johnson',
             source_language='Hebrew',
             source_tradition='Masoretic',
             published_year=2020,
@@ -182,6 +183,7 @@ def test_reader_chapter_rows_expose_the_actual_edition_work_source(test_settings
     assert composite['work_source'] == {
         'source_key': 'world-messianic-bible',
         'source_label': 'World Messianic Bible',
+        'translator': 'Michael Paul Johnson',
         'source_language': 'Hebrew',
         'source_tradition': 'Masoretic',
         'published_year': 2020,

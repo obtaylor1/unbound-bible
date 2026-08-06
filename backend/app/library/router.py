@@ -80,6 +80,7 @@ def _work_source_payload(source: EditionWorkSource | None) -> dict | None:
     return {
         'source_key': source.source_key,
         'source_label': source.source_label,
+        'translator': source.translator,
         'source_language': source.source_language,
         'source_tradition': source.source_tradition,
         'published_year': source.published_year,
