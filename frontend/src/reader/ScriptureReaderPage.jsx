@@ -161,6 +161,15 @@ export default function ScriptureReaderPage({
     (book) => (typeof book === 'string' ? book : book?.name)?.toLocaleLowerCase()
       === route.book.toLocaleLowerCase(),
   )
+  const currentBook = currentBooks.find(
+    (book) => (typeof book === 'string' ? book : book?.name)?.toLocaleLowerCase()
+      === route.book.toLocaleLowerCase(),
+  )
+  const compositeEnglishUnavailable = (
+    route.translation === 'EOTC-COMPOSITE-EN'
+    && typeof currentBook === 'object'
+    && Boolean(currentBook?.unavailableReason)
+  )
   const catalogReady = currentBooksStatus === 'ready'
   const routeLoadAllowed = (
     catalogOwnedByRoute && currentBooksStatus === 'loading'
@@ -221,6 +230,13 @@ export default function ScriptureReaderPage({
       setStatus(catalogReady && currentBooks.length === 0 ? 'empty' : 'loading')
       return undefined
     }
+    if (compositeEnglishUnavailable) {
+      chapterGeneration.current += 1
+      setChapterRows([])
+      setChapterRowsKey(`${route.book}\u0000${route.chapter}`)
+      setStatus('unavailable')
+      return undefined
+    }
     const controller = new AbortController()
     const generation = ++chapterGeneration.current
     setStatus('loading')
@@ -262,6 +278,7 @@ export default function ScriptureReaderPage({
     route.book,
     route.chapter,
     routeLoadAllowed,
+    compositeEnglishUnavailable,
     retryRevision,
     navigate,
   ])
@@ -292,7 +309,9 @@ export default function ScriptureReaderPage({
 
   useEffect(() => {
     const markOffline = () => {
-      setStatus((current) => current === 'empty' ? current : 'offline')
+      setStatus((current) => ['empty', 'unavailable'].includes(current)
+        ? current
+        : 'offline')
     }
     window.addEventListener('offline', markOffline)
     return () => window.removeEventListener('offline', markOffline)
@@ -357,6 +376,12 @@ export default function ScriptureReaderPage({
   const verses = currentChapterRows.filter(
     (row) => String(row?.translation ?? '').trim().toUpperCase() === route.translation,
   )
+  const firstContentRow = verses.find((row) => (
+    Number.isSafeInteger(row?.verse)
+    && row.verse > 0
+    && typeof row?.text === 'string'
+    && Boolean(row.text.trim())
+  ))
   const commentaryVerseNumbers = [...new Set(verses.flatMap((row) => (
     Number.isSafeInteger(row?.verse) && row.verse > 0 ? [row.verse] : []
   )))].sort((left, right) => left - right)
@@ -466,6 +491,7 @@ export default function ScriptureReaderPage({
               book={route.book}
               chapter={route.chapter}
               verses={verses}
+              source={firstContentRow?.workSource}
               selectedVerse={route.verse}
               commentaryActive={studyToolsOpen && activeStudyTool === 'commentary'}
               onSelectVerse={(verse) => navigate({ verse })}
@@ -475,6 +501,7 @@ export default function ScriptureReaderPage({
           <ReaderStatus
             state={status}
             reference={`${route.book} ${route.chapter}`}
+            workName={route.book}
             onRetry={() => setRetryRevision((value) => value + 1)}
             onOpenBooks={openBooks}
           />

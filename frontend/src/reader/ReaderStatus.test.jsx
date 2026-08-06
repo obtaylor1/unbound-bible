@@ -138,6 +138,28 @@ describe('ReaderStatus', () => {
     expect(onOpenBooks).toHaveBeenCalledOnce()
   })
 
+  it('names a work whose English text is not yet available and offers a next step', () => {
+    const onOpenBooks = vi.fn()
+    render(
+      <ReaderStatus
+        state="unavailable"
+        reference="Tegsats 1"
+        workName="Tegsats"
+        onOpenBooks={onOpenBooks}
+      />,
+    )
+
+    expect(screen.getByRole('heading', {
+      level: 1,
+      name: 'English text not yet available for Tegsats',
+    })).toBeInTheDocument()
+    expect(screen.getByRole('region', {
+      name: 'English text not yet available for Tegsats',
+    })).toHaveTextContent(/choose another book/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Choose another book' }))
+    expect(onOpenBooks).toHaveBeenCalledOnce()
+  })
+
   it('retains the failed reference and lets the reader retry or choose a book', () => {
     const onRetry = vi.fn()
     const onOpenBooks = vi.fn()

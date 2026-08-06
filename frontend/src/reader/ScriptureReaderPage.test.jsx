@@ -180,6 +180,73 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getByTestId('scripture-reader')).toHaveClass('reader-font-lg', 'reader-width-wide')
   })
 
+  it('passes the first selected content row source to the passage and replaces it on navigation', async () => {
+    getChapter.mockImplementation(({ book }) => Promise.resolve([{
+      id: book === 'Genesis' ? 1 : 2,
+      verse: 1,
+      translation: 'KJV',
+      text: `${book} text.`,
+      workSource: {
+        sourceLabel: book === 'Genesis' ? 'Genesis source' : 'Exodus source',
+        verificationStatus: 'provisional',
+      },
+    }]))
+    renderReader()
+    expect(await screen.findByText('Genesis source')).toBeVisible()
+
+    window.location.hash = '#scriptures?book=Exodus&chapter=1&translation=KJV&canon=ETHIO81'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByText('Exodus source')).toBeVisible()
+    expect(screen.queryByText('Genesis source')).not.toBeInTheDocument()
+  })
+
+  it('takes source details from the first renderable selected row', async () => {
+    getChapter.mockResolvedValue([
+      {
+        verse: 1,
+        translation: 'KJV',
+        text: '   ',
+        workSource: { sourceLabel: 'Invalid row source' },
+      },
+      {
+        verse: 2,
+        translation: 'KJV',
+        text: 'A readable verse.',
+        workSource: { sourceLabel: 'Readable row source' },
+      },
+    ])
+    renderReader()
+
+    expect(await screen.findByText('Readable row source')).toBeVisible()
+    expect(screen.queryByText('Invalid row source')).not.toBeInTheDocument()
+  })
+
+  it('shows known missing composite English coverage without fabricating a verse', async () => {
+    getBookCatalog.mockResolvedValue([{
+      id: 'tegsats',
+      name: 'Tegsats',
+      recommendedEdition: null,
+      unavailableReason: 'No publishable English source has been registered.',
+    }])
+    window.location.hash = '#scriptures?book=Tegsats&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    renderReader()
+
+    expect(await screen.findByRole('heading', {
+      name: 'English text not yet available for Tegsats',
+    })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Tegsats 1 verse/i })).not.toBeInTheDocument()
+    expect(getChapter).not.toHaveBeenCalled()
+
+    fireEvent(window, new Event('offline'))
+    expect(screen.getByRole('heading', {
+      name: 'English text not yet available for Tegsats',
+    })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', {
+      name: 'Scripture unavailable offline',
+    })).not.toBeInTheDocument()
+  })
+
   it('falls back to the first available translation and keeps the route shareable', async () => {
     window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=NRSV&canon=ETHIO81'
     renderReader()

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import TextSourceDisclosure from './TextSourceDisclosure'
 
 function normalizedVerses(verses) {
   if (!Array.isArray(verses)) {
@@ -56,6 +57,7 @@ export default function ScripturePane({
   book,
   chapter,
   verses,
+  source,
   selectedVerse,
   commentaryActive = false,
   onSelectVerse,
@@ -114,6 +116,8 @@ export default function ScripturePane({
           {commentaryAnnouncement}
         </p>
       ) : null}
+
+      <TextSourceDisclosure source={source} />
 
       <ol className="scripture-pane__verses" role="list">
         {normalizedVerses(verses).map((row) => {

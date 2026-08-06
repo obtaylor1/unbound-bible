@@ -55,6 +55,31 @@ function normalizedOptionalText(value, { uppercase = false } = {}) {
   return uppercase ? text.toUpperCase() : text
 }
 
+function normalizedSourceText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+export function normalizeWorkSource(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+
+  return {
+    sourceKey: normalizedSourceText(value.source_key),
+    sourceLabel: normalizedSourceText(value.source_label) || 'Source details unavailable',
+    translator: normalizedSourceText(value.translator),
+    sourceLanguage: normalizedSourceText(value.source_language),
+    sourceTradition: normalizedSourceText(value.source_tradition),
+    publishedYear: Number.isSafeInteger(value.published_year) ? value.published_year : null,
+    license: normalizedSourceText(value.license),
+    attribution: normalizedSourceText(value.attribution),
+    provenanceUrl: normalizedSourceText(value.provenance_url),
+    fallback: value.fallback === true,
+    modified: value.modified === true,
+    modificationNote: normalizedSourceText(value.modification_note),
+    verificationStatus: normalizedSourceText(value.verification_status),
+    canonScope: normalizedSourceText(value.canon_scope),
+  }
+}
+
 export async function getBookCatalog(canon, signal) {
   const normalizedCanon = String(canon ?? '').trim().toUpperCase() || 'ETHIO81'
   const params = new URLSearchParams({ canon: normalizedCanon })
@@ -84,7 +109,11 @@ export async function getBookCatalog(canon, signal) {
 export async function getChapter({ book, chapter }, signal) {
   const params = new URLSearchParams({ book: String(book), chapter: String(chapter) })
   const data = await requestJson(`/api/biblical-texts/chapter-content?${params}`, signal)
-  return data.content ?? []
+  return (data.content ?? []).map((row) => (
+    row && typeof row === 'object' && Object.hasOwn(row, 'work_source')
+      ? { ...row, workSource: normalizeWorkSource(row.work_source) }
+      : row
+  ))
 }
 
 export async function getBookChapters(book, signal) {

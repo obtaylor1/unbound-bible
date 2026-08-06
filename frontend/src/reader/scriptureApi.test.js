@@ -5,12 +5,49 @@ import {
   getBooks,
   getChapter,
   getVerseDetails,
+  normalizeWorkSource,
   requestJson
 } from './scriptureApi'
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('scripture API', () => {
+  it('normalizes API work-source fields once with strict booleans and readable defaults', () => {
+    expect(normalizeWorkSource({
+      source_key: 'webbe-deuterocanon',
+      source_label: '  ',
+      translator: 'World English Bible contributors',
+      source_language: 'Greek and Hebrew',
+      source_tradition: 'Septuagint and Masoretic',
+      published_year: 2024,
+      license: 'Public Domain',
+      attribution: 'World English Bible British Edition.',
+      provenance_url: 'https://ebible.org/details.php?id=eng-webbe',
+      fallback: 1,
+      modified: true,
+      modification_note: 'Book names were standardized.',
+      verification_status: 'provisional',
+      canon_scope: 'ethio81',
+    })).toEqual({
+      sourceKey: 'webbe-deuterocanon',
+      sourceLabel: 'Source details unavailable',
+      translator: 'World English Bible contributors',
+      sourceLanguage: 'Greek and Hebrew',
+      sourceTradition: 'Septuagint and Masoretic',
+      publishedYear: 2024,
+      license: 'Public Domain',
+      attribution: 'World English Bible British Edition.',
+      provenanceUrl: 'https://ebible.org/details.php?id=eng-webbe',
+      fallback: false,
+      modified: true,
+      modificationNote: 'Book names were standardized.',
+      verificationStatus: 'provisional',
+      canonScope: 'ethio81',
+    })
+    expect(normalizeWorkSource(null)).toBeNull()
+    expect(normalizeWorkSource('not a source')).toBeNull()
+  })
+
   it('normalizes book strings and named records while forwarding the signal', async () => {
     const signal = new AbortController().signal
     const fetchMock = vi.fn().mockResolvedValue({
@@ -144,6 +181,38 @@ describe('scripture API', () => {
       '/api/biblical-texts/chapter-content?book=Song+of+Songs&chapter=2',
       { signal: undefined }
     )
+  })
+
+  it('adds normalized source metadata without changing legacy chapter rows', async () => {
+    const legacy = { verse: 1, translation: 'KJV', text: 'First' }
+    const sourced = {
+      verse: 2,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Second',
+      work_source: {
+        source_label: 'Murdock Peshitta',
+        translator: 'James Murdock',
+        fallback: false,
+        modified: false,
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ content: [legacy, sourced] }),
+    }))
+
+    const result = await getChapter({ book: 'Matthew', chapter: 1 })
+
+    expect(result[0]).toEqual(legacy)
+    expect(result[1]).toMatchObject({
+      work_source: sourced.work_source,
+      workSource: {
+        sourceLabel: 'Murdock Peshitta',
+        translator: 'James Murdock',
+        fallback: false,
+        modified: false,
+      },
+    })
   })
 
   it('derives sorted unique positive chapter numbers from book content', async () => {

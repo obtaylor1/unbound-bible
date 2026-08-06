@@ -3,6 +3,7 @@ import { useId } from 'react'
 export default function ReaderStatus({
   state,
   reference,
+  workName,
   onRetry,
   onOpenBooks,
   hasLoadedContent = false,
@@ -38,6 +39,28 @@ export default function ReaderStatus({
         <h1 id={headingId}>No text available</h1>
         <p>No text is available for {reference}.</p>
         <p>Choose another book or translation to continue reading.</p>
+        <button type="button" onClick={onOpenBooks}>
+          Choose another book
+        </button>
+      </section>
+    )
+  }
+
+  if (state === 'unavailable') {
+    const displayWork = typeof workName === 'string' && workName.trim()
+      ? workName.trim()
+      : 'this work'
+    return (
+      <section
+        className="reader-status reader-status--unavailable"
+        aria-labelledby={headingId}
+      >
+        <h1 id={headingId}>English text not yet available for {displayWork}</h1>
+        <p>
+          We have not yet published a source-checked English text for this work.
+          No placeholder verse has been added.
+        </p>
+        <p>Choose another book to keep reading while this text is prepared.</p>
         <button type="button" onClick={onOpenBooks}>
           Choose another book
         </button>

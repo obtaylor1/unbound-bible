@@ -117,6 +117,33 @@ describe('ScripturePane', () => {
     expect(verseList).toHaveAttribute('role', 'list')
   })
 
+  it('shows the selected content source near the passage and updates without stale details', () => {
+    const { rerender } = render(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={verses}
+        source={{ sourceLabel: 'World Messianic Bible', verificationStatus: 'provisional' }}
+      />,
+    )
+    expect(screen.getByText('World Messianic Bible')).toBeVisible()
+
+    rerender(
+      <ScripturePane
+        book="Matthew"
+        chapter={1}
+        verses={verses}
+        source={{ sourceLabel: 'Murdock Peshitta', verificationStatus: 'provisional' }}
+      />,
+    )
+
+    expect(screen.getByText('Murdock Peshitta')).toBeVisible()
+    expect(screen.queryByText('World Messianic Bible')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Text source' }).compareDocumentPosition(
+      screen.getByRole('list'),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('names verse controls readably and selects a numeric verse', async () => {
     const user = userEvent.setup()
     const onSelectVerse = vi.fn()
