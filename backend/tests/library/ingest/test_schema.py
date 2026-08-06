@@ -10,7 +10,19 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import MetaData, Table, Column, Integer, String, delete, inspect, select
+from sqlalchemy import (
+    Column,
+    Engine,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    delete,
+    event,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateIndex
@@ -336,6 +348,63 @@ def test_composite_source_migration_adds_source_schema_and_supplemental_work(tmp
         assert connection.execute(__import__('sqlalchemy').text(
             "SELECT title FROM library_works WHERE id = 'prayer-of-manasseh'"
         )).scalar_one_or_none() is None
+
+
+def test_composite_source_migration_preserves_populated_dependent_rows_with_sqlite_fks(tmp_path):
+    config = _alembic_config(tmp_path / 'populated-composite-sources.db')
+    command.upgrade(config, '0008_commentary_library')
+
+    def enable_foreign_keys(dbapi_connection, _connection_record):
+        dbapi_connection.execute('PRAGMA foreign_keys=ON')
+
+    event.listen(Engine, 'connect', enable_foreign_keys)
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO library_works (id, title) VALUES ('genesis', 'Genesis')"
+            ))
+            connection.execute(text("""
+                INSERT INTO text_editions (
+                    edition_code, name, reading_language, source_language, script,
+                    translator, publisher, published_year, license_spdx, attribution,
+                    provenance_url, source_tradition, relationship, versification,
+                    expected_coverage, verification_status, source_checksum
+                ) VALUES (
+                    'PRESERVE', 'Preserved Edition', 'eng', 'gez', 'Latin',
+                    'Test Translator', 'Test Publisher', 2024, 'CC0-1.0',
+                    'Test Attribution', 'https://example.test/source', 'Ethiopian',
+                    'general_reading', 'standard', '{}', 'staged', 'abc123'
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO edition_coverage (
+                    edition_code, work_id, status, chapter_count, verse_count, note
+                ) VALUES (
+                    'PRESERVE', 'genesis', 'verified_english', 50, 1533, 'Keep this row'
+                )
+            """))
+
+        def assert_rows_are_intact():
+            with engine.connect() as connection:
+                assert connection.execute(text("""
+                    SELECT name, verification_status, source_checksum
+                    FROM text_editions WHERE edition_code = 'PRESERVE'
+                """)).one() == ('Preserved Edition', 'staged', 'abc123')
+                assert connection.execute(text("""
+                    SELECT edition_code, work_id, status, chapter_count, verse_count, note
+                    FROM edition_coverage WHERE edition_code = 'PRESERVE'
+                """)).one() == (
+                    'PRESERVE', 'genesis', 'verified_english', 50, 1533, 'Keep this row'
+                )
+
+        command.upgrade(config, COMPOSITE_REVISION)
+        assert_rows_are_intact()
+        command.downgrade(config, '0008_commentary_library')
+        assert_rows_are_intact()
+    finally:
+        engine.dispose()
+        event.remove(Engine, 'connect', enable_foreign_keys)
 
 
 def test_all_alembic_revision_identifiers_fit_the_version_table(tmp_path):

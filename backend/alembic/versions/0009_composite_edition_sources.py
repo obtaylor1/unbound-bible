@@ -15,15 +15,27 @@ _WORK_ID = 'prayer-of-manasseh'
 
 def _replace_edition_status_check(statuses: tuple[str, ...]) -> None:
     allowed = ', '.join(repr(status) for status in statuses)
-    with op.batch_alter_table('text_editions') as batch_op:
-        batch_op.drop_constraint(
-            'ck_text_editions_verification_status',
-            type_='check',
+    connection = op.get_bind()
+    sqlite_foreign_keys = False
+    if connection.dialect.name == 'sqlite':
+        sqlite_foreign_keys = bool(
+            connection.exec_driver_sql('PRAGMA foreign_keys').scalar()
         )
-        batch_op.create_check_constraint(
-            'ck_text_editions_verification_status',
-            f'verification_status IN ({allowed})',
-        )
+        if sqlite_foreign_keys:
+            connection.exec_driver_sql('PRAGMA foreign_keys=OFF')
+    try:
+        with op.batch_alter_table('text_editions') as batch_op:
+            batch_op.drop_constraint(
+                'ck_text_editions_verification_status',
+                type_='check',
+            )
+            batch_op.create_check_constraint(
+                'ck_text_editions_verification_status',
+                f'verification_status IN ({allowed})',
+            )
+    finally:
+        if sqlite_foreign_keys:
+            connection.exec_driver_sql('PRAGMA foreign_keys=ON')
 
 
 def _insert_supplemental_work() -> None:
