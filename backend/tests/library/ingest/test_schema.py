@@ -357,7 +357,15 @@ def test_composite_source_migration_preserves_populated_dependent_rows_with_sqli
     def enable_foreign_keys(dbapi_connection, _connection_record):
         dbapi_connection.execute('PRAGMA foreign_keys=ON')
 
+    checked_in_foreign_key_states = []
+
+    def record_foreign_key_state(dbapi_connection, _connection_record):
+        checked_in_foreign_key_states.append(
+            dbapi_connection.execute('PRAGMA foreign_keys').fetchone()[0]
+        )
+
     event.listen(Engine, 'connect', enable_foreign_keys)
+    event.listen(Engine, 'checkin', record_foreign_key_state)
     engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
     try:
         with engine.begin() as connection:
@@ -398,12 +406,17 @@ def test_composite_source_migration_preserves_populated_dependent_rows_with_sqli
                     'PRESERVE', 'genesis', 'verified_english', 50, 1533, 'Keep this row'
                 )
 
+        checked_in_foreign_key_states.clear()
         command.upgrade(config, COMPOSITE_REVISION)
+        assert checked_in_foreign_key_states == [1]
         assert_rows_are_intact()
+        checked_in_foreign_key_states.clear()
         command.downgrade(config, '0008_commentary_library')
+        assert checked_in_foreign_key_states == [1]
         assert_rows_are_intact()
     finally:
         engine.dispose()
+        event.remove(Engine, 'checkin', record_foreign_key_state)
         event.remove(Engine, 'connect', enable_foreign_keys)
 
 

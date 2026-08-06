@@ -16,13 +16,15 @@ _WORK_ID = 'prayer-of-manasseh'
 def _replace_edition_status_check(statuses: tuple[str, ...]) -> None:
     allowed = ', '.join(repr(status) for status in statuses)
     connection = op.get_bind()
+    migration_context = op.get_context()
     sqlite_foreign_keys = False
     if connection.dialect.name == 'sqlite':
         sqlite_foreign_keys = bool(
             connection.exec_driver_sql('PRAGMA foreign_keys').scalar()
         )
         if sqlite_foreign_keys:
-            connection.exec_driver_sql('PRAGMA foreign_keys=OFF')
+            with migration_context.autocommit_block():
+                op.get_bind().exec_driver_sql('PRAGMA foreign_keys=OFF')
     try:
         with op.batch_alter_table('text_editions') as batch_op:
             batch_op.drop_constraint(
@@ -35,7 +37,8 @@ def _replace_edition_status_check(statuses: tuple[str, ...]) -> None:
             )
     finally:
         if sqlite_foreign_keys:
-            connection.exec_driver_sql('PRAGMA foreign_keys=ON')
+            with migration_context.autocommit_block():
+                op.get_bind().exec_driver_sql('PRAGMA foreign_keys=ON')
 
 
 def _insert_supplemental_work() -> None:
