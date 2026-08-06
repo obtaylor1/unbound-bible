@@ -37,6 +37,7 @@ def _manifest(
     book_map=None,
     expected_works=None,
     source_keys=None,
+    known_missing_verses=None,
 ) -> SourceManifest:
     book_map = book_map or {"GEN": "genesis"}
     expected_works = expected_works or {
@@ -75,6 +76,7 @@ def _manifest(
                 for work_id in book_map.values()
             },
             "supplemental_works": [],
+            "known_missing_verses": known_missing_verses or {},
         },
     })
 
@@ -196,6 +198,67 @@ def test_parses_mapped_books_in_manifest_then_numeric_order(tmp_path):
         ("exodus", 1, 2, "The earth was formless."),
     ]
     assert rows[0].source_locator == "bundle.zip!/data/gen.json#1:1"
+
+
+def test_accepts_only_declared_numeric_verse_gap_without_placeholders(tmp_path):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path, books={
+        "data/gen.json": [{"c": 1, "v": [
+            {"n": 4, "t": "Verse four."},
+            {"n": 1, "t": "Verse one."},
+            {"n": 2, "t": "Verse two."},
+        ]}],
+    })
+    rows = _parse(
+        path,
+        payload,
+        expected_works={"genesis": {"chapters": 1, "verse_counts": {"1": 3}}},
+        known_missing_verses={"genesis": {"1": [3]}},
+    )
+
+    assert [(row.verse, row.text) for row in rows] == [
+        (1, "Verse one."),
+        (2, "Verse two."),
+        (4, "Verse four."),
+    ]
+    assert [row.source_locator for row in rows] == [
+        "bundle.zip!/data/gen.json#1:1",
+        "bundle.zip!/data/gen.json#1:2",
+        "bundle.zip!/data/gen.json#1:4",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("verses", "known_missing_verses", "message"),
+    (
+        ([{"n": 1, "t": "One"}, {"n": 2, "t": "Two"}, {"n": 4, "t": "Four"}], {}, "undeclared|contiguous"),
+        ([{"n": 1, "t": "One"}, {"n": 2, "t": "Two"}, {"n": 3, "t": "Three"}], {"genesis": {"1": [3]}}, "actually present|disjoint"),
+        ([{"n": 1, "t": "One"}, {"n": 3, "t": "Three"}], {"genesis": {"1": [4]}}, "undeclared|contiguous"),
+        ([], {"genesis": {"1": [1]}}, "no verses"),
+        ([{"n": 1, "t": "One"}, {"n": 1, "t": "Again"}], {"genesis": {"1": [2]}}, "duplicate verse"),
+    ),
+)
+def test_rejects_incorrect_missing_verse_declarations(
+    tmp_path, verses, known_missing_verses, message
+):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path, books={
+        "data/gen.json": [{"c": 1, "v": verses}],
+    })
+    with pytest.raises(ValueError, match=message):
+        _parse(path, payload, known_missing_verses=known_missing_verses)
+
+
+def test_rejects_missing_verse_declaration_for_absent_archive_chapter(tmp_path):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path)
+    with pytest.raises(ValueError, match="declaration.*chapter|chapter count"):
+        _parse(
+            path,
+            payload,
+            expected_works={"genesis": {"chapters": 2}},
+            known_missing_verses={"genesis": {"2": [1]}},
+        )
 
 
 def test_requires_matching_checksum_and_one_regular_local_archive(tmp_path):
@@ -727,6 +790,26 @@ def test_revalidates_forged_duplicate_book_map_targets(tmp_path):
         parse_composite_english_bundle,
     )
     with pytest.raises(ValueError, match="adapter options|multiple source books"):
+        parse_composite_english_bundle(manifest, tmp_path)
+
+
+def test_revalidates_forged_missing_verse_options(tmp_path):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path)
+    manifest = _manifest(path.name, payload)
+    original = manifest.adapter_options
+    forged_options = type(original).model_construct(
+        book_map=original.book_map,
+        work_sources=original.work_sources,
+        supplemental_works=[],
+        known_missing_verses={"genesis": {"1": [True]}},
+    )
+    manifest = manifest.model_copy(update={"adapter_options": forged_options})
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+    with pytest.raises(ValueError, match="invalid composite adapter options"):
         parse_composite_english_bundle(manifest, tmp_path)
 
 

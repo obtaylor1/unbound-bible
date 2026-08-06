@@ -292,6 +292,7 @@ def _rows_for_book(
     record: dict[str, Any],
     work_id: str,
     expected_source_key: str,
+    known_missing_verses: dict[str, list[int]],
 ) -> list[NormalizedVerse]:
     source_id = record["id"]
     source_book = record.get("name")
@@ -323,6 +324,13 @@ def _rows_for_book(
         raise ValueError(f"book {source_id!r} chapter count does not match its index record.")
     if set(chapters) != set(range(1, chapter_count + 1)):
         raise ValueError(f"book {source_id!r} chapters must be contiguous from 1.")
+    absent_declarations = set(map(int, known_missing_verses)) - set(chapters)
+    if absent_declarations:
+        chapter = min(absent_declarations)
+        raise ValueError(
+            f"book {source_id!r} has a missing-verse declaration for absent chapter "
+            f"{chapter}."
+        )
 
     rows: list[NormalizedVerse] = []
     for chapter in range(1, chapter_count + 1):
@@ -339,11 +347,24 @@ def _rows_for_book(
                     f"book {source_id!r} chapter {chapter} contains duplicate verse {verse}."
                 )
             verses[verse] = verse_record
-        if set(verses) != set(range(1, len(verses) + 1)):
+
+        declared_missing = set(known_missing_verses.get(str(chapter), []))
+        actual = set(verses)
+        overlap = actual & declared_missing
+        if overlap:
+            verse = min(overlap)
             raise ValueError(
-                f"book {source_id!r} chapter {chapter} verses must be contiguous from 1."
+                f"book {source_id!r} chapter {chapter} declares verse {verse} "
+                "missing, but it is actually present."
             )
-        for verse in range(1, len(verses) + 1):
+        combined = actual | declared_missing
+        if combined != set(range(1, max(combined) + 1)):
+            raise ValueError(
+                f"book {source_id!r} chapter {chapter} has an undeclared numeric "
+                "verse gap; actual and declared missing verses must be contiguous "
+                "from 1."
+            )
+        for verse in sorted(verses):
             locator = f"{archive_name}!/{member}#{chapter}:{verse}"
             row = normalize_verse(
                 source_book,
@@ -411,5 +432,8 @@ def parse_composite_english_bundle(
                     record=record,
                     work_id=work_id,
                     expected_source_key=options.work_sources[work_id].source_key,
+                    known_missing_verses=options.known_missing_verses.get(
+                        work_id, {}
+                    ),
                 ))
     return tuple(rows)

@@ -57,8 +57,13 @@ AdapterId = Literal[
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
 VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
+MissingVerseNumber = Annotated[StrictInt, Field(ge=1, le=1000)]
 PublishedYear = Annotated[StrictInt, Field(ge=1450, le=date.today().year)]
 ChapterKey = Annotated[StrictStr, StringConstraints(pattern=r'^[1-9][0-9]*$')]
+MissingVerseNumbers = Annotated[
+    list[MissingVerseNumber],
+    Field(min_length=1, json_schema_extra={'uniqueItems': True}),
+]
 
 _LICENSES = Literal[
     'LicenseRef-Public-Domain',
@@ -357,6 +362,9 @@ class CompositeEnglishBundleAdapterOptions(BaseModel):
     book_map: dict[SourceBookCode, WorkId]
     work_sources: dict[WorkId, WorkSourceManifest]
     supplemental_works: list[WorkId] = Field(default_factory=list)
+    known_missing_verses: dict[
+        WorkId, dict[ChapterKey, MissingVerseNumbers]
+    ] = Field(default_factory=dict)
 
     @field_validator('book_map', mode='before')
     @classmethod
@@ -377,6 +385,31 @@ class CompositeEnglishBundleAdapterOptions(BaseModel):
     @classmethod
     def normalize_work_source_keys(cls, value: Any) -> Any:
         return _normalize_work_id_mapping_keys(value, field_name='work_sources')
+
+    @field_validator('known_missing_verses', mode='before')
+    @classmethod
+    def normalize_missing_verse_work_keys(cls, value: Any) -> Any:
+        return _normalize_work_id_mapping_keys(
+            value, field_name='known_missing_verses'
+        )
+
+    @field_validator('known_missing_verses')
+    @classmethod
+    def missing_verse_lists_are_strictly_sorted(
+        cls, value: dict[str, dict[str, list[int]]]
+    ) -> dict[str, dict[str, list[int]]]:
+        for work_id, chapters in value.items():
+            for chapter, verses in chapters.items():
+                if not verses:
+                    raise ValueError(
+                        'known_missing_verses verse lists must be nonempty.'
+                    )
+                if any(left >= right for left, right in zip(verses, verses[1:])):
+                    raise ValueError(
+                        'known_missing_verses verse lists must be strictly sorted '
+                        'ascending and unique.'
+                    )
+        return value
 
     @field_validator('supplemental_works', mode='before')
     @classmethod
@@ -402,6 +435,14 @@ class CompositeEnglishBundleAdapterOptions(BaseModel):
                 raise ValueError(
                     f'work source canon_scope for {work_id!r} must be {expected_scope!r}.'
                 )
+
+        unknown_missing = set(self.known_missing_verses) - target_set
+        if unknown_missing:
+            work_id = sorted(unknown_missing, key=str.casefold)[0]
+            raise ValueError(
+                'known_missing_verses work '
+                f'{work_id!r} must be a mapped book_map target.'
+            )
         return self
 
 
@@ -545,6 +586,18 @@ class SourceManifest(BaseModel):
             raise ValueError(
                 'verified source_verification requires all work sources to be verified.'
             )
+        for work_id, chapters in self.adapter_options.known_missing_verses.items():
+            coverage = self.expected_works.get(work_id)
+            if coverage is None:
+                raise ValueError(
+                    'known_missing_verses work must also be declared in expected_works.'
+                )
+            declared_chapters = coverage.chapters
+            if any(int(chapter) > declared_chapters for chapter in chapters):
+                raise ValueError(
+                    'known_missing_verses chapter may not exceed the work\'s '
+                    'declared expected chapter count.'
+                )
         return self
 
 

@@ -314,6 +314,116 @@ def test_composite_schema_correlates_adapter_with_strict_options():
     assert list(validator.iter_errors(invalid))
 
 
+def test_composite_manifest_accepts_declared_missing_verse_numbers():
+    options = composite_options(
+        book_map={'MEQ2': '2-meqabyan', 'GEN': 'genesis'},
+        work_sources={
+            '2-meqabyan': work_source(source_key='MEQ2'),
+            'genesis': work_source(),
+        },
+        supplemental_works=[],
+        known_missing_verses={'2-meqabyan': {'16': [9], '21': [9]}},
+    )
+    manifest = SourceManifest.model_validate(composite_manifest(
+        expected_works={
+            '2-meqabyan': {'chapters': 21},
+            'genesis': {'chapters': 50},
+        },
+        adapter_options=options,
+    ))
+
+    assert manifest.adapter_options.known_missing_verses == {
+        '2-meqabyan': {'16': [9], '21': [9]},
+    }
+
+
+@pytest.mark.parametrize(
+    ('known_missing_verses', 'message'),
+    (
+        ({'unmapped': {'1': [1]}}, 'mapped book_map target'),
+        ({'2-meqabyan': {'0': [1]}}, 'pattern'),
+        ({'2-meqabyan': {1: [1]}}, 'valid string'),
+        ({'2-meqabyan': {True: [1]}}, 'valid string'),
+        ({'2-meqabyan': {'22': [1]}}, 'declared expected chapter count'),
+        ({'2-meqabyan': {'16': []}}, 'at least 1'),
+        ({'2-meqabyan': {'16': [9, 9]}}, 'strictly sorted'),
+        ({'2-meqabyan': {'16': [10, 9]}}, 'strictly sorted'),
+        ({'2-meqabyan': {'16': [True]}}, 'valid integer'),
+        ({'2-meqabyan': {'16': ['9']}}, 'valid integer'),
+        ({'2-meqabyan': {'16': [0]}}, 'greater than or equal to 1'),
+        ({'2-meqabyan': {'16': [1001]}}, 'less than or equal to 1000'),
+    ),
+)
+def test_composite_manifest_rejects_invalid_missing_verse_declarations(
+    known_missing_verses, message
+):
+    options = composite_options(
+        book_map={'MEQ2': '2-meqabyan', 'GEN': 'genesis'},
+        work_sources={
+            '2-meqabyan': work_source(source_key='MEQ2'),
+            'genesis': work_source(),
+        },
+        supplemental_works=[],
+        known_missing_verses=known_missing_verses,
+    )
+    with pytest.raises(ValidationError, match=message):
+        SourceManifest.model_validate(composite_manifest(
+            expected_works={
+                '2-meqabyan': {'chapters': 21},
+                'genesis': {'chapters': 50},
+            },
+            adapter_options=options,
+        ))
+
+
+@pytest.mark.parametrize(
+    'alias',
+    (' Genesis ', 'Cafe\u0301'),
+)
+def test_missing_verse_work_ids_reject_normalized_aliases(alias):
+    options = composite_options()
+    canonical = 'genesis'
+    if alias == 'Cafe\u0301':
+        options = composite_options(
+            book_map={'CAF': 'Café', 'ENO': '1-enoch'},
+            work_sources={
+                'Café': work_source(),
+                '1-enoch': options['work_sources']['1-enoch'],
+            },
+        )
+        canonical = 'Café'
+    options['known_missing_verses'] = {
+        canonical: {'1': [3]},
+        alias: {'2': [4]},
+    }
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        SourceManifest.model_validate(composite_manifest(adapter_options=options))
+
+
+def test_missing_verse_json_schema_matches_pydantic_validation():
+    schema = SourceManifest.model_json_schema()
+    validator = jsonschema.Draft202012Validator(schema)
+    valid = composite_manifest()
+    valid['adapter_options']['known_missing_verses'] = {'genesis': {'1': [3]}}
+    assert not list(validator.iter_errors(valid))
+    SourceManifest.model_validate(valid)
+
+    invalid_values = (
+        {'genesis': {'1': []}},
+        {'genesis': {'1': [3, 3]}},
+        {'genesis': {'1': [True]}},
+        {'genesis': {'1': ['3']}},
+        {'genesis': {'1': [0]}},
+        {'genesis': {'1': [1001]}},
+    )
+    for invalid_value in invalid_values:
+        invalid = composite_manifest()
+        invalid['adapter_options']['known_missing_verses'] = invalid_value
+        assert list(validator.iter_errors(invalid)), invalid_value
+        with pytest.raises(ValidationError):
+            SourceManifest.model_validate(invalid)
+
+
 @pytest.mark.parametrize('key', ('license_spdx', 'attribution', 'provenance_url'))
 def test_manifest_requires_nonblank_license_attribution_and_provenance(key):
     with pytest.raises(ValidationError):
