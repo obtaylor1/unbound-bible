@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from hashlib import sha256
 import importlib.util
 import json
 from pathlib import Path
@@ -162,7 +163,7 @@ def _work_source(work_id: str, source_group: str) -> dict[str, Any]:
             attribution="R. H. Charles, The Book of Enoch (1917), Project Gutenberg ebook 77935; public domain in the USA.",
             provenance_url="https://www.gutenberg.org/ebooks/77935",
             modified=True,
-            modification_note="Wrapped lines and lettered verse fragments were deterministically joined and presentation whitespace normalized. Source chapters 3, 4, 35, and 44 have no verse numbering and are stored as structural verse 1 solely for the app container.",
+            modification_note="The displayed reading follows R. H. Charles's Ethiopic (E) main text; separately marked Greek alternate-recension blocks are excluded. Wrapped lines and lettered verse fragments were deterministically joined and presentation whitespace normalized. Source chapters 3, 4, 35, and 44 have no verse numbering and are stored as structural verse 1 solely for the app container.",
         )
     elif work_id == "jubilees":
         source = _base_source(
@@ -211,6 +212,13 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
     bundle = _load_bundle_module(source_dir)
     report = json.loads((output_dir / "data-quality-report.json").read_text(encoding="utf-8"))
     corrected_zip = output_dir / "corrected-bundle.zip"
+    actual_checksum = sha256(corrected_zip.read_bytes()).hexdigest()
+    expected_checksum = report.get("corrected_bundle_sha256")
+    if actual_checksum != expected_checksum:
+        raise ValueError(
+            "corrected bundle checksum mismatch: "
+            f"{actual_checksum} != {expected_checksum}"
+        )
     expected, groups = _coverage(corrected_zip, bundle.BOOK_MAP)
     if sum(item["chapters"] for item in expected.values()) != 1_520:
         raise ValueError("corrected coverage must contain 1,520 chapters")

@@ -959,6 +959,10 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
     assert report["duplicate_output_positions"] == 0
     assert report["undeclared_output_gaps"] == []
     assert report["enoch_source_chapters_without_verse_numbers"] == [3, 4, 35, 44]
+    assert report["enoch_recension_handling"] == {
+        "displayed_reading": "R. H. Charles Ethiopic (E) main reading",
+        "excluded_alternates": ["G^g", "G^s", "G^{s1}", "G^{s2}"],
+    }
 
     manifest = SourceManifest.model_validate_json(
         (first / "manifest.json").read_text()
@@ -991,6 +995,24 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
             row for row in rows if row.work_id == "1-enoch" and row.chapter == chapter
         ]
         assert [(row.verse, bool(row.text)) for row in chapter_rows] == [(1, True)]
+    enoch = {
+        (row.chapter, row.verse): row.text
+        for row in rows if row.work_id == "1-enoch"
+    }
+    assert all("G^g" not in text and text != "E" for text in enoch.values())
+    assert "there was in it †four† =hollow= places" in enoch[22, 2]
+    assert "there were †four† hollow places" not in enoch[22, 2]
+    assert "G^g" not in enoch[22, 2]
+    assert "Then I asked Raphael" in enoch[22, 6]
+    assert enoch[22, 6].count("Then I asked Raphael") == 1
+    assert "spectacle of righteous judgement" in enoch[27, 3]
+    assert "true judgement" not in enoch[27, 3]
+    assert "towards the north over the mountains" in enoch[32, 1]
+    assert "To the north-east" not in enoch[32, 1]
+    assert "many large trees growing there" in enoch[32, 3]
+    assert "from afar off trees more numerous" not in enoch[32, 3]
+    assert "that ram begat many sheep" in enoch[89, 48]
+    assert "that ram begat many sheep" not in enoch[89, 49]
 
     options = manifest.adapter_options
     assert len(options.work_sources) == 83
@@ -1088,3 +1110,29 @@ def test_corrected_bundle_builder_cleans_only_murdock_presentation_artifacts():
         {"n": 1, "t": "Before after emphasis."},
         {"n": 2, "t": "Verse."},
     ]}]
+
+
+def test_corrected_manifest_rejects_bundle_appended_after_quality_report(tmp_path):
+    import importlib.util
+
+    source_dir = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en"
+    )
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(name, source_dir / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    bundle = load("build_bundle")
+    manifest = load("build_manifest")
+    bundle.build(source_dir, tmp_path)
+    manifest.build(source_dir, tmp_path)
+    with (tmp_path / "corrected-bundle.zip").open("ab") as stream:
+        stream.write(b"tampered-after-reviewed-zip")
+
+    with pytest.raises(ValueError, match="corrected bundle checksum mismatch"):
+        manifest.build(source_dir, tmp_path)

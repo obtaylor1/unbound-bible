@@ -22,9 +22,9 @@ Thirteen ETHIO81 library works remain unavailable: Esther Greek Additions, Psalm
 
 Generated outputs are deterministic:
 
-- `corrected-bundle.zip`: `2ac276fd9e9b4dc30d1068d09a352e3cb638730018b610b66f6e1f7d6b1b67a4`
-- `data-quality-report.json`: `bad6a25ae5e8177fdcd717630f2e7e9be29595adf11ce64287967807631714dd`
-- `manifest.json`: `322c8ba5005209a76624c5c59398fd3fbf5ea157a5d17de70a365fc2512b79f0`
+- `corrected-bundle.zip`: `4383d4af7c6768fdd093ff37fecb61dcaf657673dcea184ad27bb1ee1eaecf63`
+- `data-quality-report.json`: `4abb0c1af30388949c936c94ed9b9155935d743c2fef5c45bb35f4259baa6e01`
+- `manifest.json`: `da05b54e112dc5b834732bd14e981f85348d18a36671783b2d30b352a5dafe15`
 
 The report records the corrected bundle checksum and all row-level coverage totals; the manifest binds that checksum as the only publishable source file.
 
@@ -48,7 +48,7 @@ The original archive is never mutated. The generator:
 2. canonicalizes and numerically sorts chapter identifiers while rejecting duplicate or missing chapters;
 3. replaces 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom, and Sirach with the official WEB British Edition VPL source;
 4. omits and declares the 24 explicit blank WEB Sirach rows and 12 additional absent numeric labels without renumbering any nonblank official verse;
-5. replaces Enoch with the Project Gutenberg plain-text edition, joins wrapped/lettered fragments deterministically, and normalizes presentation whitespace;
+5. replaces Enoch with the Project Gutenberg plain-text edition, follows Charles's Ethiopic (`E`) main reading while excluding separately marked Greek alternate-recension blocks (`G^g`, `G^s`, `G^{s1}`, `G^{s2}`), joins numbered and lettered fragments under their integer verse in source order, and normalizes presentation whitespace;
 6. stores source chapters Enoch 3, 4, 35, and 44—which have no source verse numbering—as structural verse 1 solely for the app container;
 7. removes Murdock `FI` emphasis delimiters and `RF` translator-note blocks, omits and declares ten blank reserved positions without renumbering other verses, and normalizes four U+000F source separator characters across three verse texts to ordinary spaces; and
 8. rejects duplicate output positions and every undeclared verse gap.

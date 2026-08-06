@@ -243,7 +243,7 @@
         "canon_scope": "ethio81",
         "fallback": false,
         "license_spdx": "LicenseRef-Public-Domain",
-        "modification_note": "Wrapped lines and lettered verse fragments were deterministically joined and presentation whitespace normalized. Source chapters 3, 4, 35, and 44 have no verse numbering and are stored as structural verse 1 solely for the app container.",
+        "modification_note": "The displayed reading follows R. H. Charles's Ethiopic (E) main text; separately marked Greek alternate-recension blocks are excluded. Wrapped lines and lettered verse fragments were deterministically joined and presentation whitespace normalized. Source chapters 3, 4, 35, and 44 have no verse numbering and are stored as structural verse 1 solely for the app container.",
         "modified": true,
         "provenance_url": "https://www.gutenberg.org/ebooks/77935",
         "published_year": 1917,
@@ -3486,7 +3486,7 @@
   "source_files": [
     {
       "path": "corrected-bundle.zip",
-      "sha256": "2ac276fd9e9b4dc30d1068d09a352e3cb638730018b610b66f6e1f7d6b1b67a4",
+      "sha256": "4383d4af7c6768fdd093ff37fecb61dcaf657673dcea184ad27bb1ee1eaecf63",
       "source_url": null
     }
   ],

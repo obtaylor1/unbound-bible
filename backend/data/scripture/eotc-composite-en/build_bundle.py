@@ -106,7 +106,7 @@ EXPECTED_CORRECTED_VERSE_COUNT = 38_938
 _LINE = re.compile(r"([^\s]+) ([1-9]\d*):([1-9]\d*) (.*)")
 _ROMAN_CHAPTER = re.compile(r"^([IVXLCDM]+)\.\s*(.*)$")
 _VERSE_MARKER = re.compile(
-    r"(?<![\w])([1-9]\d*)(?:\s*_([a-z])\._|\^([a-z])\s+|\s*([a-z])\s*\.\s*|\.\s*)"
+    r"(?<![\w])([1-9]\d*)(?:\s*_([a-z])\._|\^(?:\{)?([a-z])(?:\})?\.\s*|\s*([a-z])\s*\.\s*|\.\s*)"
 )
 
 
@@ -148,15 +148,28 @@ def _parse_enoch(path: Path) -> list[dict[str, Any]]:
         raise ValueError("Gutenberg text is missing the Enoch scripture terminator")
     scripture = text[starts[0].start():end]
     blocks = [
-        _clean_text(block)
-        for block in re.split(r"(?:\r?\n){2,}", scripture)
+        block for block in re.split(r"(?:\r?\n){2,}", scripture)
         if _clean_text(block)
     ]
     fragments: dict[int, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
     chapter = 0
     current_verse: int | None = None
+    recension: str | None = None
 
-    for block in blocks:
+    for raw_block in blocks:
+        block = _clean_text(raw_block)
+        if block == "E":
+            recension = "ethiopic-main"
+            continue
+        if block in {"G^g", "G^s", "G^{s1}", "G^{s2}"}:
+            recension = "alternate-greek"
+            continue
+        first_line = next(line for line in raw_block.splitlines() if line.strip())
+        indent = len(first_line) - len(first_line.lstrip())
+        if recension is not None and indent == 0:
+            recension = None
+        elif recension == "alternate-greek":
+            continue
         marker = _ROMAN_CHAPTER.match(block)
         if marker:
             candidate = _roman_to_int(marker.group(1))
@@ -481,6 +494,10 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
             }
         },
         "enoch_source_chapters_without_verse_numbers": [3, 4, 35, 44],
+        "enoch_recension_handling": {
+            "displayed_reading": "R. H. Charles Ethiopic (E) main reading",
+            "excluded_alternates": ["G^g", "G^s", "G^{s1}", "G^{s2}"],
+        },
         "archive_presentation_cleanup": {
             "murdock_peshitta": "Removed FI formatting delimiters and RF translator-note blocks; omitted and declared ten blank reserved positions; normalized four U+000F source separators across three verse texts to spaces; scripture words outside source apparatus and source verse labels were preserved."
         },
