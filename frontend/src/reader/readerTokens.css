@@ -852,6 +852,7 @@ button.scripture-pane__verse:focus-visible {
 }
 
 .study-tools__dialog--docked {
+  inset-block-start: 68px;
   pointer-events: auto;
 }
 

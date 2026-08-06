@@ -47,6 +47,17 @@ const commentarySource = {
   attribution: 'Public-domain edition prepared by HelloAO',
 }
 
+const alternateCommentarySource = {
+  id: 'matthew-henry',
+  title: 'Matthew Henry’s Commentary',
+  abbreviation: 'MHC',
+  author: 'Matthew Henry',
+  publication_period: '1706–1710',
+  tradition: 'Reformed Protestant',
+  language: 'English',
+  attribution: 'Public-domain edition prepared by HelloAO',
+}
+
 const test = base.extend({
   browserDiagnostics: async ({ page }, runTest) => {
     const errors = []
@@ -97,11 +108,15 @@ test.beforeEach(async ({ page, browserDiagnostics }) => {
     },
   }))
   await page.route('**/api/v1/commentaries/sources', (route) => route.fulfill({
-    json: { sources: [commentarySource] },
+    json: { sources: [commentarySource, alternateCommentarySource] },
   }))
   await page.route('**/api/v1/commentaries/entries?**', (route) => {
     const params = new URL(route.request().url()).searchParams
     const verse = Number(params.get('verse')) || undefined
+    const source = params.get('source') === alternateCommentarySource.id
+      ? alternateCommentarySource
+      : commentarySource
+    const widerRange = source.id === commentarySource.id && verse === 2
     return route.fulfill({
       json: {
         reference: {
@@ -109,19 +124,23 @@ test.beforeEach(async ({ page, browserDiagnostics }) => {
           chapter: Number(params.get('chapter')),
           ...(verse ? { verse } : {}),
         },
-        availability: 'available',
+        availability: widerRange ? 'wider_range' : 'available',
         truncated: false,
-        source: commentarySource,
+        source,
         entries: [{
           body: verse
-            ? `Commentary notes for Genesis 1:${verse}.`
-            : 'Commentary overview for Genesis 1.',
+            ? source.id === alternateCommentarySource.id
+              ? `Matthew Henry commentary for Genesis 1:${verse}.`
+              : `Commentary notes for Genesis 1:${verse}.`
+            : `${source.title} overview for Genesis 1.`,
           citation: verse
-            ? `John Gill, Exposition of Genesis 1:${verse}`
-            : 'John Gill, Exposition of Genesis 1',
-          entry_type: verse ? 'verse' : 'chapter_intro',
-          scope: verse
-            ? { verse_start: verse, verse_end: verse }
+            ? `${source.author}, Commentary on Genesis 1:${verse}`
+            : `${source.author}, Commentary on Genesis 1`,
+          entry_type: verse ? (widerRange ? 'verse_range' : 'verse') : 'chapter_intro',
+          scope: widerRange
+            ? { verse_start: 1, verse_end: 3 }
+            : verse
+              ? { verse_start: verse, verse_end: verse }
             : { verse_start: null, verse_end: null },
         }],
       },
@@ -149,6 +168,56 @@ async function expectNoHorizontalOverflow(page) {
 async function expectAxeClean(page, label) {
   const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze()
   expect(results.violations, `${label}: WCAG 2/2.1 A/AA violations`).toEqual([])
+}
+
+async function expectNoSeriousAxeViolations(page, label) {
+  const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze()
+  const serious = results.violations.filter(({ impact }) => (
+    impact === 'serious' || impact === 'critical'
+  ))
+  expect(serious, `${label}: serious or critical WCAG violations`).toEqual([])
+}
+
+async function openCommentary(page) {
+  const opener = page.getByRole('button', { name: 'Open study tools' })
+  await opener.click()
+  await page.getByRole('button', { name: 'Commentary' }).click()
+  const panel = page.getByRole('complementary', { name: /Genesis 1/ })
+  await expect(panel).toBeVisible()
+  await expect(panel.getByRole('heading', { name: 'Genesis 1 commentary' })).toBeVisible()
+  return { opener, panel }
+}
+
+async function contrastRatio(locator, foregroundProperty = 'color', backgroundLocator = locator) {
+  return locator.evaluate((element, { foregroundProperty, backgroundSelector }) => {
+    const backgroundElement = backgroundSelector
+      ? document.querySelector(backgroundSelector)
+      : element
+    const parseRgb = (value) => {
+      const channels = value.match(/[\d.]+/gu)?.slice(0, 3).map(Number) ?? []
+      return channels.map((channel) => {
+        const normalized = channel / 255
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4
+      })
+    }
+    const luminance = (value) => {
+      const [red, green, blue] = parseRgb(value)
+      return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+    }
+    const foreground = getComputedStyle(element)[foregroundProperty]
+    const background = getComputedStyle(backgroundElement).backgroundColor
+    const light = Math.max(luminance(foreground), luminance(background))
+    const dark = Math.min(luminance(foreground), luminance(background))
+    return (light + 0.05) / (dark + 0.05)
+  }, {
+    foregroundProperty,
+    backgroundSelector: await backgroundLocator.evaluate((element) => {
+      if (!element.id) element.id = `contrast-${crypto.randomUUID()}`
+      return `#${CSS.escape(element.id)}`
+    }),
+  })
 }
 
 async function expectMinimumTarget(locator, {
@@ -208,7 +277,7 @@ test('renders Scripture first with labelled reader structure and no overflow', a
   await openReader(page)
 
   await expect(page.getByRole('banner')).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'Scripture reader actions' })).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Reader actions' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Passage controls' })).toBeVisible()
   await expect(page.getByRole('main')).toHaveCount(1)
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
@@ -265,8 +334,12 @@ test('reflows at a 200%-equivalent desktop layout viewport', async ({ page }, te
     [page.getByRole('button', { name: 'Choose a book' }), 'book chooser'],
     [page.getByRole('button', { name: 'Open study tools' }), 'study tools'],
   ]) {
+    await locator.evaluate((element) => element.scrollIntoView({
+      block: 'nearest',
+      inline: 'center',
+    }))
     await expect(locator).toBeVisible()
-    await expectFitsViewport(locator, label)
+    await expectIntersectsViewport(locator, `reachable ${label}`)
   }
 
   for (const [locator, label] of [
@@ -617,6 +690,111 @@ test('docked Commentary leaves Scripture pointer-accessible while reading and sc
   await expect(dockWrapper).toHaveCSS('pointer-events', 'none')
 })
 
+test('Commentary supports the complete chapter-to-verse study journey on desktop and mobile', async ({ page, context }, testInfo) => {
+  test.skip(
+    !['desktop-chromium', 'mobile-390'].includes(testInfo.project.name),
+    'approved desktop and 390-by-844 Commentary journey',
+  )
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await openReader(page)
+
+  const { opener, panel: chapterPanel } = await openCommentary(page)
+  await expect(chapterPanel.getByRole('tab', { name: /Chapter overview/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(chapterPanel.getByText('John Gill’s Exposition overview for Genesis 1.', { exact: true })).toBeVisible()
+
+  const verseTwo = page.getByRole('button', { name: /Genesis 1 verse 2/ })
+  await verseTwo.scrollIntoViewIfNeeded()
+  await verseTwo.click()
+  const versePanel = page.getByRole('complementary', { name: 'Genesis 1:2' })
+  await expect(versePanel).toBeVisible()
+  await expect(versePanel.getByRole('tab', { name: /Selected verse/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(versePanel.getByRole('status')).toContainText('wider passage that includes Genesis 1:2')
+  await expect(versePanel.getByText('Covers verses 1–3', { exact: true })).toBeVisible()
+
+  await versePanel.getByLabel('Commentary source', { exact: true }).selectOption(alternateCommentarySource.id)
+  await expect(versePanel.getByText('Matthew Henry commentary for Genesis 1:2.', { exact: true })).toBeVisible()
+  await expect(versePanel.getByLabel('Selected commentary source details')).toContainText('Matthew Henry')
+
+  await versePanel.getByRole('button', { name: 'Copy commentary citation' }).click()
+  await expect(versePanel.getByRole('status', { name: 'Copy status' })).toHaveText('Citation copied')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    'Matthew Henry, Commentary on Genesis 1:2',
+  )
+
+  await page.keyboard.press('Escape')
+  await expect(versePanel).toBeHidden()
+  await expect(opener).toBeFocused()
+  await expectNoHorizontalOverflow(page)
+})
+
+test('Commentary reflows without document overflow at a 200%-equivalent viewport', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop 1440-to-720 Commentary reflow')
+  await openReader(page)
+  await page.setViewportSize({ width: 720, height: 900 })
+  const { panel } = await openCommentary(page)
+  await expectFitsViewport(panel, 'commentary dock at 200%-equivalent reflow')
+  await expect(panel.getByLabel('Commentary source', { exact: true })).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Expand commentary reading view' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+})
+
+test('Commentary remains legible and axe-clean in dark and light themes', async ({ page }, testInfo) => {
+  test.skip(
+    !['desktop-chromium', 'mobile-390'].includes(testInfo.project.name),
+    'approved desktop and mobile Commentary themes',
+  )
+  await openReader(page)
+  let { panel } = await openCommentary(page)
+
+  for (const theme of ['dark', 'light']) {
+    if (theme === 'light') {
+      await page.getByRole('button', { name: 'Close study tools' }).click()
+      await page.getByRole('button', { name: 'Use light mode' }).click()
+      ;({ panel } = await openCommentary(page))
+    }
+    const body = panel.locator('.commentary-panel__body').first()
+    const entry = panel.locator('.commentary-panel__entry').first()
+    await expect(body).toBeVisible()
+    expect(await contrastRatio(body, 'color', entry), `${theme} Commentary body contrast`).toBeGreaterThanOrEqual(4.5)
+    await expectNoSeriousAxeViolations(page, `${theme} Commentary`)
+    await expectNoHorizontalOverflow(page)
+  }
+})
+
+test('Commentary loading honors reduced-motion preference', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium', 'media preference is viewport-independent')
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  let releaseEntries
+  const entriesReady = new Promise((resolve) => { releaseEntries = resolve })
+  await page.route('**/api/v1/commentaries/entries?**', async (route) => {
+    await entriesReady
+    await route.fulfill({
+      json: {
+        reference: { book: 'Genesis', chapter: 1 },
+        availability: 'available',
+        truncated: false,
+        source: commentarySource,
+        entries: [{
+          body: 'Commentary overview for Genesis 1.',
+          citation: 'John Gill, Exposition of Genesis 1',
+          entry_type: 'chapter_intro',
+          scope: { verse_start: null, verse_end: null },
+        }],
+      },
+    })
+  })
+  await openReader(page)
+  await page.getByRole('button', { name: 'Open study tools' }).click()
+  await page.getByRole('button', { name: 'Commentary' }).click()
+  const loadingMark = page.locator('.commentary-panel__loading-mark')
+  await expect(loadingMark).toBeVisible()
+  await expect(loadingMark).toHaveCSS('animation-iteration-count', '1')
+  expect(Number.parseFloat(await loadingMark.evaluate((element) => getComputedStyle(element).animationDuration)))
+    .toBeLessThanOrEqual(0.001)
+  releaseEntries()
+  await expect(page.getByText('Commentary overview for Genesis 1.', { exact: true })).toBeVisible()
+})
+
 test('route Study Tools activate their real destinations from selected Genesis 1:2', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'route semantics do not vary by viewport')
   // Unit coverage verifies the selected reference object handed to onNavigate.
@@ -632,8 +810,9 @@ test('route Study Tools activate their real destinations from selected Genesis 1
     await page.getByRole('button', { name: /Genesis 1 verse 2/ }).click()
     await expect(page).toHaveURL(/verse=2/)
     await page.getByRole('button', { name: 'Open study tools' }).click()
-    await expect(page.getByRole('dialog', { name: 'Genesis 1:2' })).toBeVisible()
-    await page.getByRole('button', { name: tool }).click()
+    const dialog = page.getByRole('dialog', { name: 'Genesis 1:2' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: tool, exact: true }).click()
     await expect(page).toHaveURL(new RegExp(`${hash}$`))
     await expect(page.getByRole('heading', destinationHeading)).toBeVisible()
   }

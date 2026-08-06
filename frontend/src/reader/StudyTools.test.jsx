@@ -44,6 +44,7 @@ function StudyToolsHarness({ initialReference = reference, initialDetails = {}, 
 afterEach(() => {
   window.localStorage.clear()
   vi.restoreAllMocks()
+  document.querySelector('[data-commentary-test-opener]')?.remove()
 })
 
 describe('study tool registry', () => {
@@ -235,6 +236,76 @@ describe('StudyTools', () => {
     )
     expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText('Commentary for Genesis 1:3')).toBeInTheDocument()
+  })
+
+  it('closes docked Commentary with Escape', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const opener = document.createElement('button')
+    opener.dataset.commentaryTestOpener = 'true'
+    opener.textContent = 'Open study tools'
+    document.body.append(opener)
+    opener.focus()
+
+    render(
+      <StudyTools
+        open
+        reference={reference}
+        details={{}}
+        onClose={onClose}
+        commentaryLoadSources={vi.fn().mockResolvedValue([])}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(onClose).toHaveBeenCalledOnce()
+    opener.remove()
+  })
+
+  it('lets Escape close the expanded commentary dialog before the dock', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const source = {
+      id: 'john-gill',
+      title: 'John Gill’s Exposition',
+      author: 'John Gill',
+      language: 'English',
+    }
+    render(
+      <StudyTools
+        open
+        reference={{ book: 'Genesis', chapter: 1 }}
+        details={{}}
+        onClose={onClose}
+        commentaryLoadSources={vi.fn().mockResolvedValue([source])}
+        commentaryLoadEntries={vi.fn().mockResolvedValue({
+          reference: { book: 'Genesis', chapter: 1 },
+          availability: 'available',
+          truncated: false,
+          source,
+          entries: [{
+            body: 'The opening verse establishes God as creator.',
+            citation: 'John Gill, Exposition of Genesis 1:1',
+            entry_type: 'verse',
+            scope: { verse_start: 1, verse_end: 1 },
+          }],
+        })}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    const expand = await screen.findByRole('button', { name: 'Expand commentary reading view' })
+    await user.click(expand)
+    expect(screen.getByRole('dialog', { name: 'Expanded Genesis 1 commentary' })).toBeVisible()
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: /Expanded Genesis 1 commentary/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: 'Genesis 1' })).toBeVisible()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(expand).toHaveFocus()
   })
 
   it('keeps docked Commentary keyboard accessible without trapping focus and safely restores modal mode', async () => {
@@ -1085,6 +1156,9 @@ describe('StudyTools responsive styles', () => {
     )
     expect(readerTokensCss).toMatch(
       /\.study-tools__dialog--docked\s*\{[^}]*pointer-events:\s*auto/i,
+    )
+    expect(readerTokensCss).toMatch(
+      /\.study-tools__dialog--docked\s*\{[^}]*inset-block-start:\s*68px/i,
     )
     expect(readerTokensCss).toMatch(
       /\.study-tools--docked\s+\.study-tools__backdrop\s*\{[^}]*display:\s*none/i,

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import CommentaryPanel from './CommentaryPanel'
 import {
   normalizeStudyReference,
@@ -644,13 +644,13 @@ export default function StudyTools({
     : activeSelection.id
   const commentaryDocked = effectiveActiveToolId === 'commentary'
 
-  const closeStudyTools = () => {
+  const closeStudyTools = useCallback(() => {
     const restoreTarget = commentaryDocked ? drawerOpenerRef.current : null
     if (typeof onClose === 'function') onClose()
     if (restoreTarget instanceof HTMLElement && restoreTarget.isConnected) {
       queueMicrotask(() => restoreTarget.focus())
     }
-  }
+  }, [commentaryDocked, onClose])
 
   useDialogFocus({
     open: open && !commentaryDocked,
@@ -659,6 +659,18 @@ export default function StudyTools({
     onClose: closeStudyTools,
     restoreFocus: !open || !commentaryDocked,
   })
+
+  useEffect(() => {
+    if (!open || !commentaryDocked) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return
+      event.preventDefault()
+      closeStudyTools()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [closeStudyTools, commentaryDocked, open])
 
   useEffect(() => {
     if (preserveCommentary) {
