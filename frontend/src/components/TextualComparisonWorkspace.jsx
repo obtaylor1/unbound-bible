@@ -41,6 +41,10 @@ const BOOK_CHAPTERS = {
 
 const SUPPLEMENTAL_BOOKS = new Set(['Prayer of Manasseh'])
 
+function isLibraryContext(canon) {
+  return typeof canon === 'string' && canon.trim().toLocaleUpperCase() === 'LIBRARY'
+}
+
 function comparisonRoute() {
   const query = window.location.hash.split('?')[1] ?? ''
   const params = new URLSearchParams(query)
@@ -48,7 +52,7 @@ function comparisonRoute() {
   const requestedBook = params.get('book')?.trim() || 'Genesis'
   return {
     canon,
-    book: canon.toLocaleUpperCase() === 'ETHIO81' && SUPPLEMENTAL_BOOKS.has(requestedBook)
+    book: !isLibraryContext(canon) && SUPPLEMENTAL_BOOKS.has(requestedBook)
       ? 'Genesis'
       : requestedBook,
     chapter: params.get('chapter')?.trim() || '1',
@@ -58,7 +62,7 @@ function comparisonRoute() {
 }
 
 function booksForCanon(books, canon) {
-  if (canon.toLocaleUpperCase() !== 'ETHIO81') return books
+  if (isLibraryContext(canon)) return books
   return books.filter((item) => !SUPPLEMENTAL_BOOKS.has(typeof item === 'string' ? item : item?.name))
 }
 

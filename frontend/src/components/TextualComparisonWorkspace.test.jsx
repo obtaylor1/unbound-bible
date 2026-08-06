@@ -201,6 +201,43 @@ describe('TextualComparisonWorkspace', () => {
     expect(screen.getByRole('combobox', { name: 'Book' })).not.toHaveTextContent('Prayer of Manasseh')
   })
 
+  it('does not expose supplemental works for an arbitrary non-library canon', async () => {
+    window.history.replaceState(null, '', '#compare?book=Genesis&chapter=1&verse=1&canon=UNKNOWN')
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).includes('available-books')) {
+        return jsonResponse({ books: ['Genesis', 'Prayer of Manasseh'] })
+      }
+      return jsonResponse({ content: genesisRows })
+    })
+    render(<TextualComparisonWorkspace />)
+
+    await screen.findByRole('article', { name: 'King James Version' })
+    expect(screen.getByRole('combobox', { name: 'Book' })).not.toHaveTextContent('Prayer of Manasseh')
+    expect(window.location.hash).toContain('canon=UNKNOWN')
+  })
+
+  it('safely redirects a direct supplemental route outside LIBRARY context', async () => {
+    window.history.replaceState(null, '', '#compare?book=Prayer%20of%20Manasseh&chapter=1&verse=1&canon=PROTESTNAT')
+    const requestedChapterUrls = []
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).includes('available-books')) {
+        return jsonResponse({ books: ['Genesis', 'Prayer of Manasseh'] })
+      }
+      requestedChapterUrls.push(String(url))
+      return jsonResponse({ content: genesisRows })
+    })
+    render(<TextualComparisonWorkspace />)
+
+    await screen.findByRole('article', { name: 'King James Version' })
+    expect(screen.getByRole('combobox', { name: 'Book' })).toHaveValue('Genesis')
+    expect(requestedChapterUrls).toEqual(expect.arrayContaining([
+      expect.stringContaining('book=Genesis'),
+    ]))
+    expect(requestedChapterUrls.some((url) => url.includes('Prayer'))).toBe(false)
+    expect(window.location.hash).toContain('book=Genesis')
+    expect(window.location.hash).toContain('canon=PROTESTNAT')
+  })
+
   it('allows an explicitly requested supplemental work in broader library context', async () => {
     window.history.replaceState(null, '', '#compare?book=Prayer%20of%20Manasseh&chapter=1&verse=1&canon=LIBRARY')
     globalThis.fetch = vi.fn((url) => {
