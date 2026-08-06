@@ -118,26 +118,53 @@ def _normalize_mapping_keys(
     return normalized
 
 
-def _normalize_work_id_mapping_keys(value: Any, *, field_name: str) -> Any:
-    if not isinstance(value, dict):
-        return value
+def _normalize_work_ids(
+    values: Any, *, field_name: str, enforce_unique: bool = True,
+    exact_duplicate_message: str | None = None,
+) -> Any:
+    if not isinstance(values, (list, tuple)):
+        values = list(values)
 
-    normalized: dict[str, Any] = {}
+    normalized: list[str] = []
     seen: set[str] = set()
-    for work_id, mapped_value in value.items():
+    raw_seen: set[str] = set()
+    for work_id in values:
         if not isinstance(work_id, str):
-            raise ValueError(f'{field_name} keys must be nonblank work IDs.')
-        cleaned = work_id.strip()
+            raise ValueError(f'{field_name} must contain nonblank work IDs.')
+        cleaned = unicodedata.normalize('NFC', work_id.strip())
         identity = ' '.join(cleaned.casefold().split())
         if not identity:
-            raise ValueError(f'{field_name} keys must be nonblank work IDs.')
-        if identity in seen:
+            raise ValueError(f'{field_name} must contain nonblank work IDs.')
+        if enforce_unique and identity in seen:
+            if exact_duplicate_message is not None and work_id.strip() in raw_seen:
+                raise ValueError(exact_duplicate_message)
             raise ValueError(
                 f'{field_name} cannot contain duplicate normalized work IDs.'
             )
         seen.add(identity)
-        normalized[cleaned] = mapped_value
+        raw_seen.add(work_id.strip())
+        normalized.append(cleaned)
     return normalized
+
+
+def _normalize_work_id_mapping_keys(value: Any, *, field_name: str) -> Any:
+    if not isinstance(value, dict):
+        return value
+    normalized_keys = _normalize_work_ids(
+        value.keys(), field_name=f'{field_name} keys'
+    )
+    return dict(zip(normalized_keys, value.values()))
+
+
+def _normalize_mapping_work_ids(
+    value: dict[str, str], *, field_name: str, enforce_unique: bool,
+    exact_duplicate_message: str | None = None,
+) -> dict[str, str]:
+    normalized_values = _normalize_work_ids(
+        value.values(), field_name=field_name, enforce_unique=enforce_unique,
+        exact_duplicate_message=exact_duplicate_message,
+    )
+    return dict(zip(value.keys(), normalized_values))
 
 
 class ExpectedCoverage(BaseModel):
@@ -246,6 +273,13 @@ class UsfmAdapterOptions(BaseModel):
     def normalize_book_map_keys(cls, value: Any) -> Any:
         return _normalize_mapping_keys(value, case_insensitive=True)
 
+    @field_validator('book_map')
+    @classmethod
+    def normalize_book_map_work_ids(cls, value: dict[str, str]) -> dict[str, str]:
+        return _normalize_mapping_work_ids(
+            value, field_name='book_map targets', enforce_unique=False
+        )
+
 
 class ErtaleAdapterOptions(BaseModel):
     """Reviewed options for Ertale exports."""
@@ -260,6 +294,13 @@ class ErtaleAdapterOptions(BaseModel):
     def normalize_book_map_keys(cls, value: Any) -> Any:
         return _normalize_mapping_keys(value, case_insensitive=True)
 
+    @field_validator('book_map')
+    @classmethod
+    def normalize_book_map_work_ids(cls, value: dict[str, str]) -> dict[str, str]:
+        return _normalize_mapping_work_ids(
+            value, field_name='book_map targets', enforce_unique=False
+        )
+
 
 class WikisourceAdapterOptions(BaseModel):
     """Reviewed options for Wikisource page exports."""
@@ -273,6 +314,13 @@ class WikisourceAdapterOptions(BaseModel):
     @classmethod
     def normalize_page_map_keys(cls, value: Any) -> Any:
         return _normalize_mapping_keys(value, case_insensitive=False)
+
+    @field_validator('page_map')
+    @classmethod
+    def normalize_page_map_work_ids(cls, value: dict[str, str]) -> dict[str, str]:
+        return _normalize_mapping_work_ids(
+            value, field_name='page_map targets', enforce_unique=False
+        )
 
 
 class WeahaduBundleAdapterOptions(BaseModel):
@@ -293,9 +341,12 @@ class WeahaduBundleAdapterOptions(BaseModel):
     def book_map_is_not_empty(cls, value: dict[str, str]) -> dict[str, str]:
         if not value:
             raise ValueError('book_map must contain at least one reviewed source book.')
-        if len(value.values()) != len(set(value.values())):
-            raise ValueError('book_map may not map multiple source books to one work.')
-        return value
+        return _normalize_mapping_work_ids(
+            value, field_name='book_map targets', enforce_unique=True,
+            exact_duplicate_message=(
+                'book_map may not map multiple source books to one work.'
+            ),
+        )
 
 
 class CompositeEnglishBundleAdapterOptions(BaseModel):
@@ -312,27 +363,31 @@ class CompositeEnglishBundleAdapterOptions(BaseModel):
     def normalize_book_map_keys(cls, value: Any) -> Any:
         return _normalize_mapping_keys(value, case_insensitive=True)
 
+    @field_validator('book_map')
+    @classmethod
+    def normalize_book_map_work_ids(cls, value: dict[str, str]) -> dict[str, str]:
+        return _normalize_mapping_work_ids(
+            value, field_name='book_map targets', enforce_unique=True,
+            exact_duplicate_message=(
+                'book_map may not map multiple source books to one work.'
+            ),
+        )
+
     @field_validator('work_sources', mode='before')
     @classmethod
     def normalize_work_source_keys(cls, value: Any) -> Any:
         return _normalize_work_id_mapping_keys(value, field_name='work_sources')
 
-    @field_validator('supplemental_works')
+    @field_validator('supplemental_works', mode='before')
     @classmethod
-    def supplemental_work_ids_are_unique(cls, value: list[str]) -> list[str]:
-        identities = [' '.join(work_id.casefold().split()) for work_id in value]
-        if len(identities) != len(set(identities)):
-            raise ValueError(
-                'supplemental_works cannot contain duplicate normalized work IDs.'
-            )
-        return value
+    def normalize_supplemental_work_ids(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return _normalize_work_ids(value, field_name='supplemental_works')
 
     @model_validator(mode='after')
     def mappings_and_canon_scopes_agree(self) -> CompositeEnglishBundleAdapterOptions:
         targets = list(self.book_map.values())
-        if len(targets) != len(set(targets)):
-            raise ValueError('book_map may not map multiple source books to one work.')
-
         target_set = set(targets)
         if set(self.work_sources) != target_set:
             raise ValueError('work_sources keys must exactly match book_map targets.')
@@ -364,6 +419,7 @@ _ADAPTER_OPTIONS_MODELS: dict[AdapterId, type[BaseModel]] = {
     'weahadu_bundle': WeahaduBundleAdapterOptions,
     'composite_english_bundle': CompositeEnglishBundleAdapterOptions,
 }
+_REQUIRED_ADAPTER_OPTIONS = {'weahadu_bundle', 'composite_english_bundle'}
 
 
 def _standalone_model_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -397,6 +453,10 @@ _ADAPTER_SCHEMA_CORRELATIONS = [
             'properties': {
                 'adapter_options': _standalone_model_schema(options_model),
             },
+            **(
+                {'required': ['adapter_options']}
+                if adapter in _REQUIRED_ADAPTER_OPTIONS else {}
+            ),
         },
     }
     for adapter, options_model in _ADAPTER_OPTIONS_MODELS.items()

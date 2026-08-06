@@ -1,10 +1,15 @@
 import copy
 from datetime import date
 
+import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from app.library.ingest.manifest import SourceManifest, WorkSourceManifest
+from app.library.ingest.manifest import (
+    CompositeEnglishBundleAdapterOptions,
+    SourceManifest,
+    WorkSourceManifest,
+)
 
 
 VALID = {
@@ -175,6 +180,64 @@ def test_composite_work_source_keys_use_safe_normalized_work_ids():
         ))
 
 
+def test_expected_work_ids_reject_unicode_normalization_collisions():
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        SourceManifest.model_validate(manifest_with(expected_works={
+            'Café': {'chapters': 1},
+            'Cafe\u0301': {'chapters': 1},
+        }))
+
+
+def test_work_source_ids_reject_unicode_normalization_collisions():
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        CompositeEnglishBundleAdapterOptions.model_validate({
+            'book_map': {'ONE': 'one', 'TWO': 'two'},
+            'work_sources': {
+                'Café': work_source(),
+                'Cafe\u0301': work_source(source_key='TWO'),
+            },
+        })
+
+
+def test_book_map_targets_reject_unicode_normalization_collisions():
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        CompositeEnglishBundleAdapterOptions.model_validate({
+            'book_map': {'ONE': 'Café', 'TWO': 'Cafe\u0301'},
+            'work_sources': {'Café': work_source()},
+        })
+
+
+def test_supplemental_work_ids_reject_unicode_normalization_collisions():
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        CompositeEnglishBundleAdapterOptions.model_validate({
+            'book_map': {'CAF': 'Café'},
+            'work_sources': {
+                'Café': work_source(canon_scope='supplemental'),
+            },
+            'supplemental_works': ['Café', 'Cafe\u0301'],
+        })
+
+
+def test_decomposed_work_ids_are_stored_in_nfc_on_every_surface():
+    decomposed = 'Cafe\u0301'
+    normalized = 'Café'
+    standard = SourceManifest.model_validate(manifest_with(expected_works={
+        decomposed: {'chapters': 1},
+    }))
+    composite = CompositeEnglishBundleAdapterOptions.model_validate({
+        'book_map': {'CAF': decomposed},
+        'work_sources': {
+            decomposed: work_source(canon_scope='supplemental'),
+        },
+        'supplemental_works': [decomposed],
+    })
+
+    assert set(standard.expected_works) == {normalized}
+    assert composite.book_map == {'CAF': normalized}
+    assert set(composite.work_sources) == {normalized}
+    assert composite.supplemental_works == [normalized]
+
+
 def test_composite_supplemental_works_must_be_mapped_targets():
     with pytest.raises(ValidationError, match='supplemental_works must be a subset'):
         SourceManifest.model_validate(composite_manifest(
@@ -229,7 +292,6 @@ def test_existing_manifest_defaults_source_verification_to_verified():
 
 
 def test_composite_schema_correlates_adapter_with_strict_options():
-    jsonschema = pytest.importorskip('jsonschema')
     schema = SourceManifest.model_json_schema()
     correlations = {
         branch['if']['properties']['adapter']['const']:
@@ -565,6 +627,38 @@ def test_manifest_schema_does_not_require_adapter_options():
     assert 'adapter_options' not in SourceManifest.model_json_schema()['required']
 
 
+@pytest.mark.parametrize(
+    ('adapter', 'requires_options'),
+    (
+        ('usfm', False),
+        ('ertale', False),
+        ('wikisource', False),
+        ('weahadu_bundle', True),
+        ('composite_english_bundle', True),
+    ),
+)
+def test_manifest_runtime_and_schema_agree_when_adapter_options_are_omitted(
+    adapter, requires_options
+):
+    value = manifest_with(adapter=adapter)
+    value.pop('adapter_options')
+
+    if requires_options:
+        with pytest.raises(ValidationError):
+            SourceManifest.model_validate(value)
+    else:
+        assert SourceManifest.model_validate(value) is not None
+
+    schema = SourceManifest.model_json_schema()
+    branch = next(
+        item for item in schema['allOf']
+        if item['if']['properties']['adapter']['const'] == adapter
+    )
+    assert ('adapter_options' in branch['then'].get('required', [])) is requires_options
+    schema_errors = list(jsonschema.Draft202012Validator(schema).iter_errors(value))
+    assert bool(schema_errors) is requires_options
+
+
 def test_manifest_schema_correlates_adapters_with_option_definitions():
     schema = SourceManifest.model_json_schema()
     expected_definitions = {
@@ -592,7 +686,6 @@ def test_manifest_schema_correlates_adapters_with_option_definitions():
 
 
 def test_manifest_schema_validator_enforces_adapter_option_correlation():
-    jsonschema = pytest.importorskip('jsonschema')
     validator = jsonschema.Draft202012Validator(SourceManifest.model_json_schema())
     matching_options = {
         'usfm': {'strip_notes': True},

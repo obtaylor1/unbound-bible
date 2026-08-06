@@ -279,6 +279,7 @@ def test_contiguous_missing_verses_are_reported_as_ranges():
 
 def test_maximum_manifest_coverage_has_findings_bounded_by_chapters_and_gaps():
     works = (*WORKS, *SUPPLEMENTAL_LIBRARY_WORKS)
+    known_work_count = len({work.id for work in works})
     expected = {
         work.id: {
             'chapters': 200,
@@ -290,9 +291,11 @@ def test_maximum_manifest_coverage_has_findings_bounded_by_chapters_and_gaps():
 
     result = validate_edition(rows, expected)
 
-    assert len(works) == 97
-    assert result.error_count == len(works) * 200
-    assert sum(finding.code == 'missing_verse' for finding in result.errors) == len(works)
+    assert len(works) == known_work_count
+    assert result.error_count == known_work_count * 200
+    assert sum(
+        finding.code == 'missing_verse' for finding in result.errors
+    ) == known_work_count
     first_gap = next(finding for finding in result.errors if finding.code == 'missing_verse')
     assert first_gap.verse == 1
     assert first_gap.message == 'Expected verses 1–999 are not present.'
