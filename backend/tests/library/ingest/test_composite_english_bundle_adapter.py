@@ -850,3 +850,196 @@ def test_revalidates_forged_nested_source_and_scope_options(tmp_path, forgery):
     )
     with pytest.raises(ValueError, match="adapter options"):
         parse_composite_english_bundle(manifest, tmp_path)
+
+
+def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truthful(
+    tmp_path,
+):
+    """Exercise the checked-in generators and the production adapter end to end."""
+    import importlib.util
+    import shutil
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+
+    source_dir = (
+        Path(__file__).resolve().parents[3]
+        / "data"
+        / "scripture"
+        / "eotc-composite-en"
+    )
+
+    def load_script(name):
+        path = source_dir / name
+        spec = importlib.util.spec_from_file_location(f"eotc_{name[:-3]}", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    build_bundle = load_script("build_bundle.py")
+    build_manifest = load_script("build_manifest.py")
+    original_checksums = {
+        name: sha256((source_dir / name).read_bytes()).hexdigest()
+        for name in build_bundle.INPUT_CHECKSUMS
+    }
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for output in (first, second):
+        build_bundle.build(source_dir, output)
+        build_manifest.build(source_dir, output)
+
+    assert (first / "corrected-bundle.zip").read_bytes() == (
+        second / "corrected-bundle.zip"
+    ).read_bytes()
+    assert (first / "data-quality-report.json").read_bytes() == (
+        second / "data-quality-report.json"
+    ).read_bytes()
+    assert (first / "manifest.json").read_bytes() == (
+        second / "manifest.json"
+    ).read_bytes()
+    assert original_checksums == {
+        name: sha256((source_dir / name).read_bytes()).hexdigest()
+        for name in build_bundle.INPUT_CHECKSUMS
+    }
+
+    report = json.loads((first / "data-quality-report.json").read_text())
+    assert report["raw_archive"] == {
+        "verse_records": 44_114,
+        "unique_verse_positions": 38_845,
+        "exact_duplicate_excess_records": 5_252,
+        "conflicting_duplicate_excess_records": 17,
+        "chapters": 1_520,
+    }
+    assert report["scope"] == {
+        "works": 83,
+        "chapters": 1_520,
+        "ethio81_works": 82,
+        "supplemental_works": 1,
+    }
+    assert report["known_missing_verses"] == {
+        "2-meqabyan": {"16": [9], "21": [9]},
+        "matthew": {"26": [30, 45]},
+        "mark": {"4": [10], "8": [19], "9": [31], "11": [19]},
+        "luke": {"18": [35]},
+        "acts": {"19": [41], "20": [17]},
+        "2-corinthians": {"13": [14]},
+    }
+    assert report["duplicate_output_positions"] == 0
+    assert report["undeclared_output_gaps"] == []
+    assert report["enoch_source_chapters_without_verse_numbers"] == [3, 4, 35, 44]
+
+    manifest = SourceManifest.model_validate_json(
+        (first / "manifest.json").read_text()
+    )
+    shutil.copy2(first / "corrected-bundle.zip", tmp_path / "corrected-bundle.zip")
+    rows = parse_composite_english_bundle(manifest, tmp_path)
+    assert len(rows) == report["corrected_verse_count"]
+    assert len({row.work_id for row in rows}) == 83
+    assert len({(row.work_id, row.chapter) for row in rows}) == 1_520
+    assert len({(row.work_id, row.chapter, row.verse) for row in rows}) == len(rows)
+    assert any(
+        row.work_id == "1-enoch" and row.chapter == 80 and row.verse == 1
+        and row.text
+        for row in rows
+    )
+    assert any(row.work_id == "tobit" and row.text for row in rows)
+    for chapter in (3, 4, 35, 44):
+        chapter_rows = [
+            row for row in rows if row.work_id == "1-enoch" and row.chapter == chapter
+        ]
+        assert [(row.verse, bool(row.text)) for row in chapter_rows] == [(1, True)]
+
+    options = manifest.adapter_options
+    assert len(options.work_sources) == 83
+    assert sum(s.canon_scope == "ethio81" for s in options.work_sources.values()) == 82
+    assert sum(s.canon_scope == "supplemental" for s in options.work_sources.values()) == 1
+    assert options.supplemental_works == ["prayer-of-manasseh"]
+    assert options.known_missing_verses == {
+        "2-meqabyan": {"16": [9], "21": [9]},
+        "matthew": {"26": [30, 45]},
+        "mark": {"4": [10], "8": [19], "9": [31], "11": [19]},
+        "luke": {"18": [35]},
+        "acts": {"19": [41], "20": [17]},
+        "2-corinthians": {"13": [14]},
+    }
+    fallback = {
+        work_id for work_id, source in options.work_sources.items() if source.fallback
+    }
+    assert fallback == {
+        "baruch", "letter-of-jeremiah", "prayer-of-azariah", "susanna",
+        "bel-and-the-dragon", "prayer-of-manasseh",
+    }
+    assert all(
+        "KJV" in options.work_sources[work_id].source_label for work_id in fallback
+    )
+    assert str(options.work_sources["tobit"].provenance_url) == (
+        "https://ebible.org/details.php?id=eng-webbe"
+    )
+    assert str(options.work_sources["1-enoch"].provenance_url) == (
+        "https://www.gutenberg.org/ebooks/77935"
+    )
+
+
+def test_corrected_bundle_builder_canonicalizes_lexicographic_chapters(tmp_path):
+    import importlib.util
+
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en/build_bundle.py"
+    )
+    spec = importlib.util.spec_from_file_location("eotc_build_bundle", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    chapters = [
+        {"c": "1", "v": [{"n": 1, "t": "One"}]},
+        {"c": "10", "v": [{"n": 1, "t": "Ten"}]},
+        *(
+            {"c": str(number), "v": [{"n": 1, "t": str(number)}]}
+            for number in range(2, 10)
+        ),
+    ]
+
+    corrected = module._canonical_untouched("GEN", chapters)
+    assert [chapter["c"] for chapter in corrected] == list(range(1, 11))
+    assert corrected[-1]["v"][0]["t"] == "Ten"
+
+    with pytest.raises(ValueError, match="duplicate chapter"):
+        module._canonical_untouched("GEN", chapters + [chapters[0]])
+    with pytest.raises(ValueError, match="contiguous"):
+        module._canonical_untouched("GEN", chapters[:-1])
+    with pytest.raises(ValueError, match="invalid chapter"):
+        module._canonical_untouched("GEN", [{"c": "01", "v": []}])
+
+
+def test_corrected_bundle_builder_cleans_only_murdock_presentation_artifacts():
+    import importlib.util
+
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en/build_bundle.py"
+    )
+    spec = importlib.util.spec_from_file_location("eotc_build_bundle_cleanup", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    corrected = module._canonical_untouched(
+        "MAT",
+        [{"c": "1", "v": [
+            {"n": 1, "t": "Before\x0fafter <FI>emphasis<Fi>."},
+            {"n": 2, "t": "Verse.<RF>Translator note.<Rf>"},
+            {"n": 3, "t": ""},
+        ]}],
+        source_group="peshitta",
+    )
+
+    assert corrected == [{"c": 1, "v": [
+        {"n": 1, "t": "Before after emphasis."},
+        {"n": 2, "t": "Verse."},
+    ]}]
