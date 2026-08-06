@@ -236,6 +236,53 @@ def test_rejects_source_symlink_even_when_target_is_inside_manifest_directory(tm
         parse_composite_english_bundle(manifest, tmp_path)
 
 
+def test_rejects_symlink_in_archive_path_ancestor(tmp_path):
+    real_directory = tmp_path / "real"
+    real_directory.mkdir()
+    archive_path = real_directory / "bundle.zip"
+    archive_bytes = _write_bundle(archive_path)
+    (tmp_path / "linked").symlink_to(real_directory, target_is_directory=True)
+    manifest = _manifest("linked/bundle.zip", archive_bytes)
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+    with pytest.raises(ValueError, match="symlink|regular file"):
+        parse_composite_english_bundle(manifest, tmp_path)
+
+
+def test_path_replacement_cannot_change_bytes_parsed_after_checksum(
+    tmp_path, monkeypatch
+):
+    import app.library.ingest.adapters.composite_english_bundle as adapter
+
+    archive_path = tmp_path / "bundle.zip"
+    original_bytes = _write_bundle(archive_path)
+    replacement_path = tmp_path / "replacement.zip"
+    _write_bundle(replacement_path, books={
+        "data/gen.json": [{"c": 1, "v": [
+            {"n": 1, "t": "Replacement text."},
+            {"n": 2, "t": "Replacement text two."},
+        ]}],
+    })
+    manifest = _manifest(archive_path.name, original_bytes)
+    real_zip_file = adapter.ZipFile
+    opened_arguments = []
+
+    def replace_path_then_open(opened_archive, *args, **kwargs):
+        opened_arguments.append(opened_archive)
+        replacement_path.replace(archive_path)
+        return real_zip_file(opened_archive, *args, **kwargs)
+
+    monkeypatch.setattr(adapter, "ZipFile", replace_path_then_open)
+
+    rows = adapter.parse_composite_english_bundle(manifest, tmp_path)
+
+    assert rows[0].text == "In the beginning"
+    assert len(opened_arguments) == 1
+    assert hasattr(opened_arguments[0], "read")
+
+
 @pytest.mark.parametrize(
     "index_payload,message",
     [
@@ -273,6 +320,24 @@ def test_rejects_os_error_while_opening_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, "ZipFile", fail_to_open)
     with pytest.raises(ValueError, match="invalid source archive"):
         _parse(path, payload)
+
+
+def test_translates_checksum_read_oserror_with_cause():
+    from app.library.ingest.adapters.composite_english_bundle import (
+        _checksum_open_file,
+    )
+
+    class BrokenArchive:
+        def seek(self, _offset):
+            return 0
+
+        def read(self, _size):
+            raise OSError("simulated read failure")
+
+    with pytest.raises(ValueError, match="checksum") as raised:
+        _checksum_open_file(BrokenArchive())
+
+    assert isinstance(raised.value.__cause__, OSError)
 
 
 def test_rejects_archive_outside_manifest_directory(tmp_path):
@@ -362,6 +427,47 @@ def test_index_ids_and_populated_set_must_match_mapping(tmp_path, books, message
     payload = _write_bundle(path, index={"books": books})
     with pytest.raises(ValueError, match=message):
         _parse(path, payload)
+
+
+def test_reports_first_unexpected_populated_book_in_index_order(tmp_path):
+    path = tmp_path / "bundle.zip"
+    records = [
+        _index_record(),
+        _index_record("ZZZ", file="data/zzz.json"),
+        _index_record("AAA", file="data/aaa.json"),
+    ]
+    payload = _write_bundle(path, index={"books": records})
+
+    with pytest.raises(ValueError, match="unexpected populated book 'ZZZ'"):
+        _parse(path, payload)
+
+
+@pytest.mark.parametrize(
+    "exo_member",
+    ["data/shared.json", "data/SHARED.json"],
+    ids=["exact", "case-folded"],
+)
+def test_rejects_populated_books_that_alias_one_member_path(tmp_path, exo_member):
+    path = tmp_path / "bundle.zip"
+    records = [
+        _index_record(file="data/shared.json"),
+        _index_record("EXO", name="Exodus", file=exo_member),
+    ]
+    books = {"data/shared.json": _book()}
+    if exo_member != "data/shared.json":
+        books[exo_member] = _book()
+    payload = _write_bundle(path, index={"books": records}, books=books)
+
+    with pytest.raises(ValueError, match="duplicate populated member path"):
+        _parse(
+            path,
+            payload,
+            book_map={"GEN": "genesis", "EXO": "exodus"},
+            expected_works={
+                "genesis": {"chapters": 1},
+                "exodus": {"chapters": 1},
+            },
+        )
 
 
 @pytest.mark.parametrize(
@@ -603,3 +709,61 @@ def test_validates_manifest_adapter_options_and_expected_work_keys(tmp_path):
     wrong_expected = manifest.model_copy(update={"expected_works": {"exodus": {}}})
     with pytest.raises(ValueError, match="expected_works"):
         parse_composite_english_bundle(wrong_expected, tmp_path)
+
+
+def test_revalidates_forged_duplicate_book_map_targets(tmp_path):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path)
+    manifest = _manifest(path.name, payload)
+    options_type = type(manifest.adapter_options)
+    forged_options = options_type.model_construct(
+        book_map={"GEN": "genesis", "GEN2": "genesis"},
+        work_sources=manifest.adapter_options.work_sources,
+        supplemental_works=[],
+    )
+    manifest = manifest.model_copy(update={"adapter_options": forged_options})
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+    with pytest.raises(ValueError, match="adapter options|multiple source books"):
+        parse_composite_english_bundle(manifest, tmp_path)
+
+
+@pytest.mark.parametrize("forgery", ["empty", "nested", "scope", "supplemental"])
+def test_revalidates_forged_nested_source_and_scope_options(tmp_path, forgery):
+    path = tmp_path / "bundle.zip"
+    payload = _write_bundle(path)
+    manifest = _manifest(path.name, payload)
+    original = manifest.adapter_options
+    options_type = type(original)
+    book_map = original.book_map
+    work_sources = original.work_sources
+    supplemental_works = []
+
+    if forgery == "empty":
+        book_map = {}
+        work_sources = {}
+    elif forgery == "nested":
+        work_sources = {"genesis": {"source_key": []}}
+    elif forgery == "scope":
+        work_sources = {
+            "genesis": original.work_sources["genesis"].model_copy(
+                update={"canon_scope": "supplemental"}
+            )
+        }
+    else:
+        supplemental_works = ["exodus"]
+
+    forged_options = options_type.model_construct(
+        book_map=book_map,
+        work_sources=work_sources,
+        supplemental_works=supplemental_works,
+    )
+    manifest = manifest.model_copy(update={"adapter_options": forged_options})
+
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+    with pytest.raises(ValueError, match="adapter options"):
+        parse_composite_english_bundle(manifest, tmp_path)

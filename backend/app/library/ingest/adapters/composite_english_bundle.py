@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
-from typing import Any
+from typing import Any, BinaryIO
 import unicodedata
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
@@ -33,11 +34,16 @@ _SOURCE_KEYS = {
 _DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 
 
-def _file_checksum(path: Path) -> str:
+def _checksum_open_file(source: BinaryIO) -> str:
+    """Hash and rewind the same open file object later passed to ``ZipFile``."""
     digest = sha256()
-    with path.open("rb") as source:
+    try:
+        source.seek(0)
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
+        source.seek(0)
+    except OSError as error:
+        raise ValueError("could not checksum the open source archive.") from error
     return digest.hexdigest()
 
 
@@ -72,11 +78,11 @@ def _is_safe_member(info: ZipInfo) -> bool:
     return not stat.S_ISLNK(unix_mode) and not (info.flag_bits & 0x1)
 
 
-def _validated_archive(path: Path) -> ZipFile:
+def _validated_archive(source: BinaryIO, archive_name: str) -> ZipFile:
     try:
-        archive = ZipFile(path)
+        archive = ZipFile(source)
     except (BadZipFile, OSError) as error:
-        raise ValueError(f"invalid source archive: {path.name}") from error
+        raise ValueError(f"invalid source archive: {archive_name}") from error
 
     try:
         infos = archive.infolist()
@@ -89,10 +95,103 @@ def _validated_archive(path: Path) -> ZipFile:
             raise ValueError("source archive contains an unsafe archive member.")
         if sum(info.file_size for info in infos) > _MAX_UNCOMPRESSED_BYTES:
             raise ValueError("source archive exceeds the uncompressed size limit.")
+    except OSError as error:
+        archive.close()
+        raise ValueError(f"cannot read source archive: {archive_name}") from error
     except Exception:
         archive.close()
         raise
     return archive
+
+
+def _open_relative_no_symlinks(root: Path, relative_path: str) -> BinaryIO:
+    """Open one regular file beneath ``root`` using directory-relative handles."""
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    root_fd = os.open(root, directory_flags)
+    directory_fd = root_fd
+    file_fd: int | None = None
+    try:
+        parts = relative_path.split("/")
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            if directory_fd != root_fd:
+                os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(parts[-1], file_flags, dir_fd=directory_fd)
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise ValueError("source archive is not a regular file.")
+        opened = os.fdopen(file_fd, "rb")
+        file_fd = None
+        return opened
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd != root_fd:
+            os.close(directory_fd)
+        os.close(root_fd)
+
+
+def _open_portable_no_symlinks(root: Path, relative_path: str) -> BinaryIO:
+    """Fallback for platforms without directory-relative no-follow opens."""
+    candidate = root
+    parts = relative_path.split("/")
+    for index, part in enumerate(parts):
+        candidate = candidate / part
+        metadata = os.lstat(candidate)
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("source archive path must not contain symlinks.")
+        if index < len(parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("source archive ancestor must be a directory.")
+    resolved = candidate.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise ValueError("source archive must remain inside the manifest directory.")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    file_fd = os.open(candidate, flags)
+    try:
+        opened_metadata = os.fstat(file_fd)
+        current_metadata = os.lstat(candidate)
+        current = root
+        for part in parts[:-1]:
+            current = current / part
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                raise ValueError("source archive path must not contain symlinks.")
+        still_resolved = candidate.resolve(strict=True)
+        if (
+            not stat.S_ISREG(opened_metadata.st_mode)
+            or stat.S_ISLNK(current_metadata.st_mode)
+            or not still_resolved.is_relative_to(root)
+            or (opened_metadata.st_dev, opened_metadata.st_ino)
+            != (current_metadata.st_dev, current_metadata.st_ino)
+        ):
+            raise ValueError("source archive is not a stable regular file.")
+        opened = os.fdopen(file_fd, "rb")
+        file_fd = -1
+        return opened
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+
+
+def _open_source_archive(
+    manifest_directory: Path, relative_path: str
+) -> BinaryIO:
+    try:
+        root = manifest_directory.resolve(strict=True)
+        secure_open_supported = (
+            hasattr(os, "O_DIRECTORY")
+            and hasattr(os, "O_NOFOLLOW")
+            and os.open in getattr(os, "supports_dir_fd", set())
+        )
+        if secure_open_supported:
+            return _open_relative_no_symlinks(root, relative_path)
+        return _open_portable_no_symlinks(root, relative_path)
+    except OSError as error:
+        raise ValueError(
+            "source archive must be a regular file without symlinks inside the "
+            f"manifest directory: {relative_path}"
+        ) from error
 
 
 def _read_json(archive: ZipFile, member: str) -> Any:
@@ -141,6 +240,7 @@ def _validate_index(
 
     by_id: dict[str, dict[str, Any]] = {}
     populated: set[str] = set()
+    populated_members: dict[str, str] = {}
     for record in books:
         if not isinstance(record, dict):
             raise ValueError("bundle index contains an invalid book record.")
@@ -154,6 +254,14 @@ def _validate_index(
 
         file_value = record.get("file")
         if file_value is not None and file_value != "":
+            member = _book_member(record)
+            member_identity = member.casefold()
+            if member_identity in populated_members:
+                raise ValueError(
+                    "bundle index contains a duplicate populated member path: "
+                    f"{member!r}."
+                )
+            populated_members[member_identity] = member
             populated.add(identity)
             continue
         if (
@@ -169,9 +277,11 @@ def _validate_index(
         source_id = next(key for key in options.book_map if key.casefold() in missing)
         raise ValueError(f"bundle index is missing mapped book {source_id!r}.")
     unexpected = populated - mapped
-    if unexpected:
-        record = by_id[next(iter(unexpected))]
-        raise ValueError(f"bundle index contains unexpected populated book {record['id']!r}.")
+    for identity, record in by_id.items():
+        if identity in unexpected:
+            raise ValueError(
+                f"bundle index contains unexpected populated book {record['id']!r}."
+            )
     return by_id
 
 
@@ -261,6 +371,14 @@ def parse_composite_english_bundle(
         options, CompositeEnglishBundleAdapterOptions
     ):
         raise ValueError("manifest does not contain composite_english_bundle adapter options.")
+    try:
+        options = CompositeEnglishBundleAdapterOptions.model_validate(
+            options.model_dump(mode="python", warnings="none")
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError("manifest contains invalid composite adapter options.") from error
+    if not options.book_map:
+        raise ValueError("manifest contains invalid composite adapter options: empty book_map.")
     if len(manifest.source_files) != 1:
         raise ValueError("composite_english_bundle requires exactly one source archive.")
     if set(options.book_map.values()) != set(manifest.expected_works):
@@ -269,30 +387,29 @@ def parse_composite_english_bundle(
     source = manifest.source_files[0]
     if not _is_locator_normalization_stable(source.path):
         raise ValueError("source archive path must be normalization-stable.")
-    manifest_root = manifest_directory.resolve()
-    archive_path = manifest_directory / source.path
-    if (
-        archive_path.is_symlink()
-        or not archive_path.is_file()
-        or not archive_path.resolve().is_relative_to(manifest_root)
-    ):
+    try:
+        _safe_relative_path(source.path, label="source archive")
+    except ValueError as error:
         raise ValueError(
             "source archive must be a regular file inside the manifest directory: "
             f"{source.path}"
-        )
-    if _file_checksum(archive_path) != source.sha256:
-        raise ValueError(f"source archive checksum does not match manifest: {source.path}")
+        ) from error
 
-    with _validated_archive(archive_path) as archive:
-        by_id = _validate_index(_read_json(archive, _INDEX_MEMBER), options)
-        rows: list[NormalizedVerse] = []
-        for source_id, work_id in options.book_map.items():
-            record = by_id[source_id.casefold()]
-            rows.extend(_rows_for_book(
-                archive=archive,
-                archive_name=source.path,
-                record=record,
-                work_id=work_id,
-                expected_source_key=options.work_sources[work_id].source_key,
-            ))
+    with _open_source_archive(manifest_directory, source.path) as opened_source:
+        if _checksum_open_file(opened_source) != source.sha256:
+            raise ValueError(
+                f"source archive checksum does not match manifest: {source.path}"
+            )
+        with _validated_archive(opened_source, source.path) as archive:
+            by_id = _validate_index(_read_json(archive, _INDEX_MEMBER), options)
+            rows: list[NormalizedVerse] = []
+            for source_id, work_id in options.book_map.items():
+                record = by_id[source_id.casefold()]
+                rows.extend(_rows_for_book(
+                    archive=archive,
+                    archive_name=source.path,
+                    record=record,
+                    work_id=work_id,
+                    expected_source_key=options.work_sources[work_id].source_key,
+                ))
     return tuple(rows)
