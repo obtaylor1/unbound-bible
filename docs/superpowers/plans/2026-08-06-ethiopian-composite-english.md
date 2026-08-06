@@ -378,13 +378,13 @@ Normalize work IDs and require every key to be a mapped target. Require each lis
 
 - [ ] **Step 1: Freeze and verify three build inputs**
 
-    shasum -a 256 backend/data/scripture/eotc-composite-en/{Ethiopian\ Orthodox\ Bible\ \(Non-KJV\ Edition\).zip,eng-webbe_vpl.zip,project-gutenberg-77935.html}
+    shasum -a 256 backend/data/scripture/eotc-composite-en/{Ethiopian\ Orthodox\ Bible\ \(Non-KJV\ Edition\).zip,eng-webbe_vpl.zip,project-gutenberg-77935.txt}
 
 Expected SHA-256 values:
 
     0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27026066dbb9f92ce34b183a2  supplied ZIP
     dc16460ed5e890e7b169cd3caeaa7e4adb4f7a6b5031bff85e4503389cd03b11  eBible VPL
-    d61ea7450d90e3c0682a1ed209b854ecf1755b0075685f6c6b846b0f9909a194  Project Gutenberg HTML
+    10d325355a810badf67bbbd1fe6bda77dc6e294eae78c2f6c69290188af45b14  Project Gutenberg plain text
 
 - [ ] **Step 2: Write a failing corrected-bundle acceptance test**
 
@@ -410,7 +410,7 @@ Create `build_bundle.py`. It verifies all three input checksums before reading. 
     WEB_BOOKS = {'1ES', '2ES', 'TOB', 'JDT', 'WIS', 'SIR'}
     KNOWN_MISSING_VERSES = {'2-meqabyan': {'16': [9], '21': [9]}}
 
-For WEB works, parse `eng-webbe_vpl.txt` lines with a full-line expression equivalent to `^(BOOK) ([1-9][0-9]*):([1-9][0-9]*) (TEXT)$`; reject duplicates, gaps, empty text, unexpected books, and chapter-count mismatches. For Enoch, parse the ebook's `The Book of Enoch` body only, recognize Roman-numeral chapter headings I through CVIII and numbered verse/subverse markers such as `6.`, `6 a.`, and `5 b.`. Join fragments carrying the same integer verse number in document order, strip presentation-only page numbers and footnote anchors, preserve textual brackets and critical symbols, and reject missing/empty chapters, duplicate output positions, or a non-contiguous 1..N verse set. Do not use the damaged archive Enoch text in output.
+For WEB works, parse `eng-webbe_vpl.txt` lines with a full-line expression equivalent to `^(BOOK) ([1-9][0-9]*):([1-9][0-9]*) (TEXT)$`; reject duplicates, gaps, empty text, unexpected books, and chapter-count mismatches. For Enoch, parse only the `The Book of Enoch` section of Project Gutenberg's official plain-text artifact, recognize Roman-numeral chapter headings I through CVIII and numbered verse/subverse markers such as `6.`, `6 a.`, and `5 b.`. Join fragments carrying the same integer verse number in document order, discard Project Gutenberg boilerplate, presentation-only page numbers, and footnote blocks, preserve textual brackets and critical symbols, and reject missing/empty chapters, duplicate output positions, or a non-contiguous 1..N verse set. Do not use the damaged archive Enoch text in output.
 
 Write `corrected-bundle.zip` with sorted member names, UTF-8 canonical JSON, and fixed ZIP timestamps/permissions so repeated builds are byte-identical. Write `data-quality-report.json` containing every input/output checksum, raw findings, exact corrected count, replacement counts, the two declared omissions, and generator version. Never overwrite an input artifact.
 

@@ -34,7 +34,7 @@ Strict parsing found that the archive cannot be published unchanged:
 - the bundled Sirach has twelve missing verse labels;
 - the upstream Wikisource 2 Meqabyan revision itself omits verse label 9 in chapters 16 and 21.
 
-The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935, the public-domain R. H. Charles text; identical repeats are never published; and the two upstream Meqabyan omissions are explicitly declared rather than filled with invented text. Every upstream artifact has a committed checksum and provenance URL.
+The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935's official plain-text artifact, the public-domain R. H. Charles text; identical repeats are never published; and the two upstream Meqabyan omissions are explicitly declared rather than filled with invented text. Every upstream artifact has a committed checksum and provenance URL. The plain-text artifact is used instead of HTML so presentation footnotes cannot corrupt parser nesting state.
 
 ## Edition identity
 
