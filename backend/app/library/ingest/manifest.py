@@ -212,7 +212,7 @@ class WorkSourceManifest(BaseModel):
     provenance_url: HttpUrl | None
     fallback: StrictBool = False
     modified: StrictBool = False
-    modification_note: Attribution | None
+    modification_note: Attribution | None = None
     verification_status: Literal['provisional', 'verified']
     canon_scope: Literal['ethio81', 'supplemental']
 

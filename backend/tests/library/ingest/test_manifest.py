@@ -106,6 +106,16 @@ def test_modified_work_source_requires_modification_note():
         WorkSourceManifest.model_validate(work_source(modified=True))
 
 
+def test_unmodified_work_source_defaults_omitted_modification_note_to_none():
+    value = work_source()
+    value.pop('modification_note')
+
+    source = WorkSourceManifest.model_validate(value)
+
+    assert source.modification_note is None
+    assert 'modification_note' not in WorkSourceManifest.model_json_schema()['required']
+
+
 def test_work_source_rejects_extra_fields_and_coerced_booleans():
     with pytest.raises(ValidationError):
         WorkSourceManifest.model_validate(work_source(unexpected='value'))
