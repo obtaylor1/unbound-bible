@@ -41,7 +41,7 @@ function cleanText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function safeHttpUrl(value) {
+export function safeProvenanceUrl(value) {
   const candidate = cleanText(value)
   if (!candidate) return null
   try {
@@ -87,7 +87,7 @@ export function sourceFromRow(row) {
     provisional: workSource.verification_status === 'provisional',
     translator: cleanText(workSource.translator),
     attribution: cleanText(workSource.attribution),
-    provenanceUrl: safeHttpUrl(workSource.provenance_url),
+    provenanceUrl: safeProvenanceUrl(workSource.provenance_url),
     canonScope: cleanText(workSource.canon_scope),
     categories: sourceCategories({ code, tradition, language }),
   }
@@ -199,8 +199,10 @@ function uniqueWords(text) {
   return new Set(String(text ?? '').split(/\s+/).map(normalizedWord).filter(Boolean))
 }
 
-export function summarizeComparison(texts) {
-  const available = texts.filter((text) => typeof text === 'string' && text.trim())
+export function summarizeComparison(texts, { baseIndex = 0 } = {}) {
+  const available = texts
+    .map((text, index) => ({ text, index }))
+    .filter(({ text }) => typeof text === 'string' && text.trim())
   if (available.length < 2) {
     return {
       availableCount: available.length,
@@ -211,8 +213,9 @@ export function summarizeComparison(texts) {
     }
   }
 
-  const base = uniqueWords(available[0])
-  const differenceCount = available.slice(1).reduce((largest, text) => {
+  const baseEntry = available.find(({ index }) => index === baseIndex) ?? available[0]
+  const base = uniqueWords(baseEntry.text)
+  const differenceCount = available.filter((entry) => entry !== baseEntry).reduce((largest, { text }) => {
     const words = uniqueWords(text)
     const baseOnly = [...base].filter((word) => !words.has(word)).length
     const comparisonOnly = [...words].filter((word) => !base.has(word)).length

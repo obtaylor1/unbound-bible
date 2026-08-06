@@ -209,4 +209,25 @@ describe('comparisonModel', () => {
       message: 'One source is available. Add another source to compare wording.',
     })
   })
+
+  it('computes differences from the explicitly designated available base', () => {
+    const texts = [
+      'one two three four',
+      'one two three',
+      'one two',
+    ]
+    expect(summarizeComparison(texts, { baseIndex: 0 }).differenceCount).toBe(2)
+    expect(summarizeComparison(texts, { baseIndex: 1 }).differenceCount).toBe(1)
+  })
+
+  it('falls back to the first available text when the designated base is unavailable', () => {
+    expect(summarizeComparison([
+      'one two three',
+      null,
+      'one two',
+    ], { baseIndex: 1 })).toMatchObject({
+      availableCount: 2,
+      differenceCount: 1,
+    })
+  })
 })

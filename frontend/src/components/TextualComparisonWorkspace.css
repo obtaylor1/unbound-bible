@@ -481,6 +481,14 @@
   font-size: 0.76rem;
 }
 .translation-source-details strong { color: var(--compare-text); font-size: 0.8rem; }
+.translation-source-details a {
+  width: fit-content;
+  margin-top: 3px;
+  color: var(--compare-gold);
+  font-weight: 750;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
 .translation-source-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .translation-source-badge {
   width: fit-content;

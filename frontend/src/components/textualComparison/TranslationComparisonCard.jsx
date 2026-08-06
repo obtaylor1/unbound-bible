@@ -1,4 +1,4 @@
-import { diffWords } from './comparisonModel'
+import { diffWords, safeProvenanceUrl } from './comparisonModel'
 
 function SourceStatus({ state, onChooseSource, onLearnMore }) {
   const warning = ['database-missing', 'translation-unavailable'].includes(state.kind)
@@ -33,6 +33,7 @@ export default function TranslationComparisonCard({
   onChooseSource,
   onLearnMore,
 }) {
+  const provenanceUrl = safeProvenanceUrl(source.provenanceUrl)
   const renderedWords = state.kind === 'available'
     ? diffWords(state.text, highlightDifferences && baseText ? baseText : state.text)
     : []
@@ -60,7 +61,7 @@ export default function TranslationComparisonCard({
             <span className="difference-chip">{differenceCount} {differenceCount === 1 ? 'difference' : 'differences'}</span>
           )}
         </div>
-        {(source.fallback || source.provisional || source.sourceLabel || source.translator) && (
+        {(source.fallback || source.provisional || source.sourceLabel || source.translator || source.attribution || provenanceUrl) && (
           <div className="translation-source-details" aria-label="Text source details">
             <div className="translation-source-badges">
               {source.fallback && <span className="translation-source-badge is-fallback">KJV fallback</span>}
@@ -68,6 +69,17 @@ export default function TranslationComparisonCard({
             </div>
             {source.sourceLabel && <strong>{source.sourceLabel}</strong>}
             {source.translator && <span>Translated by {source.translator}</span>}
+            {source.attribution && <span>{source.attribution}</span>}
+            {provenanceUrl && (
+              <a
+                href={provenanceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`View source record for ${source.sourceLabel ?? source.name}`}
+              >
+                View source record <span aria-hidden="true">↗</span>
+              </a>
+            )}
           </div>
         )}
         {state.kind === 'available' ? (

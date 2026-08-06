@@ -150,6 +150,22 @@ describe('TextualComparisonWorkspace', () => {
     expect(card).toHaveTextContent('Translated by King James Version translators')
   })
 
+  it('calculates three-source difference totals from the active base translation', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [
+      { ...compositeRow, text: 'one two three' },
+      { ...genesisRows[0], text: 'one two three four' },
+      { ...genesisRows[1], text: 'one two' },
+    ] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+
+    await user.click(screen.getByRole('checkbox', { name: /American Standard Version/ }))
+    expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('eotc-composite-en')
+    expect(screen.getByText('1 wording difference found')).toBeVisible()
+    expect(screen.queryByText('2 wording differences found')).not.toBeInTheDocument()
+  })
+
   it('does not report missing source text as a wording difference', async () => {
     installFetch({ rows: [{ ...compositeRow, text: null }, genesisRows[0]] })
     render(<TextualComparisonWorkspace />)
@@ -173,6 +189,21 @@ describe('TextualComparisonWorkspace', () => {
     await user.click(screen.getByRole('button', { name: 'Chapter view' }))
     expect(screen.getByText('heavens', { selector: 'mark' })).toBeInTheDocument()
     expect(screen.queryByText('God', { selector: 'mark' })).not.toBeInTheDocument()
+  })
+
+  it('renders whitespace-only chapter text as unavailable instead of a blank paragraph', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [
+      { ...compositeRow, text: '   ' },
+      genesisRows[0],
+    ] })
+    const { container } = render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+
+    await user.click(screen.getByRole('button', { name: 'Chapter view' }))
+    expect(screen.getByText('Text unavailable', { selector: '.chapter-source-empty' })).toBeVisible()
+    const paragraphs = [...container.querySelectorAll('.comparison-chapter-row article p')]
+    expect(paragraphs.some((paragraph) => paragraph.textContent.trim() === '')).toBe(false)
   })
 
   it('retains the ETHIO81 canon when sources and passage controls update the route', async () => {
@@ -260,6 +291,45 @@ describe('TextualComparisonWorkspace', () => {
     expect(await screen.findByText('O Lord Almighty, God of our fathers.')).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Book' })).toHaveValue('Prayer of Manasseh')
     expect(window.location.hash).toContain('canon=LIBRARY')
+  })
+
+  it('synchronizes a mounted workspace across compare hash navigation and back', async () => {
+    const requestedUrls = []
+    globalThis.fetch = vi.fn((url) => {
+      const value = String(url)
+      if (value.includes('available-books')) return jsonResponse({ books: ['Genesis', '1 Enoch'] })
+      requestedUrls.push(value)
+      if (value.includes('book=1%20Enoch')) {
+        return jsonResponse({ content: [{
+          id: 30,
+          book: '1 Enoch',
+          chapter: 2,
+          verse: 3,
+          translation: '1EN_CH',
+          edition: edition('1EN_CH', '1 Enoch, R. H. Charles'),
+          text: 'Observe everything that takes place in the heaven.',
+        }] })
+      }
+      return jsonResponse({ content: genesisRows })
+    })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'King James Version' })
+
+    const genesisHash = window.location.hash
+    window.history.pushState(null, '', '#compare?book=1%20Enoch&chapter=2&verse=3&translation=1EN_CH&canon=LIBRARY')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+    expect(await screen.findByText('Observe everything that takes place in the heaven.')).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Book' })).toHaveValue('1 Enoch')
+    expect(screen.getByRole('combobox', { name: 'Chapter' })).toHaveValue('2')
+    expect(screen.getByRole('combobox', { name: 'Verse' })).toHaveValue('3')
+    expect(window.location.hash).toContain('canon=LIBRARY')
+
+    window.history.back()
+    expect(await screen.findByText('In the beginning God created the heaven and the earth.')).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Book' })).toHaveValue('Genesis')
+    expect(window.location.hash).toBe(genesisHash)
+    expect(requestedUrls.some((url) => url.includes('book=1%20Enoch&chapter=2'))).toBe(true)
   })
 
   it('switches to an aligned chapter view', async () => {

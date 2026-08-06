@@ -214,6 +214,44 @@ describe('TranslationComparisonCard', () => {
     expect(screen.getByRole('button', { name: 'Choose another source' })).toBeInTheDocument()
     expect(screen.getByText('Base reference')).toBeInTheDocument()
   })
+
+  it('renders attribution and a safe permanent source link accessibly', () => {
+    render(
+      <TranslationComparisonCard
+        {...commonProps}
+        source={{
+          ...commonProps.source,
+          sourceLabel: "Wikisource Meqabyan translation from Ge'ez",
+          attribution: 'Wikisource contributors, licensed CC BY-SA 4.0.',
+          provenanceUrl: 'https://en.wikisource.org/w/index.php?oldid=16044809',
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Wikisource contributors, licensed CC BY-SA 4.0.')).toBeVisible()
+    const link = screen.getByRole('link', {
+      name: "View source record for Wikisource Meqabyan translation from Ge'ez",
+    })
+    expect(link).toHaveAttribute('href', 'https://en.wikisource.org/w/index.php?oldid=16044809')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('never links an unsafe provenance value', () => {
+    render(
+      <TranslationComparisonCard
+        {...commonProps}
+        source={{
+          ...commonProps.source,
+          attribution: 'Archive attribution remains visible.',
+          provenanceUrl: 'javascript:alert(1)',
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Archive attribution remains visible.')).toBeVisible()
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
 })
 
 function DrawerHarness() {

@@ -150,7 +150,7 @@ function ChapterComparison({
                   return (
                     <article key={key} aria-label={`${source.name}, verse ${verse}`}>
                       <strong>{source.code}</strong>
-                      {text ? (
+                      {hasAvailableText(text) ? (
                         <p>{diffWords(text, highlightDifferences && baseText ? baseText : text).map((word, index) => (
                           word.differs ? <mark key={`${word.text}-${index}`}>{word.text}</mark> : word.text
                         ))}</p>
@@ -169,7 +169,7 @@ function ChapterComparison({
 
 export default function TextualComparisonWorkspace() {
   const initialRoute = useMemo(comparisonRoute, [])
-  const [canon] = useState(initialRoute.canon)
+  const [canon, setCanon] = useState(initialRoute.canon)
   const [book, setBook] = useState(initialRoute.book)
   const [chapter, setChapter] = useState(initialRoute.chapter)
   const [verse, setVerse] = useState(initialRoute.verse)
@@ -288,6 +288,28 @@ export default function TextualComparisonWorkspace() {
     }
   }, [sourcesOpen])
 
+  useEffect(() => {
+    const handleHashChange = () => {
+      const routeName = window.location.hash.replace(/^#/, '').split('?')[0].toLocaleLowerCase()
+      if (routeName !== 'compare') return
+      const nextRoute = comparisonRoute()
+      setRequestStatus('loading')
+      setRows([])
+      setCanon(nextRoute.canon)
+      setBook(nextRoute.book)
+      setChapter(nextRoute.chapter)
+      setVerse(nextRoute.verse)
+      setSelectedTranslations((current) => nextRoute.translation
+        ? [nextRoute.translation, ...current.filter((key) => key !== nextRoute.translation)]
+        : current)
+      setBaseTranslation(nextRoute.translation)
+      setSelectionSourceSignature('')
+      setRequestRevision((value) => value + 1)
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
   const availableBookOptions = booksForCanon(books.length ? books : Object.keys(BOOK_CHAPTERS), canon)
   const bookOptions = availableBookOptions.includes(book)
     ? availableBookOptions
@@ -351,7 +373,9 @@ export default function TextualComparisonWorkspace() {
   }
 
   const selectedTexts = activeTranslations.map((key) => textFor(key))
-  const summary = summarizeComparison(selectedTexts)
+  const summary = summarizeComparison(selectedTexts, {
+    baseIndex: activeTranslations.indexOf(activeBaseTranslation),
+  })
   const selectedAvailableText = selectedTexts.find(hasAvailableText) ?? ''
   const preferredBaseText = textFor(activeBaseTranslation)
   const baseText = hasAvailableText(preferredBaseText) ? preferredBaseText : selectedAvailableText
