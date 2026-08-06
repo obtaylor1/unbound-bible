@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from app.library.ingest.manifest import SourceManifest
+from app.library.ingest.manifest import SourceManifest, WorkSourceManifest
 
 
 VALID = {
@@ -39,6 +39,207 @@ def manifest_with(**changes):
     value = copy.deepcopy(VALID)
     value.update(changes)
     return value
+
+
+def work_source(**changes):
+    value = {
+        'source_key': 'GEN',
+        'source_label': 'World English Bible',
+        'translator': None,
+        'source_language': 'Hebrew',
+        'source_tradition': 'Masoretic Text',
+        'published_year': 2020,
+        'license_spdx': 'CC0-1.0',
+        'attribution': 'World English Bible, public domain',
+        'provenance_url': 'https://example.org/web/genesis',
+        'fallback': False,
+        'modified': False,
+        'modification_note': None,
+        'verification_status': 'verified',
+        'canon_scope': 'ethio81',
+    }
+    value.update(changes)
+    return value
+
+
+def composite_options(**changes):
+    value = {
+        'book_map': {'GEN': 'genesis', 'ENO': '1-enoch'},
+        'work_sources': {
+            'genesis': work_source(),
+            '1-enoch': work_source(
+                source_key='ENO',
+                source_label='Provisional Enoch translation',
+                provenance_url=None,
+                verification_status='provisional',
+                canon_scope='supplemental',
+            ),
+        },
+        'supplemental_works': ['1-enoch'],
+    }
+    value.update(changes)
+    return value
+
+
+def composite_manifest(**changes):
+    value = manifest_with(
+        license_spdx='LicenseRef-Mixed',
+        expected_works={
+            'genesis': {'chapters': 50},
+            '1-enoch': {'chapters': 108},
+        },
+        adapter='composite_english_bundle',
+        adapter_options=composite_options(),
+        source_verification='provisional',
+    )
+    value.update(changes)
+    return value
+
+
+def test_verified_work_source_requires_provenance_url():
+    with pytest.raises(ValidationError, match='verified work source requires provenance_url'):
+        WorkSourceManifest.model_validate(work_source(provenance_url=None))
+
+
+def test_modified_work_source_requires_modification_note():
+    with pytest.raises(ValidationError, match='modified work source requires modification_note'):
+        WorkSourceManifest.model_validate(work_source(modified=True))
+
+
+def test_work_source_rejects_extra_fields_and_coerced_booleans():
+    with pytest.raises(ValidationError):
+        WorkSourceManifest.model_validate(work_source(unexpected='value'))
+    with pytest.raises(ValidationError):
+        WorkSourceManifest.model_validate(work_source(fallback=1))
+
+
+def test_composite_manifest_accepts_mixed_license_and_normalizes_mapping_keys():
+    options = composite_options(book_map={' gen ': 'genesis', 'ENO': '1-enoch'})
+    manifest = SourceManifest.model_validate(composite_manifest(adapter_options=options))
+
+    assert manifest.license_spdx == 'LicenseRef-Mixed'
+    assert manifest.adapter_options.book_map == {'gen': 'genesis', 'ENO': '1-enoch'}
+
+
+def test_composite_adapter_rejects_duplicate_book_map_targets():
+    options = composite_options(book_map={'GEN': 'genesis', 'GEN-alt': 'genesis'})
+
+    with pytest.raises(ValidationError, match='multiple source books to one work'):
+        SourceManifest.model_validate(composite_manifest(adapter_options=options))
+
+
+@pytest.mark.parametrize(
+    'work_sources',
+    (
+        {'genesis': work_source()},
+        {
+            'genesis': work_source(),
+            '1-enoch': work_source(
+                source_key='ENO', verification_status='provisional',
+                provenance_url=None, canon_scope='supplemental',
+            ),
+            'jubilees': work_source(source_key='JUB'),
+        },
+    ),
+)
+def test_composite_work_sources_must_exactly_match_book_map_targets(work_sources):
+    with pytest.raises(ValidationError, match='work_sources keys must exactly match book_map targets'):
+        SourceManifest.model_validate(composite_manifest(
+            adapter_options=composite_options(work_sources=work_sources),
+        ))
+
+
+def test_composite_work_source_keys_use_safe_normalized_work_ids():
+    sources = composite_options()['work_sources']
+    sources[' genesis '] = sources.pop('genesis')
+    manifest = SourceManifest.model_validate(composite_manifest(
+        adapter_options=composite_options(work_sources=sources),
+    ))
+    assert set(manifest.adapter_options.work_sources) == {'genesis', '1-enoch'}
+
+    sources = composite_options()['work_sources']
+    sources[' Genesis '] = work_source()
+    with pytest.raises(ValidationError, match='duplicate normalized work IDs'):
+        SourceManifest.model_validate(composite_manifest(
+            adapter_options=composite_options(work_sources=sources),
+        ))
+
+
+def test_composite_supplemental_works_must_be_mapped_targets():
+    with pytest.raises(ValidationError, match='supplemental_works must be a subset'):
+        SourceManifest.model_validate(composite_manifest(
+            adapter_options=composite_options(supplemental_works=['jubilees']),
+        ))
+
+
+@pytest.mark.parametrize(
+    ('supplemental_works', 'work_sources'),
+    (
+        (['1-enoch'], {
+            'genesis': work_source(),
+            '1-enoch': work_source(
+                source_key='ENO', provenance_url=None,
+                verification_status='provisional', canon_scope='ethio81',
+            ),
+        }),
+        ([], {
+            'genesis': work_source(),
+            '1-enoch': work_source(
+                source_key='ENO', provenance_url=None,
+                verification_status='provisional', canon_scope='supplemental',
+            ),
+        }),
+    ),
+)
+def test_composite_work_source_canon_scope_agrees_with_supplemental_membership(
+    supplemental_works, work_sources
+):
+    with pytest.raises(ValidationError, match='canon_scope'):
+        SourceManifest.model_validate(composite_manifest(adapter_options=composite_options(
+            supplemental_works=supplemental_works,
+            work_sources=work_sources,
+        )))
+
+
+def test_verified_source_manifest_rejects_provisional_work_source():
+    value = composite_manifest(source_verification='verified')
+
+    with pytest.raises(ValidationError, match='verified source_verification requires all work sources'):
+        SourceManifest.model_validate(value)
+
+
+def test_provisional_source_manifest_accepts_provisional_work_source():
+    manifest = SourceManifest.model_validate(composite_manifest())
+    assert manifest.source_verification == 'provisional'
+
+
+def test_existing_manifest_defaults_source_verification_to_verified():
+    manifest = SourceManifest.model_validate(manifest_with())
+    assert manifest.source_verification == 'verified'
+
+
+def test_composite_schema_correlates_adapter_with_strict_options():
+    jsonschema = pytest.importorskip('jsonschema')
+    schema = SourceManifest.model_json_schema()
+    correlations = {
+        branch['if']['properties']['adapter']['const']:
+            branch['then']['properties']['adapter_options']
+        for branch in schema['allOf']
+    }
+    composite_schema = correlations['composite_english_bundle']
+    assert composite_schema['additionalProperties'] is False
+    assert set(composite_schema['required']) == {'book_map', 'work_sources'}
+    assert (
+        composite_schema['properties']['work_sources']['additionalProperties']
+        ['additionalProperties']
+        is False
+    )
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert not list(validator.iter_errors(composite_manifest()))
+    invalid = composite_manifest()
+    invalid['adapter_options']['unknown'] = True
+    assert list(validator.iter_errors(invalid))
 
 
 @pytest.mark.parametrize('key', ('license_spdx', 'attribution', 'provenance_url'))
@@ -369,10 +570,15 @@ def test_manifest_schema_correlates_adapters_with_option_definitions():
         for branch in schema['allOf']
     }
 
-    assert correlations == {
+    assert {
+        adapter: correlation
+        for adapter, correlation in correlations.items()
+        if adapter != 'composite_english_bundle'
+    } == {
         adapter: schema['$defs'][definition]
         for adapter, definition in expected_definitions.items()
     }
+    assert correlations['composite_english_bundle']['additionalProperties'] is False
 
 
 def test_manifest_schema_validator_enforces_adapter_option_correlation():

@@ -50,7 +50,10 @@ WorkId = Annotated[
 SourcePath = Annotated[
     StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
 ]
-AdapterId = Literal['usfm', 'ertale', 'wikisource', 'weahadu_bundle']
+AdapterId = Literal[
+    'usfm', 'ertale', 'wikisource', 'weahadu_bundle',
+    'composite_english_bundle',
+]
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
 VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
@@ -63,6 +66,7 @@ _LICENSES = Literal[
     'CC-BY-4.0',
     'CC-BY-SA-4.0',
     'CC-BY-NC-ND-4.0',
+    'LicenseRef-Mixed',
 ]
 _RELATIONSHIPS = Literal['exact_ethiopian', 'related_recension', 'general_reading']
 _CAMEL_CASE_BOUNDARY = re.compile(r'(?<=[a-z0-9])(?=[A-Z])')
@@ -111,6 +115,28 @@ def _normalize_mapping_keys(
             raise ValueError('adapter mapping keys must be unique after normalization.')
         seen.add(identity)
         normalized[cleaned] = mapped_work
+    return normalized
+
+
+def _normalize_work_id_mapping_keys(value: Any, *, field_name: str) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    normalized: dict[str, Any] = {}
+    seen: set[str] = set()
+    for work_id, mapped_value in value.items():
+        if not isinstance(work_id, str):
+            raise ValueError(f'{field_name} keys must be nonblank work IDs.')
+        cleaned = work_id.strip()
+        identity = ' '.join(cleaned.casefold().split())
+        if not identity:
+            raise ValueError(f'{field_name} keys must be nonblank work IDs.')
+        if identity in seen:
+            raise ValueError(
+                f'{field_name} cannot contain duplicate normalized work IDs.'
+            )
+        seen.add(identity)
+        normalized[cleaned] = mapped_value
     return normalized
 
 
@@ -168,6 +194,42 @@ class SourceFile(BaseModel):
         if value is not None:
             _validate_commit_safe_url(value)
         return value
+
+
+class WorkSourceManifest(BaseModel):
+    """Per-work provenance for a mixed-source scripture bundle."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    source_key: SourceBookCode
+    source_label: EditionName
+    translator: Contributor | None
+    source_language: LanguageOrScript
+    source_tradition: SourceTradition
+    published_year: PublishedYear | None
+    license_spdx: _LICENSES
+    attribution: Attribution
+    provenance_url: HttpUrl | None
+    fallback: StrictBool = False
+    modified: StrictBool = False
+    modification_note: Attribution | None
+    verification_status: Literal['provisional', 'verified']
+    canon_scope: Literal['ethio81', 'supplemental']
+
+    @field_validator('provenance_url')
+    @classmethod
+    def provenance_url_is_commit_safe(cls, value: HttpUrl | None) -> HttpUrl | None:
+        if value is not None:
+            _validate_commit_safe_url(value)
+        return value
+
+    @model_validator(mode='after')
+    def provenance_and_modification_are_complete(self) -> WorkSourceManifest:
+        if self.verification_status == 'verified' and self.provenance_url is None:
+            raise ValueError('verified work source requires provenance_url.')
+        if self.modified and self.modification_note is None:
+            raise ValueError('modified work source requires modification_note.')
+        return self
 
 
 class UsfmAdapterOptions(BaseModel):
@@ -236,18 +298,95 @@ class WeahaduBundleAdapterOptions(BaseModel):
         return value
 
 
+class CompositeEnglishBundleAdapterOptions(BaseModel):
+    """Map a reviewed English bundle with per-work source provenance."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    book_map: dict[SourceBookCode, WorkId]
+    work_sources: dict[WorkId, WorkSourceManifest]
+    supplemental_works: list[WorkId] = Field(default_factory=list)
+
+    @field_validator('book_map', mode='before')
+    @classmethod
+    def normalize_book_map_keys(cls, value: Any) -> Any:
+        return _normalize_mapping_keys(value, case_insensitive=True)
+
+    @field_validator('work_sources', mode='before')
+    @classmethod
+    def normalize_work_source_keys(cls, value: Any) -> Any:
+        return _normalize_work_id_mapping_keys(value, field_name='work_sources')
+
+    @field_validator('supplemental_works')
+    @classmethod
+    def supplemental_work_ids_are_unique(cls, value: list[str]) -> list[str]:
+        identities = [' '.join(work_id.casefold().split()) for work_id in value]
+        if len(identities) != len(set(identities)):
+            raise ValueError(
+                'supplemental_works cannot contain duplicate normalized work IDs.'
+            )
+        return value
+
+    @model_validator(mode='after')
+    def mappings_and_canon_scopes_agree(self) -> CompositeEnglishBundleAdapterOptions:
+        targets = list(self.book_map.values())
+        if len(targets) != len(set(targets)):
+            raise ValueError('book_map may not map multiple source books to one work.')
+
+        target_set = set(targets)
+        if set(self.work_sources) != target_set:
+            raise ValueError('work_sources keys must exactly match book_map targets.')
+
+        supplemental = set(self.supplemental_works)
+        if not supplemental <= target_set:
+            raise ValueError('supplemental_works must be a subset of book_map targets.')
+
+        for work_id, source in self.work_sources.items():
+            expected_scope = 'supplemental' if work_id in supplemental else 'ethio81'
+            if source.canon_scope != expected_scope:
+                raise ValueError(
+                    f'work source canon_scope for {work_id!r} must be {expected_scope!r}.'
+                )
+        return self
+
+
 AdapterOptions = (
     UsfmAdapterOptions
     | ErtaleAdapterOptions
     | WikisourceAdapterOptions
     | WeahaduBundleAdapterOptions
+    | CompositeEnglishBundleAdapterOptions
 )
 _ADAPTER_OPTIONS_MODELS: dict[AdapterId, type[BaseModel]] = {
     'usfm': UsfmAdapterOptions,
     'ertale': ErtaleAdapterOptions,
     'wikisource': WikisourceAdapterOptions,
     'weahadu_bundle': WeahaduBundleAdapterOptions,
+    'composite_english_bundle': CompositeEnglishBundleAdapterOptions,
 }
+
+
+def _standalone_model_schema(model: type[BaseModel]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    definitions = schema.pop('$defs', {})
+
+    def inline_local_references(value: Any) -> Any:
+        if isinstance(value, list):
+            return [inline_local_references(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get('$ref')
+        if isinstance(reference, str) and reference.startswith('#/$defs/'):
+            definition_name = reference.removeprefix('#/$defs/')
+            return inline_local_references(definitions[definition_name])
+        return {
+            key: inline_local_references(item)
+            for key, item in value.items()
+        }
+
+    return inline_local_references(schema)
+
+
 _ADAPTER_SCHEMA_CORRELATIONS = [
     {
         'if': {
@@ -256,7 +395,7 @@ _ADAPTER_SCHEMA_CORRELATIONS = [
         },
         'then': {
             'properties': {
-                'adapter_options': options_model.model_json_schema(),
+                'adapter_options': _standalone_model_schema(options_model),
             },
         },
     }
@@ -291,6 +430,7 @@ class SourceManifest(BaseModel):
     source_files: list[SourceFile]
     adapter: AdapterId
     adapter_options: AdapterOptions = Field(default_factory=UsfmAdapterOptions)
+    source_verification: Literal['provisional', 'verified'] = 'verified'
 
     @model_validator(mode='before')
     @classmethod
@@ -322,21 +462,7 @@ class SourceManifest(BaseModel):
     def normalize_and_validate_work_ids(cls, value: Any) -> Any:
         if not isinstance(value, dict) or not value:
             raise ValueError('expected_works must be a nonempty mapping.')
-
-        normalized: dict[str, Any] = {}
-        seen: set[str] = set()
-        for work_id, coverage in value.items():
-            if not isinstance(work_id, str):
-                raise ValueError('expected_works keys must be nonblank work IDs.')
-            cleaned = work_id.strip()
-            identity = ' '.join(cleaned.casefold().split())
-            if not identity:
-                raise ValueError('expected_works keys must be nonblank work IDs.')
-            if identity in seen:
-                raise ValueError('expected_works cannot contain duplicate normalized work IDs.')
-            seen.add(identity)
-            normalized[cleaned] = coverage
-        return normalized
+        return _normalize_work_id_mapping_keys(value, field_name='expected_works')
 
     @field_validator('source_files')
     @classmethod
@@ -347,6 +473,19 @@ class SourceManifest(BaseModel):
         if len(paths) != len(set(paths)):
             raise ValueError('source_files paths must be unique.')
         return value
+
+    @model_validator(mode='after')
+    def source_verification_agrees_with_work_sources(self) -> SourceManifest:
+        if not isinstance(self.adapter_options, CompositeEnglishBundleAdapterOptions):
+            return self
+        if self.source_verification == 'verified' and any(
+            source.verification_status == 'provisional'
+            for source in self.adapter_options.work_sources.values()
+        ):
+            raise ValueError(
+                'verified source_verification requires all work sources to be verified.'
+            )
+        return self
 
 
 def _key_tokens(key: str) -> tuple[str, ...]:
