@@ -31,11 +31,11 @@ Strict parsing found that the archive cannot be published unchanged:
 - 5,252 WEB-apocrypha records are exact repeated copies of earlier records;
 - the remaining raw records occupy 38,845 unique `(book, chapter, verse)` positions;
 - the bundled Enoch file has 17 distinct fragments assigned to seven duplicate verse numbers, 83 missing verse labels, and an empty chapter 80;
-- the bundled Sirach has twelve missing verse labels;
+- the official WEB British Edition Sirach VPL has 24 explicit blank rows and skips 12 additional numeric labels; all 36 positions must be declared while every nonblank row keeps its official identity;
 - the upstream Wikisource 2 Meqabyan revision itself omits verse label 9 in chapters 16 and 21.
-- the archive's Murdock data contains ten blank alignment labels whose wording is already combined with neighbouring source verses, plus three texts containing a legacy U+000F line separator.
+- the archive's Murdock data contains ten blank alignment labels whose wording is already combined with neighbouring source verses, plus four legacy U+000F separators across three verse texts.
 
-The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; Enoch is rebuilt from Project Gutenberg ebook 77935's official plain-text artifact, the public-domain R. H. Charles text; identical repeats are never published; the two upstream Meqabyan omissions and ten blank Murdock alignment labels are explicitly declared rather than filled with invented text; and U+000F is normalized to a space. Every upstream artifact has a committed checksum and provenance URL. The plain-text artifact is used instead of HTML so presentation footnotes cannot corrupt parser nesting state.
+The 44,114 figure is retained only as an audit count for the supplied artifact. It is never presented as an imported verse count. The original ZIP remains immutable evidence. A deterministic build creates a separate corrected bundle: the six WEB-family works are replaced from eBible's public-domain WEB British Edition with Deuterocanon verse-per-line release; all 36 absent WEB Sirach labels (24 explicit blank rows and 12 labels with no row) are declared without renumbering nonblank verses; Enoch is rebuilt from Project Gutenberg ebook 77935's official plain-text artifact, the public-domain R. H. Charles text; identical repeats are never published; the two upstream Meqabyan omissions and ten blank Murdock alignment labels are explicitly declared rather than filled with invented text; and four U+000F separators are normalized to spaces. Every upstream artifact has a committed checksum and provenance URL. The plain-text artifact is used instead of HTML so presentation footnotes cannot corrupt parser nesting state.
 
 ## Edition identity
 
@@ -176,7 +176,7 @@ Automated coverage includes:
 - exact separation of 82 Ethiopian canon works and one supplemental Prayer of Manasseh work;
 - exact audit count of 44,114 raw records in the supplied ZIP;
 - a corrected bundle with 38,938 publishable rows across 1,520 chapters, no duplicate verse positions, no empty chapters, and no undeclared verse-number gaps;
-- exactly twelve declared absent labels: two upstream 2 Meqabyan omissions and ten blank Murdock alignment positions;
+- exactly 48 declared absent labels: 36 WEB Sirach positions (24 explicit blank rows plus 12 absent VPL labels), two upstream 2 Meqabyan omissions, and ten blank Murdock alignment positions;
 - an exact corrected verse-row count frozen by the deterministic generator and asserted by ingestion tests;
 - Genesis from the WMB group;
 - one Murdock New Testament passage;

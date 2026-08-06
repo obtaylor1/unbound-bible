@@ -928,6 +928,33 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
         "luke": {"18": [35]},
         "acts": {"19": [41], "20": [17]},
         "2-corinthians": {"13": [14]},
+        "sirach": {
+            "1": [5, 7, 21], "3": [19], "10": [21], "11": [15, 16],
+            "13": [14], "16": [15, 16], "17": [5, 9, 16, 18, 21],
+            "18": [3], "19": [18, 19, 21], "20": [3, 32],
+            "22": [9, 10], "23": [28], "24": [18, 24], "25": [12],
+            "26": [19, 20, 21, 22, 23, 24, 25, 26, 27],
+        },
+    }
+    assert report["corrected_verse_count"] == 38_938
+    assert sum(
+        len(verses)
+        for chapters in report["known_missing_verses"].values()
+        for verses in chapters.values()
+    ) == 48
+    assert report["web_reserved_blank_labels"] == {
+        "sirach": {
+            "1": [5, 7, 21], "3": [19], "10": [21], "11": [15],
+            "13": [14], "16": [15], "17": [5, 9, 16, 18, 21],
+            "18": [3], "19": [18, 21], "20": [3, 32], "22": [9],
+            "23": [28], "24": [18, 24], "25": [12], "26": [19],
+        }
+    }
+    assert report["web_absent_labels_without_rows"] == {
+        "sirach": {
+            "11": [16], "16": [16], "19": [19], "22": [10],
+            "26": [20, 21, 22, 23, 24, 25, 26, 27],
+        }
     }
     assert report["duplicate_output_positions"] == 0
     assert report["undeclared_output_gaps"] == []
@@ -948,6 +975,17 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
         for row in rows
     )
     assert any(row.work_id == "tobit" and row.text for row in rows)
+    sirach_1 = {
+        row.verse: row.text
+        for row in rows if row.work_id == "sirach" and row.chapter == 1
+    }
+    assert 5 not in sirach_1
+    assert 7 not in sirach_1
+    assert 21 not in sirach_1
+    assert sirach_1[6] == (
+        "To whom has the root of wisdom been revealed? "
+        "Who has known her shrewd counsels?"
+    )
     for chapter in (3, 4, 35, 44):
         chapter_rows = [
             row for row in rows if row.work_id == "1-enoch" and row.chapter == chapter
@@ -966,6 +1004,13 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
         "luke": {"18": [35]},
         "acts": {"19": [41], "20": [17]},
         "2-corinthians": {"13": [14]},
+        "sirach": {
+            "1": [5, 7, 21], "3": [19], "10": [21], "11": [15, 16],
+            "13": [14], "16": [15, 16], "17": [5, 9, 16, 18, 21],
+            "18": [3], "19": [18, 19, 21], "20": [3, 32],
+            "22": [9, 10], "23": [28], "24": [18, 24], "25": [12],
+            "26": [19, 20, 21, 22, 23, 24, 25, 26, 27],
+        },
     }
     fallback = {
         work_id for work_id, source in options.work_sources.items() if source.fallback

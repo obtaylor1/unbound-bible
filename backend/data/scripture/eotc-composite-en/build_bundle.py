@@ -78,7 +78,30 @@ KNOWN_MISSING = {
     "luke": {18: [35]},
     "acts": {19: [41], 20: [17]},
     "2-corinthians": {13: [14]},
+    "sirach": {
+        1: [5, 7, 21], 3: [19], 10: [21], 11: [15, 16], 13: [14],
+        16: [15, 16], 17: [5, 9, 16, 18, 21], 18: [3],
+        19: [18, 19, 21], 20: [3, 32], 22: [9, 10], 23: [28],
+        24: [18, 24], 25: [12], 26: [19, 20, 21, 22, 23, 24, 25, 26, 27],
+    },
 }
+WEB_RESERVED_BLANKS = {
+    "1ES": {}, "2ES": {}, "TOB": {}, "JDT": {}, "WIS": {},
+    "SIR": {
+        1: [5, 7, 21], 3: [19], 10: [21], 11: [15], 13: [14],
+        16: [15], 17: [5, 9, 16, 18, 21], 18: [3], 19: [18, 21],
+        20: [3, 32], 22: [9], 23: [28], 24: [18, 24], 25: [12],
+        26: [19],
+    },
+}
+WEB_ABSENT_WITHOUT_ROWS = {
+    "1ES": {}, "2ES": {}, "TOB": {}, "JDT": {}, "WIS": {},
+    "SIR": {
+        11: [16], 16: [16], 19: [19], 22: [10],
+        26: [20, 21, 22, 23, 24, 25, 26, 27],
+    },
+}
+EXPECTED_CORRECTED_VERSE_COUNT = 38_938
 
 _LINE = re.compile(r"([^\s]+) ([1-9]\d*):([1-9]\d*) (.*)")
 _ROMAN_CHAPTER = re.compile(r"^([IVXLCDM]+)\.\s*(.*)$")
@@ -196,6 +219,9 @@ def _parse_web(path: Path) -> dict[str, list[dict[str, Any]]]:
         source_id: defaultdict(list) for source_id in WEB_REPLACEMENTS
     }
     reverse = {external: source_id for source_id, external in WEB_REPLACEMENTS.items()}
+    blanks: dict[str, dict[int, list[int]]] = {
+        source_id: defaultdict(list) for source_id in WEB_REPLACEMENTS
+    }
     with ZipFile(path) as archive:
         names = archive.namelist()
         if names.count("eng-webbe_vpl.txt") != 1:
@@ -212,7 +238,7 @@ def _parse_web(path: Path) -> dict[str, list[dict[str, Any]]]:
             continue
         source_id = reverse[external]
         if not text.strip():
-            # The official VPL reserves some labels without supplying scripture text.
+            blanks[source_id][int(chapter_text)].append(int(verse_text))
             continue
         positions[source_id][int(chapter_text)].append((int(verse_text), _clean_text(text)))
 
@@ -226,11 +252,9 @@ def _parse_web(path: Path) -> dict[str, list[dict[str, Any]]]:
             labels = [number for number, _ in source_rows]
             if len(labels) != len(set(labels)) or labels != sorted(labels):
                 raise ValueError(f"{source_id} {chapter_number}: duplicate/out-of-order WEB labels")
-            # Empty reserved labels are omitted by the publisher. Renumbering the
-            # remaining source-order rows avoids inventing text or publishing gaps.
             verses = [
-                {"n": output_number, "t": text}
-                for output_number, (_, text) in enumerate(source_rows, 1)
+                {"n": source_number, "t": text}
+                for source_number, text in source_rows
             ]
             if not verses:
                 raise ValueError(f"{source_id} {chapter_number}: no WEB text")
@@ -238,6 +262,24 @@ def _parse_web(path: Path) -> dict[str, list[dict[str, Any]]]:
         output[source_id] = rendered_chapters
         if sum(len(chapter["v"]) for chapter in rendered_chapters) != WEB_EXPECTED_NONBLANK_COUNTS[source_id]:
             raise ValueError(f"{source_id}: official WEB nonblank row count changed")
+        observed_blanks = {chapter: verses for chapter, verses in blanks[source_id].items()}
+        if observed_blanks != WEB_RESERVED_BLANKS[source_id]:
+            raise ValueError(f"{source_id}: official WEB reserved blank labels changed")
+        observed_labels = {
+            chapter: {number for number, _ in rows}
+            for chapter, rows in positions[source_id].items()
+        }
+        for chapter, labels in blanks[source_id].items():
+            observed_labels.setdefault(chapter, set()).update(labels)
+        unexpected_present = {
+            chapter: sorted(set(labels) & observed_labels.get(chapter, set()))
+            for chapter, labels in WEB_ABSENT_WITHOUT_ROWS[source_id].items()
+            if set(labels) & observed_labels.get(chapter, set())
+        }
+        if unexpected_present:
+            raise ValueError(
+                f"{source_id}: reviewed absent WEB labels unexpectedly appeared"
+            )
     return output
 
 
@@ -404,6 +446,11 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
                 positions.add(key)
     if undeclared:
         raise ValueError(f"corrected bundle contains undeclared gaps: {undeclared[:5]}")
+    if len(positions) != EXPECTED_CORRECTED_VERSE_COUNT:
+        raise ValueError(
+            "corrected verse count changed: "
+            f"{len(positions)} != {EXPECTED_CORRECTED_VERSE_COUNT}"
+        )
 
     report = {
         "schema_version": 1,
@@ -420,6 +467,18 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
         "replacements": {
             "official_webbe": sorted(BOOK_MAP[source] for source in WEB_REPLACEMENTS),
             "project_gutenberg_enoch": ["1-enoch"],
+        },
+        "web_reserved_blank_labels": {
+            "sirach": {
+                str(chapter): verses
+                for chapter, verses in WEB_RESERVED_BLANKS["SIR"].items()
+            }
+        },
+        "web_absent_labels_without_rows": {
+            "sirach": {
+                str(chapter): verses
+                for chapter, verses in WEB_ABSENT_WITHOUT_ROWS["SIR"].items()
+            }
         },
         "enoch_source_chapters_without_verse_numbers": [3, 4, 35, 44],
         "archive_presentation_cleanup": {

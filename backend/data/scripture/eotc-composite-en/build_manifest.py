@@ -84,7 +84,7 @@ def _work_source(work_id: str, source_group: str) -> dict[str, Any]:
             attribution="Public-domain World Messianic Bible text supplied by the user archive; exact upstream revision is not preserved.",
             provenance_url=None,
             modified=True,
-            modification_note="Source chapter identifiers were normalized to numeric order, FI emphasis delimiters and RF translator-note blocks were removed, ten blank reserved source positions were omitted and declared, four U+000F separators across three verse texts were normalized to spaces, and app work names were standardized; scripture words outside source apparatus and source verse labels were not changed.",
+            modification_note="Source chapter identifiers were normalized to numeric order and app work names were standardized; scripture prose and source verse labels were not changed.",
         )
     elif source_group == "peshitta":
         source = _base_source(
@@ -98,7 +98,7 @@ def _work_source(work_id: str, source_group: str) -> dict[str, Any]:
             attribution="James Murdock's 1852 public-domain English Peshitta translation supplied by the user archive; exact upstream revision is not preserved.",
             provenance_url=None,
             modified=True,
-            modification_note="Source chapter identifiers were normalized to numeric order and app work names were standardized; scripture prose was not changed.",
+            modification_note="Source chapter identifiers were normalized to numeric order, FI emphasis delimiters and RF translator-note blocks were removed, ten blank reserved source positions were omitted and declared, four U+000F separators across three verse texts were normalized to spaces, and app work names were standardized; scripture words outside source apparatus and source verse labels were not changed.",
         )
     elif work_id in WEB_WORKS:
         source = _base_source(
@@ -111,7 +111,11 @@ def _work_source(work_id: str, source_group: str) -> dict[str, Any]:
             license_spdx="LicenseRef-Public-Domain",
             attribution="Official public-domain World English Bible British Edition with Deuterocanon from eBible.org.",
             provenance_url="https://ebible.org/details.php?id=eng-webbe",
-            modified=False,
+            modified=work_id == "sirach",
+            modification_note=(
+                "The official VPL's 24 explicit blank Sirach rows and 12 additional absent numeric labels were omitted and declared as known missing positions; every nonblank scripture row retains its official chapter and verse identity."
+                if work_id == "sirach" else None
+            ),
         )
     elif work_id in KJV_WORKS:
         source = _base_source(

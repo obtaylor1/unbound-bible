@@ -22,9 +22,9 @@ Thirteen ETHIO81 library works remain unavailable: Esther Greek Additions, Psalm
 
 Generated outputs are deterministic:
 
-- `corrected-bundle.zip`: `fbf19b5ea60b2c7ece71efa741ea342a1b6da1b6e71c37f71fb367356b5d16e6`
-- `data-quality-report.json`: `ee9be2af8a95a7366ecae6a70d7a28758ca53005683602d81b7f8fff1dd57c69`
-- `manifest.json`: `5b1e39ac8425251f2b0b7e910df30ee2e86cf14c865da2e15fec8c0afc941e20`
+- `corrected-bundle.zip`: `2ac276fd9e9b4dc30d1068d09a352e3cb638730018b610b66f6e1f7d6b1b67a4`
+- `data-quality-report.json`: `bad6a25ae5e8177fdcd717630f2e7e9be29595adf11ce64287967807631714dd`
+- `manifest.json`: `322c8ba5005209a76624c5c59398fd3fbf5ea157a5d17de70a365fc2512b79f0`
 
 The report records the corrected bundle checksum and all row-level coverage totals; the manifest binds that checksum as the only publishable source file.
 
@@ -38,6 +38,8 @@ The Meqabyan texts are attributed to Wikisource contributors under CC BY-SA 4.0.
 
 The Murdock archive also contains ten blank reserved positions, preserved as declared omissions rather than invented text: Matthew 26:30 and 26:45; Mark 4:10, 8:19, 9:31, and 11:19; Luke 18:35; Acts 19:41 and 20:17; and 2 Corinthians 13:14.
 
+The official WEB British Edition Sirach VPL contributes 36 declared absent labels. Twenty-four are explicit blank rows: 1:5, 1:7, 1:21, 3:19, 10:21, 11:15, 13:14, 16:15, 17:5, 17:9, 17:16, 17:18, 17:21, 18:3, 19:18, 19:21, 20:3, 20:32, 22:9, 23:28, 24:18, 24:24, 25:12, and 26:19. Twelve additional numeric labels have no VPL row: 11:16, 16:16, 19:19, 22:10, and 26:20–27. These are omitted and declared without placeholders; every nonblank WEB row keeps its official chapter and verse identity. Together with the two Meqabyan and ten Murdock omissions, the manifest declares exactly 48 absent source/alignment positions.
+
 ## Deterministic corrections
 
 The original archive is never mutated. The generator:
@@ -45,7 +47,7 @@ The original archive is never mutated. The generator:
 1. verifies all three frozen-input checksums and recomputes the raw duplicate audit;
 2. canonicalizes and numerically sorts chapter identifiers while rejecting duplicate or missing chapters;
 3. replaces 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom, and Sirach with the official WEB British Edition VPL source;
-4. omits WEB labels whose official VPL rows contain no text, then assigns contiguous structural output numbers in source order without changing scripture words;
+4. omits and declares the 24 explicit blank WEB Sirach rows and 12 additional absent numeric labels without renumbering any nonblank official verse;
 5. replaces Enoch with the Project Gutenberg plain-text edition, joins wrapped/lettered fragments deterministically, and normalizes presentation whitespace;
 6. stores source chapters Enoch 3, 4, 35, and 44—which have no source verse numbering—as structural verse 1 solely for the app container;
 7. removes Murdock `FI` emphasis delimiters and `RF` translator-note blocks, omits and declares ten blank reserved positions without renumbering other verses, and normalizes four U+000F source separator characters across three verse texts to ordinary spaces; and
