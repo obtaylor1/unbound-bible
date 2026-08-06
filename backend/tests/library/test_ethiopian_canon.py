@@ -4,6 +4,8 @@ import pytest
 
 from app.library.canon import (
     ETHIOPIAN_CANON,
+    SUPPLEMENTAL_LIBRARY_WORKS,
+    WORKS,
     alias_target,
     navigation_works,
     validate_canon,
@@ -86,3 +88,15 @@ def test_alias_lookup_normalizes_case_and_whitespace_and_returns_none_when_unkno
 def test_legacy_frontend_only_titles_keep_stable_lookup_targets():
     assert alias_target('Antiquities') == 'antiquities'
     assert alias_target('Genesis Targum') == 'genesis-targum'
+
+
+def test_prayer_of_manasseh_is_supplemental_without_changing_ethiopian_canon_works():
+    supplemental = {work.id: work for work in SUPPLEMENTAL_LIBRARY_WORKS}
+
+    assert supplemental['prayer-of-manasseh'].name == 'Prayer of Manasseh'
+    assert supplemental['prayer-of-manasseh'].aliases == ('Prayer of Manasses',)
+    assert 'prayer-of-manasseh' not in {work.id for work in WORKS}
+    assert all(
+        'prayer-of-manasseh' not in entry.work_ids
+        for entry in ETHIOPIAN_CANON
+    )

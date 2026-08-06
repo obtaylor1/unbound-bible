@@ -17,6 +17,7 @@ from sqlalchemy.schema import CreateIndex
 
 from app.application import create_application
 from app.database import Base
+from app.library import models as library_models
 from app.library.models import TextEdition
 
 from .conftest import make_ingest_run
@@ -27,6 +28,7 @@ pytestmark = pytest.mark.skipif(not MODELS_AVAILABLE, reason='verified ingestion
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 REVISION = '0007_verified_ingest'
+COMPOSITE_REVISION = '0009_composite_edition_sources'
 INGEST_TABLES = {
     'scripture_ingest_runs',
     'staged_scripture_verses',
@@ -34,6 +36,60 @@ INGEST_TABLES = {
     'scripture_publications',
     'scripture_publication_verses',
 }
+
+
+def test_edition_work_source_model_has_required_columns_constraints_and_index():
+    table = library_models.EditionWorkSource.__table__
+
+    assert table.name == 'edition_work_sources'
+    assert set(table.columns.keys()) == {
+        'id', 'edition_code', 'work_id', 'source_key', 'source_label', 'translator',
+        'source_language', 'source_tradition', 'published_year', 'license_spdx',
+        'attribution', 'provenance_url', 'fallback', 'modified', 'modification_note',
+        'verification_status', 'canon_scope',
+    }
+    assert table.primary_key.columns.keys() == ['id']
+    assert {
+        column.name for column in table.columns if column.nullable
+    } == {'translator', 'published_year', 'provenance_url', 'modification_note'}
+    assert table.c.fallback.default.arg is False
+    assert table.c.modified.default.arg is False
+    assert {
+        (foreign_key.parent.name, foreign_key.column.table.name, foreign_key.ondelete)
+        for foreign_key in table.foreign_keys
+    } == {
+        ('edition_code', 'text_editions', 'CASCADE'),
+        ('work_id', 'library_works', 'CASCADE'),
+    }
+    assert {
+        (constraint.name, tuple(constraint.columns.keys()))
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == 'UniqueConstraint'
+    } == {('uq_edition_work_sources_edition_work', ('edition_code', 'work_id'))}
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == 'CheckConstraint'
+    }
+    assert checks == {
+        'ck_edition_work_sources_verification_status': (
+            "verification_status IN ('provisional', 'verified')"
+        ),
+        'ck_edition_work_sources_canon_scope': "canon_scope IN ('ethio81', 'supplemental')",
+    }
+    assert {index.name: tuple(index.columns.keys()) for index in table.indexes} == {
+        'ix_edition_work_sources_work_id': ('work_id',),
+    }
+
+
+def test_text_edition_verification_status_allows_provisional():
+    constraint = next(
+        constraint
+        for constraint in TextEdition.__table__.constraints
+        if constraint.name == 'ck_text_editions_verification_status'
+    )
+
+    assert "'provisional'" in str(constraint.sqltext)
 
 
 def test_application_registers_verified_ingestion_tables(test_settings):
@@ -227,6 +283,59 @@ def _create_legacy_biblical_texts(engine):
     )
     table.create(engine)
     return table
+
+
+def test_composite_source_migration_adds_source_schema_and_supplemental_work(tmp_path):
+    config = _alembic_config(tmp_path / 'composite-sources.db')
+
+    command.upgrade(config, COMPOSITE_REVISION)
+    engine = __import__('sqlalchemy').create_engine(config.get_main_option('sqlalchemy.url'))
+    inspector = inspect(engine)
+
+    assert {column['name'] for column in inspector.get_columns('edition_work_sources')} == {
+        'id', 'edition_code', 'work_id', 'source_key', 'source_label', 'translator',
+        'source_language', 'source_tradition', 'published_year', 'license_spdx',
+        'attribution', 'provenance_url', 'fallback', 'modified', 'modification_note',
+        'verification_status', 'canon_scope',
+    }
+    assert {item['name'] for item in inspector.get_check_constraints('edition_work_sources')} == {
+        'ck_edition_work_sources_verification_status',
+        'ck_edition_work_sources_canon_scope',
+    }
+    assert {item['name'] for item in inspector.get_unique_constraints('edition_work_sources')} == {
+        'uq_edition_work_sources_edition_work',
+    }
+    assert {item['name'] for item in inspector.get_indexes('edition_work_sources')} == {
+        'ix_edition_work_sources_work_id',
+    }
+    assert {
+        (item['referred_table'], item['options'].get('ondelete'))
+        for item in inspector.get_foreign_keys('edition_work_sources')
+    } == {('text_editions', 'CASCADE'), ('library_works', 'CASCADE')}
+    edition_status = next(
+        item['sqltext']
+        for item in inspector.get_check_constraints('text_editions')
+        if item['name'] == 'ck_text_editions_verification_status'
+    )
+    assert "'provisional'" in edition_status
+    with engine.connect() as connection:
+        assert connection.execute(__import__('sqlalchemy').text(
+            "SELECT title FROM library_works WHERE id = 'prayer-of-manasseh'"
+        )).scalar_one() == 'Prayer of Manasseh'
+
+    command.downgrade(config, '0008_commentary_library')
+    inspector = inspect(engine)
+    assert 'edition_work_sources' not in inspector.get_table_names()
+    downgraded_status = next(
+        item['sqltext']
+        for item in inspector.get_check_constraints('text_editions')
+        if item['name'] == 'ck_text_editions_verification_status'
+    )
+    assert "'provisional'" not in downgraded_status
+    with engine.connect() as connection:
+        assert connection.execute(__import__('sqlalchemy').text(
+            "SELECT title FROM library_works WHERE id = 'prayer-of-manasseh'"
+        )).scalar_one_or_none() is None
 
 
 def test_all_alembic_revision_identifiers_fit_the_version_table(tmp_path):

@@ -297,11 +297,12 @@ CATHOLIC_WORK_IDS = _insert_after(
 CATHOLIC_WORK_IDS = _insert_after(CATHOLIC_WORK_IDS, 'lamentations', ('baruch',))
 
 
-# These are legitimate library works for the Catholic catalog, but they are not
-# Ethiopian canon navigation works and must never be added to ``WORKS``.
+# These are legitimate library works outside the counted Ethiopian canon. They
+# must never be added to ``WORKS`` or Ethiopian canon navigation.
 SUPPLEMENTAL_LIBRARY_WORKS = (
     Work('1-maccabees', '1 Maccabees', 'OT', 'History', ('I Maccabees',)),
     Work('2-maccabees', '2 Maccabees', 'OT', 'History', ('II Maccabees',)),
+    Work('prayer-of-manasseh', 'Prayer of Manasseh', 'OT', 'Prayer', ('Prayer of Manasses',)),
 )
 
 
