@@ -15,11 +15,13 @@ from app.library.canon import (
     PROTESTANT_WORK_IDS,
     SUPPLEMENTAL_LIBRARY_WORKS,
     WORKS,
+    alias_target,
 )
 from app.library.models import (
     CanonEntry,
     CanonEntryWork,
     EditionCoverage,
+    EditionWorkSource,
     LibraryWork,
     LibraryWorkAlias,
     TextEdition,
@@ -72,6 +74,26 @@ def _edition_payload(edition: TextEdition | None) -> dict | None:
     }
 
 
+def _work_source_payload(source: EditionWorkSource | None) -> dict | None:
+    if source is None:
+        return None
+    return {
+        'source_key': source.source_key,
+        'source_label': source.source_label,
+        'source_language': source.source_language,
+        'source_tradition': source.source_tradition,
+        'published_year': source.published_year,
+        'license': source.license_spdx,
+        'attribution': source.attribution,
+        'provenance_url': source.provenance_url,
+        'fallback': source.fallback,
+        'modified': source.modified,
+        'modification_note': source.modification_note,
+        'verification_status': source.verification_status,
+        'canon_scope': source.canon_scope,
+    }
+
+
 def _reader_rows(session: Session, where_clause: str, params: dict) -> list[dict]:
     if not _legacy_table_available(session):
         return []
@@ -88,8 +110,28 @@ def _reader_rows(session: Session, where_clause: str, params: dict) -> list[dict
             select(TextEdition).where(TextEdition.edition_code.in_(codes))
         ).all()
     } if codes else {}
+    work_ids = {
+        work_id
+        for row in rows
+        if (work_id := alias_target(row['book'])) is not None
+    }
+    sources = {
+        (source.edition_code, source.work_id): source
+        for source in session.scalars(
+            select(EditionWorkSource).where(
+                EditionWorkSource.edition_code.in_(codes),
+                EditionWorkSource.work_id.in_(work_ids),
+            )
+        ).all()
+    } if codes and work_ids else {}
     return [
-        {**dict(row), 'edition': _edition_payload(editions.get(row['translation']))}
+        {
+            **dict(row),
+            'edition': _edition_payload(editions.get(row['translation'])),
+            'work_source': _work_source_payload(sources.get((
+                row['translation'], alias_target(row['book']),
+            ))),
+        }
         for row in rows
     ]
 
@@ -164,18 +206,27 @@ def reader_verse_details(
     }
 
 
-def _coverage_by_work(session: Session, work_ids: Iterable[str]) -> dict[str, list[dict]]:
+def _coverage_and_recommendations_by_work(
+    session: Session,
+    work_ids: Iterable[str],
+) -> tuple[dict[str, list[dict]], dict[str, str]]:
     ids = tuple(work_ids)
     if not ids:
-        return {}
+        return {}, {}
     rows = session.execute(
-        select(EditionCoverage, TextEdition)
+        select(EditionCoverage, TextEdition, EditionWorkSource)
         .join(TextEdition, TextEdition.edition_code == EditionCoverage.edition_code)
+        .outerjoin(
+            EditionWorkSource,
+            (EditionWorkSource.edition_code == EditionCoverage.edition_code)
+            & (EditionWorkSource.work_id == EditionCoverage.work_id),
+        )
         .where(EditionCoverage.work_id.in_(ids))
         .order_by(EditionCoverage.work_id, TextEdition.edition_code)
     ).all()
     coverage: dict[str, list[dict]] = {}
-    for edition_coverage, edition in rows:
+    candidates: dict[str, list[tuple[int, str]]] = {}
+    for edition_coverage, edition, source in rows:
         coverage.setdefault(edition_coverage.work_id, []).append({
             'edition_code': edition.edition_code,
             'edition_name': edition.name,
@@ -187,7 +238,32 @@ def _coverage_by_work(session: Session, work_ids: Iterable[str]) -> dict[str, li
             'verse_count': edition_coverage.verse_count,
             'note': edition_coverage.note,
         })
-    return coverage
+        is_english = edition.reading_language.casefold() == 'english'
+        eligible = (
+            is_english
+            and edition_coverage.status == 'verified_english'
+            and edition.verification_status in {'verified', 'provisional'}
+        )
+        if edition.edition_code == 'EOTC-COMPOSITE-EN':
+            eligible = eligible and source is not None and source.canon_scope == 'ethio81'
+        if eligible:
+            priority = (
+                0 if edition.edition_code == 'EOTC-COMPOSITE-EN'
+                else 1 if edition.verification_status == 'verified'
+                else 2
+            )
+            candidates.setdefault(edition_coverage.work_id, []).append((
+                priority, edition.edition_code,
+            ))
+    recommendations = {
+        work_id: min(options)[1]
+        for work_id, options in candidates.items()
+    }
+    return coverage, recommendations
+
+
+def _coverage_by_work(session: Session, work_ids: Iterable[str]) -> dict[str, list[dict]]:
+    return _coverage_and_recommendations_by_work(session, work_ids)[0]
 
 
 def _normalize_canon(canon: str) -> str:
@@ -227,7 +303,9 @@ def _ethiopian_books(session: Session) -> tuple[list[dict], int]:
             ][row[1].work_id],
         ),
     )
-    coverage = _coverage_by_work(session, (entry_work.work_id for _, entry_work, _ in ordered_rows))
+    coverage, recommendations = _coverage_and_recommendations_by_work(
+        session, (entry_work.work_id for _, entry_work, _ in ordered_rows)
+    )
     books = []
     for entry, entry_work, work in ordered_rows:
         canonical_entry = _ETHIOPIAN_ENTRIES_BY_KEY[(entry.testament, entry.canonical_order)]
@@ -240,6 +318,10 @@ def _ethiopian_books(session: Session) -> tuple[list[dict], int]:
             'entry_order': entry.canonical_order,
             'canon_included': True,
             'coverage': coverage.get(work.id, []),
+            'recommended_edition': recommendations.get(work.id),
+            'unavailable_reason': (
+                None if work.id in recommendations else 'English text not yet available'
+            ),
         })
     return books, int(canon_count or 0)
 

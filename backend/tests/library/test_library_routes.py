@@ -3,7 +3,7 @@ from sqlalchemy import event, text
 
 from app.application import create_application
 from app.library.canon import navigation_works
-from app.library.models import EditionCoverage, LibraryWork, TextEdition
+from app.library.models import EditionCoverage, EditionWorkSource, LibraryWork, TextEdition
 
 
 PROTESTANT_WORK_IDS = (
@@ -63,6 +63,49 @@ def _add_verified_genesis_coverage(application) -> None:
         session.commit()
 
 
+def _add_composite_coverage(application, work_id='genesis', *, canon_scope='ethio81') -> None:
+    with application.state.session_factory() as session:
+        edition = session.get(TextEdition, 'EOTC-COMPOSITE-EN')
+        if edition is None:
+            session.add(TextEdition(
+                edition_code='EOTC-COMPOSITE-EN',
+                name='Ethiopian Orthodox Composite English',
+                reading_language='English',
+                source_language='Multiple',
+                script='Latin',
+                relationship='exact_ethiopian',
+                expected_coverage={'works': [work_id]},
+                verification_status='provisional',
+            ))
+            session.flush()
+        session.add(EditionCoverage(
+            edition_code='EOTC-COMPOSITE-EN',
+            work_id=work_id,
+            status='verified_english',
+            chapter_count=50,
+            verse_count=1533,
+            note='Published composite fixture',
+        ))
+        session.add(EditionWorkSource(
+            edition_code='EOTC-COMPOSITE-EN',
+            work_id=work_id,
+            source_key='world-messianic-bible',
+            source_label='World Messianic Bible',
+            source_language='Hebrew',
+            source_tradition='Masoretic',
+            published_year=2020,
+            license_spdx='PD',
+            attribution='Public-domain World Messianic Bible text.',
+            provenance_url='https://ebible.org/engwmb/',
+            fallback=False,
+            modified=True,
+            modification_note='Normalized into the application verse schema.',
+            verification_status='provisional',
+            canon_scope=canon_scope,
+        ))
+        session.commit()
+
+
 def _add_reader_fixture(application) -> None:
     with application.state.session_factory() as session:
         session.execute(text('''
@@ -113,7 +156,82 @@ def test_modular_launcher_exposes_reader_compatibility_routes(test_settings):
     geez = next(row for row in chapter.json()['content'] if row['translation'] == 'GEEZ1980-RESEARCH')
     assert geez['text'] == 'በቀዳሚ ገብረ እግዚአብሔር ሰማየ ወምድረ።'
     assert geez['edition']['name'] == "Ge'ez Bible (1980 EC) — Research Use"
+    assert geez['work_source'] is None
     assert details.json()['translations']['geez1980-research'] == geez['text']
+
+
+def test_reader_chapter_rows_expose_the_actual_edition_work_source(test_settings):
+    application = create_application(test_settings)
+    _add_reader_fixture(application)
+    _add_composite_coverage(application)
+    with application.state.session_factory() as session:
+        session.execute(text('''
+            INSERT INTO biblical_texts
+                (id, book, chapter, verse, text, translation)
+            VALUES
+                (3, 'Genesis', 1, 2, 'The earth was formless and empty.', 'EOTC-COMPOSITE-EN')
+        '''))
+        session.commit()
+
+    rows = TestClient(application).get(
+        '/api/biblical-texts/chapter-content?book=Genesis&chapter=1'
+    ).json()['content']
+    composite = next(row for row in rows if row['translation'] == 'EOTC-COMPOSITE-EN')
+    kjv = next(row for row in rows if row['translation'] == 'KJV')
+
+    assert composite['work_source'] == {
+        'source_key': 'world-messianic-bible',
+        'source_label': 'World Messianic Bible',
+        'source_language': 'Hebrew',
+        'source_tradition': 'Masoretic',
+        'published_year': 2020,
+        'license': 'PD',
+        'attribution': 'Public-domain World Messianic Bible text.',
+        'provenance_url': 'https://ebible.org/engwmb/',
+        'fallback': False,
+        'modified': True,
+        'modification_note': 'Normalized into the application verse schema.',
+        'verification_status': 'provisional',
+        'canon_scope': 'ethio81',
+    }
+    assert kjv['work_source'] is None
+
+
+def test_reader_source_resolution_uses_book_alias_without_cross_edition_leakage(test_settings):
+    application = create_application(test_settings)
+    _add_reader_fixture(application)
+    with application.state.session_factory() as session:
+        session.add(EditionWorkSource(
+            edition_code='GEEZ1980-RESEARCH',
+            work_id='qalementos',
+            source_key='geez-critical-text',
+            source_label="Ge'ez Critical Text",
+            source_language="Ge'ez",
+            source_tradition='Ethiopian Orthodox Tewahedo',
+            license_spdx='CC-BY-NC-ND-4.0',
+            attribution='Research edition fixture.',
+            fallback=False,
+            modified=False,
+            verification_status='verified',
+            canon_scope='ethio81',
+        ))
+        session.execute(text('''
+            INSERT INTO biblical_texts
+                (id, book, chapter, verse, text, translation)
+            VALUES
+                (3, 'Book of Clement', 1, 1, 'Alias resolution fixture.', 'GEEZ1980-RESEARCH'),
+                (4, 'Book of Clement', 1, 1, 'Unregistered translation fixture.', 'KJV')
+        '''))
+        session.commit()
+
+    rows = TestClient(application).get(
+        '/api/biblical-texts/chapter-content', params={'book': 'Book of Clement', 'chapter': 1}
+    ).json()['content']
+    geez = next(row for row in rows if row['translation'] == 'GEEZ1980-RESEARCH')
+    kjv = next(row for row in rows if row['translation'] == 'KJV')
+
+    assert geez['work_source']['source_key'] == 'geez-critical-text'
+    assert kjv['work_source'] is None
 
 
 def test_ethiopian_books_are_seeded_without_installed_text_coverage(test_settings):
@@ -136,6 +254,8 @@ def test_ethiopian_books_are_seeded_without_installed_text_coverage(test_setting
         'entry_order': 1,
         'canon_included': True,
         'coverage': [],
+        'recommended_edition': None,
+        'unavailable_reason': 'English text not yet available',
     }
 
 
@@ -181,6 +301,8 @@ def test_every_ethiopian_navigation_work_has_the_complete_response_shape(test_se
         'entry_order',
         'canon_included',
         'coverage',
+        'recommended_edition',
+        'unavailable_reason',
     }
     assert len(books) == 95
     for book in books:
@@ -193,6 +315,85 @@ def test_every_ethiopian_navigation_work_has_the_complete_response_shape(test_se
         assert isinstance(book['entry_order'], int) and not isinstance(book['entry_order'], bool)
         assert book['canon_included'] is True
         assert isinstance(book['coverage'], list)
+
+
+def test_ethiopian_catalog_recommends_composite_only_for_covered_canonical_works(test_settings):
+    application = create_application(test_settings)
+    _add_verified_genesis_coverage(application)
+    _add_composite_coverage(application)
+
+    books = TestClient(application).get('/api/v1/books?canon=ETHIO81').json()['books']
+    by_id = {book['id']: book for book in books}
+
+    assert by_id['genesis']['recommended_edition'] == 'EOTC-COMPOSITE-EN'
+    assert by_id['genesis']['unavailable_reason'] is None
+    assert by_id['tegsats']['recommended_edition'] is None
+    assert by_id['tegsats']['unavailable_reason'] == 'English text not yet available'
+    assert 'prayer-of-manasseh' not in by_id
+
+
+def test_ethiopian_catalog_does_not_recommend_original_language_or_supplemental_sources(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        session.add(TextEdition(
+            edition_code='ORIGINAL-ONLY',
+            name="Verified Ge'ez",
+            reading_language="Ge'ez",
+            source_language="Ge'ez",
+            script="Ge'ez",
+            relationship='exact_ethiopian',
+            expected_coverage={'works': ['tegsats']},
+            verification_status='verified',
+        ))
+        session.flush()
+        session.add(EditionCoverage(
+            edition_code='ORIGINAL-ONLY',
+            work_id='tegsats',
+            status='verified_original',
+            chapter_count=1,
+            verse_count=1,
+            note='Original-language fixture',
+        ))
+        session.commit()
+    _add_composite_coverage(application, 'prayer-of-manasseh', canon_scope='supplemental')
+
+    books = TestClient(application).get('/api/v1/books?canon=ETHIO81').json()['books']
+    by_id = {book['id']: book for book in books}
+
+    assert by_id['tegsats']['recommended_edition'] is None
+    assert by_id['tegsats']['unavailable_reason'] == 'English text not yet available'
+    assert 'prayer-of-manasseh' not in by_id
+
+
+def test_verified_english_is_recommended_ahead_of_other_provisional_english(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        for code, status in (('PROVISIONAL-EN', 'provisional'), ('VERIFIED-EN', 'verified')):
+            session.add(TextEdition(
+                edition_code=code,
+                name=code,
+                reading_language='English',
+                source_language='Hebrew',
+                script='Latin',
+                relationship='general_reading',
+                expected_coverage={'works': ['genesis']},
+                verification_status=status,
+            ))
+            session.flush()
+            session.add(EditionCoverage(
+                edition_code=code,
+                work_id='genesis',
+                status='verified_english',
+                chapter_count=50,
+                verse_count=1533,
+                note='Ranking fixture',
+            ))
+        session.commit()
+
+    genesis = TestClient(application).get('/api/v1/books?canon=ETHIO81').json()['books'][0]
+
+    assert genesis['recommended_edition'] == 'VERIFIED-EN'
+    assert genesis['unavailable_reason'] is None
 
 
 def test_ethiopian_catalog_uses_a_fixed_query_budget(test_settings):
