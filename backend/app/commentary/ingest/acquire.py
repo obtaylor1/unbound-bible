@@ -3,30 +3,42 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from hashlib import sha256
+import certifi
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import ssl
 import stat
+from threading import Event, Lock
 import time
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from .validate import SourceMetadata, load_source_registry
 
 
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
+MAX_REVIEWED_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 10
 MAX_ATTEMPTS = 3
+MAX_CHAPTER_CANDIDATES_PER_BOOK = 200
+MAX_CHAPTER_CANDIDATES_PER_SOURCE = 1500
 _READ_SIZE = 64 * 1024
 _HOST = 'bible.helloao.org'
 _CONTENT_RANGE = re.compile(r'bytes ([0-9]+)-([0-9]+)/([0-9]+)\Z')
 _REGISTRY_PATH = Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'sources.json'
+_REVIEWED_ARTIFACTS_PATH = (
+    Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'reviewed-artifacts.json'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +56,84 @@ class _RepresentationValidator:
     value: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ChapterPlan:
+    first: int | None
+    last: int | None
+    expected_count: int
+
+
+class _MissingChapter(ValueError):
+    """One bounded catalog candidate is absent upstream and may represent a declared gap."""
+
+
 class _RestartDownload(Exception):
     """The partial artifact no longer identifies the upstream representation."""
 
 
 class _PartialDurabilityError(OSError):
     """Partial bytes could not be made durable and must never be resumed."""
+
+
+class _AcquisitionStopped(Exception):
+    """A sibling acquisition failed, so this worker must not publish."""
+
+
+class _CooperativeStop:
+    """Serialize cancellation notification against authoritative publication."""
+
+    def __init__(self):
+        self._event = Event()
+        self._publication_lock = Lock()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout)
+
+    def set(self) -> None:
+        with self._publication_lock:
+            self._event.set()
+
+    @contextmanager
+    def publication(self) -> Iterator[None]:
+        with self._publication_lock:
+            yield
+
+
+class _SourceByteBudget:
+    """Atomically reserve exact artifact bytes before publishing generations."""
+
+    def __init__(self, initial_bytes: int = 0, *, limit: int | None = None):
+        maximum = MAX_SOURCE_BYTES if limit is None else limit
+        if (
+            type(initial_bytes) is not int or initial_bytes < 0
+            or type(maximum) is not int or maximum < 0 or initial_bytes > maximum
+        ):
+            raise ValueError('commentary source exceeds the aggregate byte limit.')
+        self._used = initial_bytes
+        self._limit = maximum
+        self._lock = Lock()
+
+    def reserve(self, size: int) -> None:
+        if type(size) is not int or size < 0:
+            raise ValueError('artifact size must be a nonnegative integer.')
+        with self._lock:
+            if self._used + size > self._limit:
+                raise ValueError('commentary source exceeds the aggregate byte limit.')
+            self._used += size
+
+    def release(self, size: int) -> None:
+        with self._lock:
+            if type(size) is not int or size < 0 or size > self._used:
+                raise RuntimeError('commentary source byte reservation is inconsistent.')
+            self._used -= size
+
+
+def _raise_if_stopped(stop_event: Event | _CooperativeStop | None) -> None:
+    if stop_event is not None and stop_event.is_set():
+        raise _AcquisitionStopped('commentary acquisition stopped after a sibling failure.')
 
 
 _FinalizationHook = Callable[[str], None]
@@ -59,9 +143,116 @@ def _registry(path: Path | None = None) -> dict[str, SourceMetadata]:
     return load_source_registry(path or _REGISTRY_PATH)
 
 
+def _reviewed_catalog_artifact(
+    source_id: str, url: str, path: Path,
+) -> str:
+    """Load the independently reviewed raw catalog digest without following links."""
+    directory = _open_directory_nofollow(path.parent)
+    try:
+        raw = _read_regular_at(directory, path.name, MAX_REVIEWED_MANIFEST_BYTES)
+    finally:
+        os.close(directory)
+    if raw is None:
+        raise ValueError('reviewed artifact manifest is required for catalog acquisition.')
+    try:
+        manifest = json.loads(
+            raw.decode('utf-8', errors='strict'),
+            object_pairs_hook=_reject_duplicate_pairs,
+            parse_constant=_reject_constant,
+        )
+        source = manifest['sources'][source_id]
+        record = source['artifacts']['books.json']
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, RecursionError) as exc:
+        raise ValueError('reviewed artifact manifest has no approved catalog record.') from exc
+    if (
+        type(manifest) is not dict or manifest.get('schema_version') != 1
+        or set(manifest) != {'schema_version', 'sources'}
+        or type(source) is not dict or set(source) != {'artifacts'}
+        or type(source['artifacts']) is not dict
+        or type(record) is not dict or set(record) != {'url', 'sha256'}
+        or record.get('url') != url
+        or type(record.get('sha256')) is not str
+        or re.fullmatch(r'[0-9a-f]{64}', record['sha256']) is None
+    ):
+        raise ValueError('reviewed artifact manifest has no approved catalog record.')
+    return record['sha256']
+
+
+def _catalog_chapter_bounds(
+    raw: bytes, source_id: str, expected_books: tuple[str, ...],
+) -> dict[str, _ChapterPlan]:
+    """Extract only exact, source-owned chapter bounds from a verified catalog."""
+    try:
+        document = json.loads(
+            raw.decode('utf-8', errors='strict'),
+            object_pairs_hook=_reject_duplicate_pairs,
+            parse_constant=_reject_constant,
+        )
+        commentary = document['commentary']
+        books = document['books']
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, RecursionError) as exc:
+        raise ValueError('catalog must contain documented commentary book metadata.') from exc
+    if (
+        type(document) is not dict or set(document) != {'commentary', 'books'}
+        or type(commentary) is not dict or commentary.get('id') != source_id
+        or commentary.get('listOfBooksApiLink') != f'/api/c/{source_id}/books.json'
+        or commentary.get('numberOfBooks') != len(expected_books)
+        or type(books) is not list or len(books) != len(expected_books)
+    ):
+        raise ValueError('catalog does not match the reviewed source registry.')
+    bounds: dict[str, _ChapterPlan] = {}
+    total_chapters = 0
+    total_candidates = 0
+    for book in books:
+        if type(book) is not dict:
+            raise ValueError('catalog book metadata must be an object.')
+        book_id = book.get('id')
+        count = book.get('numberOfChapters')
+        first = book.get('firstChapterNumber')
+        last = book.get('lastChapterNumber')
+        common_invalid = (
+            type(book_id) is not str or book_id not in expected_books or book_id in bounds
+            or book.get('commentaryId') != source_id
+            or type(count) is not int or count < 0
+        )
+        zero_fields = (
+            'firstChapterNumber', 'lastChapterNumber',
+            'firstChapterApiLink', 'lastChapterApiLink',
+            'firstChapterReference', 'lastChapterReference',
+        )
+        zero_shape = (
+            count == 0 and set(zero_fields).issubset(book)
+            and all(book[field] is None for field in zero_fields)
+        )
+        positive_shape = (
+            type(count) is int and count > 0
+            and type(first) is int and first == 1
+            and type(last) is int and last >= first
+            and count <= last - first + 1
+            and last - first + 1 <= MAX_CHAPTER_CANDIDATES_PER_BOOK
+            and book.get('firstChapterApiLink') == f'/api/c/{source_id}/{book_id}/1.json'
+            and book.get('lastChapterApiLink') == f'/api/c/{source_id}/{book_id}/{last}.json'
+        )
+        if common_invalid or not (zero_shape or positive_shape):
+            raise ValueError('catalog book has invalid source, chapter bounds, or links.')
+        bounds[book_id] = _ChapterPlan(first, last, count)
+        total_chapters += count
+        if count:
+            total_candidates += last - first + 1  # type: ignore[operator]
+    if tuple(bounds) != expected_books or commentary.get('totalNumberOfChapters') != total_chapters:
+        raise ValueError('catalog book order or total chapter count does not match the registry.')
+    if (
+        total_chapters > MAX_CHAPTER_CANDIDATES_PER_SOURCE
+        or total_candidates > MAX_CHAPTER_CANDIDATES_PER_SOURCE
+    ):
+        raise ValueError('catalog exceeds the bounded per-source chapter limit.')
+    return bounds
+
+
 def _approved_url(
     source_id: str, url: str, registry: dict[str, SourceMetadata],
-) -> tuple[str, str | None]:
+    chapter_bounds: dict[str, _ChapterPlan] | None = None,
+) -> tuple[str, str | None, int | None]:
     if type(source_id) is not str or source_id not in registry:
         raise ValueError('source must be one of the five approved source IDs.')
     if type(url) is not str or any(character.isspace() for character in url):
@@ -80,39 +271,64 @@ def _approved_url(
     if unquote(parsed.path) != parsed.path or '\\' in parsed.path:
         raise ValueError('URL must use the exact approved API path.')
     parts = parsed.path.split('/')
-    if len(parts) != 5 or parts[:4] != ['', 'api', 'c', source_id]:
+    if parts[:4] != ['', 'api', 'c', source_id]:
         raise ValueError('URL must use the exact approved API path for its source.')
-    filename = parts[4]
-    # Exact paths have no trailing slash and split into five path components.
-    if not filename:
-        raise ValueError('URL must use the exact approved API path.')
-    if filename == 'books.json':
-        return filename, None
-    if not filename.endswith('.json'):
-        raise ValueError('URL must identify an approved JSON artifact.')
-    book_id = filename[:-5]
-    if book_id not in registry[source_id].expected_source_books:
+    if len(parts) == 5 and parts[4] == 'books.json':
+        return 'books.json', None, None
+    if len(parts) != 6 or not parts[5].endswith('.json'):
+        raise ValueError('URL must identify an approved catalog or chapter JSON artifact.')
+    book_id = parts[4]
+    raw_chapter = parts[5][:-5]
+    if (
+        book_id not in registry[source_id].expected_source_books
+        or not raw_chapter.isascii() or not raw_chapter.isdigit()
+        or raw_chapter.startswith('0')
+    ):
         raise ValueError('URL book ID is not approved for this source.')
-    return filename, book_id
+    chapter = int(raw_chapter)
+    bounds = chapter_bounds.get(book_id) if chapter_bounds is not None else None
+    if (
+        bounds is None or bounds.expected_count == 0
+        or bounds.first is None or bounds.last is None
+        or chapter < bounds.first or chapter > bounds.last
+    ):
+        raise ValueError('URL chapter is outside the reviewed catalog bounds.')
+    return f'{book_id}-{chapter}.json', book_id, chapter
 
 
-def _validate_url(source_id: str, url: str, registry: dict[str, SourceMetadata]) -> tuple[str, str | None]:
-    return _approved_url(source_id, url, registry)
+def _validate_url(
+    source_id: str, url: str, registry: dict[str, SourceMetadata],
+    chapter_bounds: dict[str, _ChapterPlan] | None = None,
+) -> tuple[str, str | None, int | None]:
+    return _approved_url(source_id, url, registry, chapter_bounds)
 
 
 class _SafeRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, source_id: str, registry: dict[str, SourceMetadata]):
+    def __init__(
+        self, source_id: str, registry: dict[str, SourceMetadata],
+        chapter_bounds: dict[str, _ChapterPlan] | None,
+    ):
         self._source_id = source_id
         self._registry = registry
+        self._chapter_bounds = chapter_bounds
         super().__init__()
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        _validate_url(self._source_id, newurl, self._registry)
+        _validate_url(self._source_id, newurl, self._registry, self._chapter_bounds)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _default_opener(source_id: str, registry: dict[str, SourceMetadata]):
-    return build_opener(_SafeRedirectHandler(source_id, registry)).open
+def _default_opener(
+    source_id: str, registry: dict[str, SourceMetadata],
+    chapter_bounds: dict[str, _ChapterPlan] | None = None,
+):
+    context = ssl.create_default_context(cafile=certifi.where())
+    if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+        raise RuntimeError('TLS certificate and hostname verification must remain enabled.')
+    return build_opener(
+        _SafeRedirectHandler(source_id, registry, chapter_bounds),
+        HTTPSHandler(context=context),
+    ).open
 
 
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -518,6 +734,7 @@ def _finalize_generation(
     raw: bytes,
     checksum: str,
     hook: _FinalizationHook | None,
+    stop_event: Event | _CooperativeStop | None = None,
 ) -> tuple[Path, Path]:
     checkpoint = hook or (lambda _step: None)
     artifact_root = destination / 'generations' / filename
@@ -528,6 +745,7 @@ def _finalize_generation(
     generations_fd = artifact_root_fd = generation_fd = None
     switched = False
     try:
+        _raise_if_stopped(stop_event)
         generations_fd, created = _open_or_create_child(
             destination_fd, 'generations', create=True,
         )
@@ -544,6 +762,7 @@ def _finalize_generation(
         if created:
             _fsync_directory(artifact_root_fd)
         previous_marker = _read_regular_at(destination_fd, marker_name, 4096)
+        _raise_if_stopped(stop_event)
         _write_atomic_at(generation_fd, filename, raw)
         checkpoint('generation_data')
         _write_sidecar(sidecar, checksum, filename, generation_fd)
@@ -551,15 +770,22 @@ def _finalize_generation(
         _fsync_directory(generation_fd)
         marker_raw = _marker_document(source_id, filename, url, checksum)
         marker_temporary = marker_name + '.part'
+        _raise_if_stopped(stop_event)
         _write_atomic_at(destination_fd, marker_temporary, marker_raw)
         checkpoint('before_marker_switch')
         if not _path_still_identifies(destination, destination_fd):
             raise ValueError('acquisition output directory changed during finalization.')
-        os.replace(
-            marker_temporary, marker_name,
-            src_dir_fd=destination_fd, dst_dir_fd=destination_fd,
+        publication = (
+            stop_event.publication()
+            if isinstance(stop_event, _CooperativeStop) else nullcontext()
         )
-        switched = True
+        with publication:
+            _raise_if_stopped(stop_event)
+            os.replace(
+                marker_temporary, marker_name,
+                src_dir_fd=destination_fd, dst_dir_fd=destination_fd,
+            )
+            switched = True
         checkpoint('after_marker_switch')
         checkpoint('directory_fsync')
         _fsync_directory(destination_fd)
@@ -640,11 +866,23 @@ def acquire_source(
     opener: Callable[..., object] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     registry_path: Path | None = None,
+    reviewed_artifacts_path: Path | None = None,
+    chapter_bounds: dict[str, _ChapterPlan] | None = None,
     finalization_hook: _FinalizationHook | None = None,
+    _source_budget: _SourceByteBudget | None = None,
+    _stop_event: Event | _CooperativeStop | None = None,
 ) -> AcquiredArtifact:
     """Acquire one exact allowlisted JSON artifact through a safe resumable file."""
     registry = _registry(registry_path)
-    filename, book_id = _validate_url(source_id, url, registry)
+    filename, book_id, _chapter = _validate_url(
+        source_id, url, registry, chapter_bounds,
+    )
+    expected_catalog_checksum = (
+        _reviewed_catalog_artifact(
+            source_id, url, reviewed_artifacts_path or _REVIEWED_ARTIFACTS_PATH,
+        )
+        if filename == 'books.json' else None
+    )
     if not isinstance(output, Path):
         output = Path(output)
     destination = output / source_id
@@ -668,7 +906,10 @@ def acquire_source(
             source_id=source_id, url=url, destination=destination,
             destination_fd=destination_fd, filename=filename, book_id=book_id,
             registry=registry, opener=opener, sleeper=sleeper,
+            chapter_bounds=chapter_bounds,
+            expected_catalog_checksum=expected_catalog_checksum,
             finalization_hook=finalization_hook,
+            source_budget=_source_budget, stop_event=_stop_event,
         )
     finally:
         if destination_fd is not None:
@@ -686,7 +927,11 @@ def _acquire_source_from_directory(
     registry: dict[str, SourceMetadata],
     opener: Callable[..., object] | None,
     sleeper: Callable[[float], None],
+    chapter_bounds: dict[str, _ChapterPlan] | None,
+    expected_catalog_checksum: str | None,
     finalization_hook: _FinalizationHook | None,
+    source_budget: _SourceByteBudget | None,
+    stop_event: Event | _CooperativeStop | None,
 ) -> AcquiredArtifact:
     """Acquire while every mutable file operation stays below one open directory."""
     part_name = f'{filename}.part'
@@ -701,10 +946,11 @@ def _acquire_source_from_directory(
             existing = 0
     else:
         _cleanup_artifacts_at(destination_fd, metadata_name)
-    transport = opener or _default_opener(source_id, registry)
+    transport = opener or _default_opener(source_id, registry, chapter_bounds)
 
     last_network_error: Exception | None = None
     for attempt in range(MAX_ATTEMPTS):
+        _raise_if_stopped(stop_event)
         request = Request(url, headers={
             'Accept': 'application/json',
             'User-Agent': 'Unbound-Bible-Commentary-Importer/1',
@@ -715,9 +961,12 @@ def _acquire_source_from_directory(
         try:
             response = transport(request, timeout=HTTP_TIMEOUT_SECONDS)
             with response:  # type: ignore[attr-defined]
+                _raise_if_stopped(stop_event)
                 final_url = response.geturl()  # type: ignore[attr-defined]
                 try:
-                    final_name, final_book = _validate_url(source_id, final_url, registry)
+                    final_name, final_book, _final_chapter = _validate_url(
+                        source_id, final_url, registry, chapter_bounds,
+                    )
                 except ValueError as exc:
                     raise ValueError('HTTP redirect left the approved URL boundary.') from exc
                 if (final_name, final_book) != (filename, book_id):
@@ -740,7 +989,11 @@ def _acquire_source_from_directory(
                 raw, size = _read_response(
                     response, destination_fd, part_name, existing,  # type: ignore[arg-type]
                 )
+                _raise_if_stopped(stop_event)
             break
+        except _AcquisitionStopped:
+            _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
+            raise
         except _RestartDownload as exc:
             last_network_error = exc
             _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
@@ -752,6 +1005,9 @@ def _acquire_source_from_directory(
             existing = 0
             resume_validator = None
         except HTTPError as exc:
+            if exc.code == 404:
+                _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
+                raise _MissingChapter('catalog candidate chapter is absent upstream.') from exc
             last_network_error = exc
             if exc.code == 416 and _regular_size_at(destination_fd, part_name):
                 _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
@@ -778,23 +1034,32 @@ def _acquire_source_from_directory(
             _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
             raise
         if attempt < MAX_ATTEMPTS - 1:
+            _raise_if_stopped(stop_event)
             sleeper(float(attempt + 1))
     else:
         raise ValueError('commentary acquisition failed after three attempts.') from last_network_error
 
+    reserved = False
     try:
         _validate_json(raw)
         checksum = sha256(raw).hexdigest()
-        expected = registry[source_id].source_checksum if filename == 'books.json' else None
-        if expected is not None and checksum != expected:
-            raise ValueError('artifact checksum does not match the reviewed registry checksum.')
+        if expected_catalog_checksum is not None and checksum != expected_catalog_checksum:
+            raise ValueError('artifact checksum does not match the reviewed artifact checksum.')
+        _raise_if_stopped(stop_event)
+        if source_budget is not None:
+            source_budget.reserve(size)
+            reserved = True
+        _raise_if_stopped(stop_event)
         artifact, sidecar = _finalize_generation(
             destination=destination, destination_fd=destination_fd,
             source_id=source_id, filename=filename, url=url, raw=raw,
             checksum=checksum, hook=finalization_hook,
+            stop_event=stop_event,
         )
         _cleanup_artifacts_at(destination_fd, part_name, metadata_name)
     except Exception:
+        if reserved:
+            source_budget.release(size)  # type: ignore[union-attr]
         _cleanup_artifacts_at(
             destination_fd, part_name, metadata_name, metadata_temporary,
         )
@@ -809,18 +1074,143 @@ def acquire_source_bundle(
     opener: Callable[..., object] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     registry_path: Path | None = None,
+    reviewed_artifacts_path: Path | None = None,
 ) -> tuple[AcquiredArtifact, ...]:
-    """Acquire the reviewed source catalog and every exact allowlisted book artifact."""
+    """Acquire the reviewed catalog, then every exact catalog-declared chapter."""
     registry = _registry(registry_path)
     if source_id not in registry:
         raise ValueError('source must be one of the five approved source IDs.')
-    base = f'https://{_HOST}/api/c/{source_id}'
-    urls = [registry[source_id].upstream_url]
-    urls.extend(f'{base}/{book_id}.json' for book_id in registry[source_id].expected_source_books)
-    return tuple(
-        acquire_source(
-            source_id, url, output, opener=opener, sleeper=sleeper,
-            registry_path=registry_path,
-        )
-        for url in urls
+    source_budget = _SourceByteBudget()
+    catalog = acquire_source(
+        source_id, registry[source_id].upstream_url, output,
+        opener=opener, sleeper=sleeper, registry_path=registry_path,
+        reviewed_artifacts_path=reviewed_artifacts_path,
+        _source_budget=source_budget,
     )
+    raw_catalog, catalog_digest, catalog_url = read_acquired_artifact(
+        output / source_id, 'books.json', source_id=source_id,
+    )
+    if catalog_digest != catalog.checksum or catalog_url != catalog.url:
+        raise ValueError('acquired catalog generation changed before chapter scheduling.')
+    chapter_bounds = _catalog_chapter_bounds(
+        raw_catalog, source_id, registry[source_id].expected_source_books,
+    )
+    base = f'https://{_HOST}/api/c/{source_id}'
+    candidates = tuple(
+        (book_id, chapter, f'{base}/{book_id}/{chapter}.json')
+        for book_id in registry[source_id].expected_source_books
+        for chapter in (() if chapter_bounds[book_id].expected_count == 0 else range(
+            chapter_bounds[book_id].first,  # type: ignore[arg-type]
+            chapter_bounds[book_id].last + 1,  # type: ignore[operator]
+        ))
+    )
+    stop_event = _CooperativeStop()
+
+    def acquire_chapter(candidate: tuple[str, int, str]) -> AcquiredArtifact:
+        _book_id, _chapter, url = candidate
+        return acquire_source(
+            source_id, url, output, opener=opener, sleeper=sleeper,
+            registry_path=registry_path, reviewed_artifacts_path=reviewed_artifacts_path,
+            chapter_bounds=chapter_bounds,
+            _source_budget=source_budget, _stop_event=stop_event,
+        )
+
+    acquired = _bounded_parallel_acquire(
+        candidates, acquire_chapter, initial_bytes=catalog.size, stop_event=stop_event,
+    )
+    chapters = tuple(item for item in acquired if item is not None)
+    successful: dict[str, list[int]] = {
+        book_id: [] for book_id in registry[source_id].expected_source_books
+    }
+    for (book_id, chapter, _url), artifact in zip(candidates, acquired, strict=True):
+        if artifact is not None:
+            successful[book_id].append(chapter)
+    for book_id, plan in chapter_bounds.items():
+        chapters_for_book = successful[book_id]
+        if plan.expected_count == 0:
+            if chapters_for_book:
+                raise ValueError('acquired chapters do not match catalog-declared coverage.')
+            continue
+        if (
+            len(chapters_for_book) != plan.expected_count
+            or not chapters_for_book
+            or chapters_for_book[0] != plan.first
+            or chapters_for_book[-1] != plan.last
+        ):
+            raise ValueError('acquired chapters do not match catalog-declared coverage.')
+    return (catalog, *chapters)
+
+
+def _bounded_parallel_acquire(
+    candidates: tuple[tuple[str, int, str], ...],
+    operation: Callable[[tuple[str, int, str]], AcquiredArtifact],
+    *,
+    initial_bytes: int = 0,
+    stop_event: Event | _CooperativeStop | None = None,
+) -> tuple[AcquiredArtifact | None, ...]:
+    """Keep at most eight operations in flight and stop queueing on first failure."""
+    if not candidates:
+        raise ValueError('catalog must declare at least one bounded chapter candidate.')
+    results: list[AcquiredArtifact | None] = [None] * len(candidates)
+    executor = ThreadPoolExecutor(max_workers=min(8, len(candidates)))
+    pending: dict[Future[AcquiredArtifact], int] = {}
+    next_index = 0
+    if type(initial_bytes) is not int or initial_bytes < 0 or initial_bytes > MAX_SOURCE_BYTES:
+        raise ValueError('commentary source exceeds the aggregate byte limit.')
+    total_bytes = initial_bytes
+    cooperative_stop = stop_event or _CooperativeStop()
+    failure_lock = Lock()
+    primary_failure: list[Exception] = []
+
+    def run_one(candidate: tuple[str, int, str]) -> AcquiredArtifact:
+        try:
+            return operation(candidate)
+        except _MissingChapter:
+            raise
+        except _AcquisitionStopped:
+            raise
+        except Exception as exc:
+            with failure_lock:
+                if not primary_failure:
+                    primary_failure.append(exc)
+            cooperative_stop.set()
+            raise
+
+    def submit_one() -> None:
+        nonlocal next_index
+        future = executor.submit(run_one, candidates[next_index])
+        pending[future] = next_index
+        next_index += 1
+
+    try:
+        while next_index < min(8, len(candidates)):
+            submit_one()
+        while pending:
+            completed, _waiting = wait(tuple(pending), return_when=FIRST_COMPLETED)
+            completed_items = sorted(
+                ((pending.pop(future), future) for future in completed),
+                key=lambda item: item[0],
+            )
+            for index, future in completed_items:
+                try:
+                    artifact = future.result()
+                except _MissingChapter:
+                    artifact = None
+                results[index] = artifact
+                if artifact is not None:
+                    total_bytes += artifact.size
+                    if total_bytes > MAX_SOURCE_BYTES:
+                        raise ValueError('commentary source exceeds the aggregate byte limit.')
+            while next_index < len(candidates) and len(pending) < 8:
+                submit_one()
+    except Exception as caught:
+        cooperative_stop.set()
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        if isinstance(caught, _AcquisitionStopped) and primary_failure:
+            raise primary_failure[0]
+        raise
+    else:
+        executor.shutdown(wait=True, cancel_futures=True)
+    return tuple(results)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
+from datetime import date
 from hashlib import sha256
 import json
 import os
@@ -18,6 +21,9 @@ import typer
 from typer import _click as click
 from typer.core import TyperGroup
 
+# The standalone CLI does not run the web application's model bootstrap. Import the
+# referenced library ORM module intentionally so commentary foreign keys can resolve.
+from app.library import models as _library_models  # noqa: F401
 from app.commentary.models import (
     CommentaryImportRun,
     CommentarySource,
@@ -26,9 +32,16 @@ from app.commentary.models import (
 from app.config import Settings
 from app.database import create_database_engine, create_session_factory
 
-from .acquire import MAX_ARTIFACT_BYTES, acquire_source_bundle, read_acquired_artifact
-from .adapter import load_helloao_bundle_bytes
-from .publish import publish_run, rollback_publication, stage_bundle, validate_run
+from .acquire import (
+    MAX_ARTIFACT_BYTES, MAX_REVIEWED_MANIFEST_BYTES, acquire_source_bundle,
+    read_acquired_artifact,
+)
+from .adapter import load_helloao_catalog_bytes, load_helloao_chapter_bytes
+from .publish import (
+    publish_run, rollback_publication, stage_bundle, validate_run,
+    warning_review_snapshot,
+)
+from .types import NormalizedCommentaryEntry, _normalize_scalar
 from .validate import SourceMetadata, load_source_registry
 
 
@@ -36,6 +49,17 @@ _REGISTRY_PATH = Path(__file__).resolve().parents[3] / 'data' / 'commentaries' /
 _REVIEWED_ARTIFACTS_PATH = (
     Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'reviewed-artifacts.json'
 )
+_REVIEWED_EXCLUSIONS_PATH = (
+    Path(__file__).resolve().parents[3] / 'data' / 'commentaries' / 'reviewed-exclusions.json'
+)
+_APPROVED_SOURCE_IDS = frozenset({
+    'matthew-henry', 'john-gill', 'adam-clarke',
+    'jamieson-fausset-brown', 'keil-delitzsch',
+})
+_EXCLUSION_FIELDS = frozenset({
+    'source_id', 'artifact', 'artifact_sha256', 'content_index',
+    'reason', 'reviewer', 'reviewed_on',
+})
 _BOOK_NAMES = (
     'Genesis', 'Exodus', 'Leviticus', 'Numbers', 'Deuteronomy', 'Joshua', 'Judges', 'Ruth',
     '1 Samuel', '2 Samuel', '1 Kings', '2 Kings', '1 Chronicles', '2 Chronicles', 'Ezra',
@@ -57,6 +81,7 @@ _BOOK_CODES = (
     '2PE', '1JN', '2JN', '3JN', 'JUD', 'REV',
 )
 _BOOK_MAP = dict(zip(_BOOK_CODES, _BOOK_NAMES, strict=True))
+_CHAPTER_ARTIFACT = re.compile(r'([A-Z0-9]{3})-([1-9][0-9]*)\.json\Z')
 
 
 class _JsonErrorGroup(TyperGroup):
@@ -229,10 +254,16 @@ def _read_bounded_regular(path: Path, *, maximum: int, label: str) -> bytes:
 def _reviewed_source_artifacts(
     source_id: str, metadata: SourceMetadata, path: Path,
 ) -> dict[str, dict[str, str]]:
-    raw = _read_bounded_regular(path, maximum=256 * 1024, label='reviewed artifact manifest')
+    raw = _read_bounded_regular(
+        path, maximum=MAX_REVIEWED_MANIFEST_BYTES, label='reviewed artifact manifest',
+    )
     try:
-        manifest = json.loads(raw.decode('utf-8', errors='strict'))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        manifest = json.loads(
+            raw.decode('utf-8', errors='strict'),
+            object_pairs_hook=_reject_duplicate_manifest_members,
+            parse_constant=_reject_manifest_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise ValueError('Reviewed artifact manifest must contain valid JSON.') from exc
     if type(manifest) is not dict or set(manifest) != {'schema_version', 'sources'}:
         raise ValueError('Reviewed artifact manifest has an invalid schema.')
@@ -246,18 +277,23 @@ def _reviewed_source_artifacts(
     ):
         raise ValueError('Reviewed artifact source record has an invalid schema.')
     artifacts = source['artifacts']
-    expected = [f'{code}.json' for code in metadata.expected_source_books] + ['books.json']
-    if set(artifacts) != set(expected):
-        raise ValueError(
-            'Reviewed artifact manifest is incomplete; production staging is blocked.'
-        )
+    if 'books.json' not in artifacts:
+        raise ValueError('Reviewed artifact manifest is incomplete; production staging is blocked.')
     approved: dict[str, dict[str, str]] = {}
-    for filename in expected:
+    covered_books: set[str] = set()
+    for filename in sorted(artifacts):
         record = artifacts[filename]
-        expected_url = (
-            metadata.upstream_url if filename == 'books.json'
-            else f'https://bible.helloao.org/api/c/{source_id}/{filename}'
-        )
+        if filename == 'books.json':
+            expected_url = metadata.upstream_url
+        else:
+            match = _CHAPTER_ARTIFACT.fullmatch(filename)
+            if match is None or match.group(1) not in metadata.expected_source_books:
+                raise ValueError('Reviewed artifact manifest contains an unapproved artifact name.')
+            book_id, raw_chapter = match.groups()
+            covered_books.add(book_id)
+            expected_url = (
+                f'https://bible.helloao.org/api/c/{source_id}/{book_id}/{raw_chapter}.json'
+            )
         if (
             type(record) is not dict or set(record) != {'url', 'sha256'}
             or record.get('url') != expected_url
@@ -267,70 +303,287 @@ def _reviewed_source_artifacts(
             raise ValueError(
                 'Reviewed artifact record does not match the approved URL and digest schema.'
             )
-        if filename == 'books.json' and record['sha256'] != metadata.source_checksum:
-            raise ValueError('Reviewed catalog digest does not match the pinned source registry.')
         approved[filename] = {'url': record['url'], 'sha256': record['sha256']}
+    if not covered_books:
+        raise ValueError('Reviewed artifact manifest is incomplete; production staging is blocked.')
     return approved
+
+
+def _reviewed_source_exclusions(
+    source_id: str, path: Path, reviewed: dict[str, dict[str, str]],
+) -> tuple[dict[str, object], ...]:
+    """Load checksum-bound human review decisions for one approved source."""
+    raw = _read_bounded_regular(
+        path, maximum=256 * 1024, label='reviewed exclusion manifest',
+    )
+    try:
+        document = json.loads(
+            raw.decode('utf-8', errors='strict'),
+            object_pairs_hook=_reject_duplicate_manifest_members,
+            parse_constant=_reject_manifest_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+        raise ValueError('Reviewed exclusion manifest must contain valid JSON.') from exc
+    if (
+        type(document) is not dict
+        or set(document) != {'schema_version', 'exclusions'}
+        or document['schema_version'] != 1
+        or type(document['exclusions']) is not list
+    ):
+        raise ValueError('Reviewed exclusion manifest has an invalid schema.')
+    selected: list[dict[str, object]] = []
+    identities: set[tuple[str, str, int]] = set()
+    for index, value in enumerate(document['exclusions']):
+        if type(value) is not dict or set(value) != _EXCLUSION_FIELDS:
+            raise ValueError(f'Reviewed exclusion {index} has an invalid schema.')
+        record_source = value['source_id']
+        artifact = value['artifact']
+        digest = value['artifact_sha256']
+        content_index = value['content_index']
+        reason = value['reason']
+        reviewer = value['reviewer']
+        reviewed_on = value['reviewed_on']
+        if type(record_source) is not str or record_source not in _APPROVED_SOURCE_IDS:
+            raise ValueError('Reviewed exclusion has an unknown source ID.')
+        if type(artifact) is not str or _CHAPTER_ARTIFACT.fullmatch(artifact) is None:
+            raise ValueError('Reviewed exclusion has an unknown artifact name.')
+        if type(digest) is not str or re.fullmatch(r'[0-9a-f]{64}', digest) is None:
+            raise ValueError('Reviewed exclusion artifact digest is invalid.')
+        if type(content_index) is not int or content_index < 0:
+            raise ValueError('Reviewed exclusion content index must be nonnegative.')
+        for label, text in (('reason', reason), ('reviewer', reviewer)):
+            try:
+                normalized_text = _normalize_scalar(
+                    f'reviewed exclusion {label}', text, maximum=1000,
+                )
+            except ValueError as exc:
+                raise ValueError(f'Reviewed exclusion {label} is invalid.') from exc
+            if normalized_text != text:
+                raise ValueError(f'Reviewed exclusion {label} is invalid.')
+        try:
+            review_date = date.fromisoformat(reviewed_on) if type(reviewed_on) is str else None
+        except ValueError as exc:
+            raise ValueError('Reviewed exclusion review date is invalid.') from exc
+        if review_date is None or review_date > date.today() or reviewed_on != review_date.isoformat():
+            raise ValueError('Reviewed exclusion review date is invalid.')
+        identity = (record_source, artifact, content_index)
+        if identity in identities:
+            raise ValueError('Reviewed exclusion manifest contains a duplicate exclusion.')
+        identities.add(identity)
+        if record_source != source_id:
+            continue
+        reviewed_artifact = reviewed.get(artifact)
+        if reviewed_artifact is None:
+            raise ValueError('Reviewed exclusion references an unknown artifact.')
+        if reviewed_artifact['sha256'] != digest:
+            raise ValueError('Reviewed exclusion artifact digest is stale or unapproved.')
+        selected.append(dict(value))
+    return tuple(selected)
+
+
+def _reject_duplicate_manifest_members(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('Reviewed artifact manifest contains duplicate members.')
+        value[key] = item
+    return value
+
+
+def _reject_manifest_constant(_value: str) -> None:
+    raise ValueError('Reviewed artifact manifest contains a nonstandard JSON constant.')
+
+
+def _verified_stage_artifact(
+    input_path: Path, source_id: str, filename: str,
+    reviewed: dict[str, dict[str, str]],
+) -> tuple[bytes, str]:
+    raw, checksum, acquired_url = read_acquired_artifact(
+        input_path, filename, source_id=source_id,
+    )
+    record = reviewed.get(filename)
+    if record is None or checksum != record['sha256'] or acquired_url != record['url']:
+        raise ValueError(
+            f'{filename} does not match its independently reviewed digest and URL.'
+        )
+    return raw, checksum
 
 
 def _load_stage_input(
     source_id: str, input_path: Path, metadata: SourceMetadata, *,
     reviewed_manifest_path: Path = _REVIEWED_ARTIFACTS_PATH,
+    reviewed_exclusions_path: Path | None = None,
+    applied_exclusions: list[dict[str, object]] | None = None,
+    audit_evidence: dict[str, object] | None = None,
 ):
     _safe_input_directory(input_path)
     if input_path.name != source_id:
         raise ValueError('input directory name must exactly match --source.')
     reviewed = _reviewed_source_artifacts(source_id, metadata, reviewed_manifest_path)
-    expected_codes = metadata.expected_source_books
-    rows = []
-    checksums = []
-    for code in expected_codes:
-        filename = f'{code}.json'
-        raw, checksum, acquired_url = read_acquired_artifact(
-            input_path, filename, source_id=source_id,
-        )
-        if (
-            checksum != reviewed[filename]['sha256']
-            or acquired_url != reviewed[filename]['url']
-        ):
-            raise ValueError(
-                f'{filename} does not match its independently reviewed digest and URL.'
-            )
-        checksums.append((filename, checksum))
-        loaded = tuple(load_helloao_bundle_bytes(raw, {code: _BOOK_MAP[code]}))
-        if not loaded or any(not row.source_locator.startswith(f'helloao:{source_id}:{code}:') for row in loaded):
-            raise ValueError(f'{filename} does not identify the reviewed commentary source.')
-        rows.extend(loaded)
-    _catalog_raw, catalog_checksum, catalog_url = read_acquired_artifact(
-        input_path, 'books.json', source_id=source_id,
+    if reviewed_exclusions_path is None and reviewed_manifest_path == _REVIEWED_ARTIFACTS_PATH:
+        reviewed_exclusions_path = _REVIEWED_EXCLUSIONS_PATH
+    exclusions = (
+        _reviewed_source_exclusions(source_id, reviewed_exclusions_path, reviewed)
+        if reviewed_exclusions_path is not None else ()
     )
-    if (
-        catalog_checksum != reviewed['books.json']['sha256']
-        or catalog_url != reviewed['books.json']['url']
+    excluded_by_artifact: dict[str, frozenset[int]] = {}
+    for record in exclusions:
+        artifact = record['artifact']
+        excluded_by_artifact[artifact] = frozenset({
+            *excluded_by_artifact.get(artifact, frozenset()),
+            record['content_index'],
+        })
+    catalog_raw, catalog_checksum = _verified_stage_artifact(
+        input_path, source_id, 'books.json', reviewed,
+    )
+    expected_codes = metadata.expected_source_books
+    books = load_helloao_catalog_bytes(
+        catalog_raw, source_id, {code: _BOOK_MAP[code] for code in expected_codes},
+    )
+    if tuple(book.source_book_id for book in books) != expected_codes:
+        raise ValueError('books.json does not contain the exact reviewed book set and order.')
+    if not books or any(
+        book.provider_dataset_checksum != metadata.provider_dataset_checksum
+        or book.license_url != metadata.license_url
+        or book.language != metadata.language
+        for book in books
     ):
-        raise ValueError('books.json does not match its independently reviewed digest and URL.')
-    if catalog_checksum != metadata.source_checksum:
-        raise ValueError('books.json checksum no longer matches the reviewed registry.')
-    checksums.append(('books.json', catalog_checksum))
-    serialized = json.dumps(sorted(checksums), separators=(',', ':')).encode('utf-8')
+        raise ValueError('books.json provenance does not match the reviewed source registry.')
+    expected_urls = {'books.json': metadata.upstream_url}
+    selected_artifacts: dict[str, tuple[tuple[str, int], ...]] = {}
+    for book in books:
+        selected = []
+        for filename in reviewed:
+            match = _CHAPTER_ARTIFACT.fullmatch(filename)
+            if match is not None and match.group(1) == book.source_book_id:
+                chapter = int(match.group(2))
+                if book.chapter_count == 0:
+                    raise ValueError('Reviewed manifest contains a chapter artifact for a zero-chapter book.')
+                if chapter < book.first_chapter or chapter > book.last_chapter:
+                    raise ValueError('Reviewed artifact chapter is outside catalog bounds.')
+                selected.append((filename, chapter))
+        selected.sort(key=lambda item: item[1])
+        if book.chapter_count == 0:
+            selected_artifacts[book.source_book_id] = ()
+            continue
+        if (
+            len(selected) != book.chapter_count
+            or not selected
+            or selected[0][1] != book.first_chapter
+            or selected[-1][1] != book.last_chapter
+        ):
+            raise ValueError('Reviewed artifact manifest does not match catalog chapter coverage.')
+        selected_artifacts[book.source_book_id] = tuple(selected)
+        for filename, chapter in selected:
+            expected_urls[filename] = (
+                f'https://bible.helloao.org/api/c/{source_id}/'
+                f'{book.source_book_id}/{chapter}.json'
+            )
+    if set(reviewed) != set(expected_urls) or any(
+        reviewed[name]['url'] != url for name, url in expected_urls.items()
+    ):
+        raise ValueError('Reviewed artifact manifest is incomplete; production staging is blocked.')
+
+    rows: list[NormalizedCommentaryEntry] = []
+    checksums = [('books.json', catalog_checksum)]
+    position = 0
+    total_verse_records = 0
+    total_excluded_records = 0
+    covered_normalized_chapters: set[tuple[str, int]] = set()
+    empty_provider_chapters: list[dict[str, object]] = []
+    for book in books:
+        book_verse_records = 0
+        book_excluded_records = 0
+        if book.introduction is not None:
+            rows.append(NormalizedCommentaryEntry(
+                book.work_id, None, None, None, 'book_intro', None, book.introduction,
+                f'helloao:{source_id}:{book.source_book_id}:book-intro', position,
+            ))
+            position += 1
+        for filename, chapter in selected_artifacts[book.source_book_id]:
+            raw, checksum = _verified_stage_artifact(
+                input_path, source_id, filename, reviewed,
+            )
+            checksums.append((filename, checksum))
+            excluded_indices = excluded_by_artifact.get(filename, frozenset())
+            chapter_rows = load_helloao_chapter_bytes(
+                raw, source_id, book, chapter,
+                excluded_content_indices=excluded_indices,
+            )
+            if chapter_rows:
+                covered_normalized_chapters.add((book.work_id, chapter))
+            else:
+                empty_provider_chapters.append({
+                    'source_book_id': book.source_book_id,
+                    'work_id': book.work_id,
+                    'chapter': chapter,
+                })
+            for row in chapter_rows:
+                rows.append(replace(row, position=position))
+                position += 1
+                if row.entry_type in {'verse', 'verse_range'}:
+                    book_verse_records += 1
+                    total_verse_records += 1
+            book_excluded_records += len(excluded_indices)
+            total_excluded_records += len(excluded_indices)
+        if book_verse_records + book_excluded_records != book.total_book_verses:
+            raise ValueError('Staged chapter entries do not match catalog book totals.')
+    if total_verse_records + total_excluded_records != books[0].total_commentary_verses:
+        raise ValueError('Staged chapter entries do not match catalog commentary totals.')
+    if applied_exclusions is not None:
+        applied_exclusions.extend(dict(record) for record in exclusions)
+    if audit_evidence is not None:
+        entry_type_counts = Counter(row.entry_type for row in rows)
+        audit_evidence.clear()
+        audit_evidence.update({
+            'provider_book_count': len(books),
+            'provider_chapter_count': sum(book.chapter_count for book in books),
+            'provider_content_record_count': books[0].total_commentary_verses,
+            'acquired_normalized_entry_count': len(rows),
+            'normalized_entry_type_counts': {
+                entry_type: entry_type_counts[entry_type]
+                for entry_type in ('book_intro', 'chapter_intro', 'verse', 'verse_range')
+            },
+            'reviewed_exclusion_count': len(exclusions),
+            'covered_normalized_chapter_count': len(covered_normalized_chapters),
+            'empty_provider_chapters': empty_provider_chapters,
+        })
+    serialized = json.dumps(
+        [sorted(checksums), list(exclusions)], sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
     return tuple(rows), sha256(serialized).hexdigest()
 
 
-def _metadata_snapshot(metadata: SourceMetadata) -> dict[str, object]:
+def _metadata_snapshot(
+    metadata: SourceMetadata, *,
+    reviewed_exclusions: list[dict[str, object]] | tuple[dict[str, object], ...] = (),
+    provider_audit: dict[str, object] | None = None,
+) -> dict[str, object]:
     # Resolve aliases through the same constructor path the adapter uses.
     from app.library.ingest.types import resolve_source_work_id
     expected_books = [resolve_source_work_id(_BOOK_MAP[code]) for code in metadata.expected_source_books]
-    return {
+    snapshot = {
         'title': metadata.title,
         'author': metadata.author,
         'license_spdx': metadata.license_spdx,
         'license_url': metadata.license_url,
         'attribution': metadata.attribution,
         'provenance_url': metadata.upstream_url,
+        'license_basis': metadata.license_basis,
+        'license_reviewer': metadata.license_reviewer,
         'license_reviewed_on': metadata.license_reviewed_on,
+        'reviewed_urls': list(metadata.reviewed_urls),
+        'provider_dataset_checksum': metadata.provider_dataset_checksum,
         'expected_books': expected_books,
         'expected_source_books': list(metadata.expected_source_books),
     }
+    snapshot['reviewed_exclusions'] = [dict(record) for record in reviewed_exclusions]
+    snapshot['reviewed_exclusion_count'] = len(reviewed_exclusions)
+    if provider_audit is not None:
+        snapshot['provider_audit'] = json.loads(json.dumps(
+            provider_audit, ensure_ascii=False, allow_nan=False,
+        ))
+    return snapshot
 
 
 def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
@@ -350,6 +603,74 @@ def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
             CommentaryValidationFinding.id,
         )
     ).all()
+    metadata = run.metadata_snapshot if type(run.metadata_snapshot) is dict else {}
+    warning_counts: dict[str, int] = {}
+    for item in findings:
+        if item.severity == 'warning':
+            warning_counts[item.code] = warning_counts.get(item.code, 0) + 1
+    provider_audit = metadata.get('provider_audit')
+    warning_review = metadata.get('warning_review')
+    if provider_audit is not None or warning_review is not None:
+        if type(provider_audit) is not dict:
+            raise ValueError('provider audit report metadata is missing or invalid.')
+        required = {
+            'provider_book_count', 'provider_chapter_count',
+            'provider_content_record_count', 'acquired_normalized_entry_count',
+            'normalized_entry_type_counts', 'reviewed_exclusion_count',
+            'covered_normalized_chapter_count', 'empty_provider_chapters',
+            'formula', 'expected_normalized_entry_count', 'variance',
+        }
+        breakdown = provider_audit.get('normalized_entry_type_counts')
+        empty_chapters = provider_audit.get('empty_provider_chapters')
+        if (
+            set(provider_audit) != required
+            or type(breakdown) is not dict
+            or set(breakdown) != {'book_intro', 'chapter_intro', 'verse', 'verse_range'}
+            or any(type(value) is not int or value < 0 for value in breakdown.values())
+            or type(empty_chapters) is not list
+        ):
+            raise ValueError('provider audit report metadata has an invalid schema.')
+        integer_fields = required - {
+            'normalized_entry_type_counts', 'empty_provider_chapters', 'formula',
+        }
+        if any(
+            type(provider_audit[field]) is not int or provider_audit[field] < 0
+            for field in integer_fields
+        ):
+            raise ValueError('provider audit report counts are invalid.')
+        expected = (
+            provider_audit['provider_content_record_count']
+            - provider_audit['reviewed_exclusion_count']
+            + breakdown['book_intro'] + breakdown['chapter_intro']
+        )
+        coverage = metadata.get('coverage')
+        if (
+            provider_audit['formula'] != (
+                'normalized entries = provider content records - reviewed exclusions '
+                '+ book introductions + chapter introductions'
+            )
+            or provider_audit['expected_normalized_entry_count'] != expected
+            or provider_audit['variance'] != 0
+            or provider_audit['acquired_normalized_entry_count'] != expected
+            or sum(breakdown.values()) != expected
+            or provider_audit['provider_chapter_count'] != (
+                provider_audit['covered_normalized_chapter_count'] + len(empty_chapters)
+            )
+            or run.staged_count != expected
+            or type(coverage) is not dict or coverage.get('entries') != expected
+            or provider_audit['reviewed_exclusion_count']
+            != metadata.get('reviewed_exclusion_count', 0)
+            or provider_audit['reviewed_exclusion_count']
+            != warning_counts.get('reviewed_exclusion', 0)
+        ):
+            raise ValueError('provider audit report totals do not reconcile.')
+        expected_warning_review = warning_review_snapshot(warning_counts)
+        if (
+            warning_review != expected_warning_review
+            or run.warning_count != expected_warning_review['warning_count']
+            or run.error_count != sum(item.severity == 'error' for item in findings)
+        ):
+            raise ValueError('report warning counts do not reconcile with validation findings.')
     return {
         'run_id': str(run.id),
         'source_id': run.source_id,
@@ -358,7 +679,11 @@ def _build_report(session: Session, run_id: UUID) -> dict[str, object]:
         'staged_count': run.staged_count,
         'errors': run.error_count,
         'warnings': run.warning_count,
-        'coverage': run.metadata_snapshot.get('coverage'),
+        'coverage': metadata.get('coverage'),
+        'reviewed_exclusion_count': metadata.get('reviewed_exclusion_count', 0),
+        'reviewed_exclusions': metadata.get('reviewed_exclusions', []),
+        'provider_audit': provider_audit,
+        'warning_review': warning_review,
         'findings': [
             {
                 'severity': item.severity, 'code': item.code, 'message': item.message,
@@ -506,14 +831,22 @@ def stage(
         registry = _registry()
         if source not in registry:
             raise ValueError('source must be one of the five approved source IDs.')
-        rows, checksum = _load_stage_input(source, input_path, registry[source])
+        reviewed_exclusions: list[dict[str, object]] = []
+        provider_audit: dict[str, object] = {}
+        rows, checksum = _load_stage_input(
+            source, input_path, registry[source], applied_exclusions=reviewed_exclusions,
+            audit_evidence=provider_audit,
+        )
         factory = _session_factory(database_url)
         with factory() as session:
             try:
                 _ensure_source(session, source, registry[source])
                 run = stage_bundle(
                     session, source_id=source, source_checksum=checksum,
-                    metadata_snapshot=_metadata_snapshot(registry[source]), rows=rows,
+                    metadata_snapshot=_metadata_snapshot(
+                        registry[source], reviewed_exclusions=reviewed_exclusions,
+                        provider_audit=provider_audit,
+                    ), rows=rows,
                 )
                 session.commit()
             except Exception:

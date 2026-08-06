@@ -15,6 +15,80 @@ runner = CliRunner()
 BACKEND = Path(__file__).parents[3]
 
 
+def _catalog_document():
+    return {
+        'commentary': {
+            'id': 'matthew-henry', 'name': 'Matthew Henry Bible Commentary',
+            'website': 'https://en.wikipedia.org/wiki/Matthew_Henry',
+            'licenseUrl': 'https://creativecommons.org/publicdomain/mark/1.0/',
+            'licenseNotes': None, 'licenseNotice': None,
+            'englishName': 'Matthew Henry Bible Commentary', 'language': 'eng',
+            'textDirection': 'ltr', 'sha256': 'a' * 64, 'availableFormats': ['json'],
+            'listOfBooksApiLink': '/api/c/matthew-henry/books.json',
+            'listOfProfilesApiLink': '/api/c/matthew-henry/profiles.json',
+            'numberOfBooks': 1, 'totalNumberOfChapters': 1,
+            'totalNumberOfVerses': 2, 'totalNumberOfProfiles': 0,
+            'languageName': 'English', 'languageEnglishName': 'English',
+        },
+        'books': [{
+            'id': 'GEN', 'commentaryId': 'matthew-henry', 'name': 'Genesis',
+            'commonName': 'Genesis', 'introduction': 'Book introduction.', 'order': 1,
+            'numberOfChapters': 1, 'firstChapterNumber': 1,
+            'firstChapterApiLink': '/api/c/matthew-henry/GEN/1.json',
+            'firstChapterReference': {
+                'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+            },
+            'lastChapterNumber': 1,
+            'lastChapterApiLink': '/api/c/matthew-henry/GEN/1.json',
+            'lastChapterReference': {
+                'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+            },
+            'sha256': 'b' * 64,
+            'totalNumberOfVerses': 2,
+        }],
+    }
+
+
+def _chapter_document():
+    catalog = _catalog_document()
+    return {
+        'commentary': catalog['commentary'], 'book': catalog['books'][0],
+        'thisChapterLink': '/api/c/matthew-henry/GEN/1.json',
+        'thisChapterReference': {
+            'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+        },
+        'nextChapterApiLink': None, 'previousChapterApiLink': None,
+        'nextChapterReference': None, 'previousChapterReference': None,
+        'numberOfVerses': 2,
+        'chapter': {'number': 1, 'introduction': 'Chapter introduction.', 'content': [
+            {'type': 'verse', 'number': 1, 'content': ['One.']},
+            {'type': 'verse', 'number': '2-3', 'content': ['Two through three.']},
+        ]},
+    }
+
+
+def _json_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':')).encode('utf-8')
+
+
+def _write_generation(source_dir, filename, raw, url):
+    from hashlib import sha256
+
+    digest = sha256(raw).hexdigest()
+    directory = source_dir / 'generations' / filename / digest
+    directory.mkdir(parents=True)
+    (directory / filename).write_bytes(raw)
+    marker = {
+        'schema_version': 1, 'source_id': 'matthew-henry',
+        'artifact': filename, 'url': url, 'sha256': digest,
+        'generation': f'generations/{filename}/{digest}',
+    }
+    (source_dir / f'{filename}.current.json').write_text(
+        json.dumps(marker), encoding='utf-8',
+    )
+    return digest
+
+
 def payload(result):
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 1
@@ -156,6 +230,30 @@ def test_report_findings_are_ordered_by_every_emitted_field(
     assert [item['message'] for item in report['findings']] == ['Alpha', 'Zulu']
 
 
+def test_report_exposes_reviewed_exclusion_audit_metadata(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.cli import _build_report
+    from app.commentary.models import CommentaryImportRun
+
+    exclusion = _exclusion_record('EZK-40.json', 'a' * 64, 4)
+    run = CommentaryImportRun(
+        source_id=commentary_source.id, source_checksum='a' * 64,
+        metadata_snapshot={
+            'coverage': {'entries': 10}, 'reviewed_exclusion_count': 1,
+            'reviewed_exclusions': [exclusion],
+        },
+        status='verified', staged_count=10,
+    )
+    commentary_session.add(run)
+    commentary_session.flush()
+
+    report = _build_report(commentary_session, run.id)
+
+    assert report['reviewed_exclusion_count'] == 1
+    assert report['reviewed_exclusions'] == [exclusion]
+
+
 def test_cli_commits_at_boundary_after_success(monkeypatch):
     from app.commentary.ingest import cli
 
@@ -293,63 +391,171 @@ def test_stage_rejects_symlinked_input_ancestor(tmp_path):
 
 def test_stage_parses_the_same_verified_bytes_when_path_is_swapped(monkeypatch, tmp_path):
     from dataclasses import replace
-    from hashlib import sha256
     from app.commentary.ingest import cli
 
     source_dir = tmp_path / 'matthew-henry'
     source_dir.mkdir()
-    fixture = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
-    trusted = fixture.read_bytes()
-    book_checksum = sha256(trusted).hexdigest()
-    catalog = b'{}'
-    catalog_checksum = sha256(catalog).hexdigest()
-    book_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN.json'
+    trusted = _json_bytes(_chapter_document())
+    catalog = _json_bytes(_catalog_document())
+    chapter_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
     catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
-
-    def generation(filename, raw, url):
-        digest = sha256(raw).hexdigest()
-        directory = source_dir / 'generations' / filename / digest
-        directory.mkdir(parents=True)
-        (directory / filename).write_bytes(raw)
-        marker = {
-            'schema_version': 1, 'source_id': 'matthew-henry',
-            'artifact': filename, 'url': url, 'sha256': digest,
-            'generation': f'generations/{filename}/{digest}',
-        }
-        (source_dir / f'{filename}.current.json').write_text(
-            json.dumps(marker), encoding='utf-8',
-        )
-
-    generation('GEN.json', trusted, book_url)
-    generation('books.json', catalog, catalog_url)
+    chapter_checksum = _write_generation(source_dir, 'GEN-1.json', trusted, chapter_url)
+    catalog_checksum = _write_generation(source_dir, 'books.json', catalog, catalog_url)
     reviewed = tmp_path / 'reviewed.json'
     reviewed.write_text(json.dumps({
         'schema_version': 1,
         'sources': {'matthew-henry': {'artifacts': {
-            'GEN.json': {'url': book_url, 'sha256': book_checksum},
+            'GEN-1.json': {'url': chapter_url, 'sha256': chapter_checksum},
             'books.json': {'url': catalog_url, 'sha256': catalog_checksum},
         }}},
     }), encoding='utf-8')
     metadata = replace(
         cli._registry()['matthew-henry'], expected_book_count=1,
-        expected_source_books=('GEN',), source_checksum=catalog_checksum,
+        expected_source_books=('GEN',), provider_dataset_checksum='a' * 64,
     )
-    real_loader = cli.load_helloao_bundle_bytes
+    real_loader = cli.load_helloao_chapter_bytes
     loader_calls = 0
 
-    def swapping_loader(raw, book_map):
+    def swapping_loader(
+        raw, source_id, book, expected_chapter, *, excluded_content_indices=frozenset(),
+    ):
         nonlocal loader_calls
         loader_calls += 1
-        active = source_dir / 'generations' / 'GEN.json' / book_checksum / 'GEN.json'
+        active = (
+            source_dir / 'generations' / 'GEN-1.json' / chapter_checksum / 'GEN-1.json'
+        )
         active.write_bytes(b'{"hostile":true}')
-        return real_loader(raw, book_map)
+        return real_loader(
+            raw, source_id, book, expected_chapter,
+            excluded_content_indices=excluded_content_indices,
+        )
 
-    monkeypatch.setattr(cli, 'load_helloao_bundle_bytes', swapping_loader)
+    monkeypatch.setattr(cli, 'load_helloao_chapter_bytes', swapping_loader)
+    audit_evidence = {}
+    rows, _checksum = cli._load_stage_input(
+        'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+        audit_evidence=audit_evidence,
+    )
+    assert loader_calls == 1
+    assert rows[0].body == 'Book introduction.'
+    assert [row.position for row in rows] == [0, 1, 2, 3]
+    assert audit_evidence == {
+        'provider_book_count': 1,
+        'provider_chapter_count': 1,
+        'provider_content_record_count': 2,
+        'acquired_normalized_entry_count': 4,
+        'normalized_entry_type_counts': {
+            'book_intro': 1, 'chapter_intro': 1, 'verse': 1, 'verse_range': 1,
+        },
+        'reviewed_exclusion_count': 0,
+        'covered_normalized_chapter_count': 1,
+        'empty_provider_chapters': [],
+    }
+
+
+def test_stage_retains_zero_chapter_book_intro_without_requiring_chapter_artifact(tmp_path):
+    from dataclasses import replace
+    from app.commentary.ingest import cli
+
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    catalog = _catalog_document()
+    catalog['commentary']['numberOfBooks'] = 2
+    catalog['books'].append({
+        'id': 'SNG', 'commentaryId': 'matthew-henry',
+        'name': 'Song of Songs', 'commonName': 'Song of Songs',
+        'introduction': 'Song introduction.', 'order': 2,
+        'numberOfChapters': 0, 'firstChapterNumber': None,
+        'firstChapterApiLink': None, 'firstChapterReference': None,
+        'lastChapterNumber': None, 'lastChapterApiLink': None,
+        'lastChapterReference': None, 'sha256': 'c' * 64,
+        'totalNumberOfVerses': 0,
+    })
+    catalog_raw = _json_bytes(catalog)
+    chapter = _chapter_document()
+    chapter['commentary'] = catalog['commentary']
+    chapter['book'] = catalog['books'][0]
+    chapter_raw = _json_bytes(chapter)
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+    chapter_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
+    catalog_checksum = _write_generation(source_dir, 'books.json', catalog_raw, catalog_url)
+    chapter_checksum = _write_generation(source_dir, 'GEN-1.json', chapter_raw, chapter_url)
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
+            'books.json': {'url': catalog_url, 'sha256': catalog_checksum},
+            'GEN-1.json': {'url': chapter_url, 'sha256': chapter_checksum},
+        }}},
+    }), encoding='utf-8')
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=2,
+        expected_source_books=('GEN', 'SNG'), provider_dataset_checksum='a' * 64,
+    )
+
     rows, _checksum = cli._load_stage_input(
         'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
     )
-    assert loader_calls == 1
-    assert rows[0].body == 'An introduction to Genesis.'
+
+    assert [row.work_id for row in rows if row.entry_type == 'book_intro'] == [
+        'genesis', 'song-of-solomon',
+    ]
+    assert rows[-1].body == 'Song introduction.'
+
+
+def test_stage_rejects_chapter_artifact_for_zero_chapter_book(tmp_path):
+    from dataclasses import replace
+    from app.commentary.ingest import cli
+
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    catalog = _catalog_document()
+    catalog['commentary']['numberOfBooks'] = 2
+    catalog['books'].append({
+        'id': 'SNG', 'commentaryId': 'matthew-henry',
+        'name': 'Song of Songs', 'commonName': 'Song of Songs',
+        'introduction': 'Song introduction.', 'order': 2,
+        'numberOfChapters': 0, 'firstChapterNumber': None,
+        'firstChapterApiLink': None, 'firstChapterReference': None,
+        'lastChapterNumber': None, 'lastChapterApiLink': None,
+        'lastChapterReference': None, 'sha256': 'c' * 64,
+        'totalNumberOfVerses': 0,
+    })
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+    genesis_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
+    song_url = 'https://bible.helloao.org/api/c/matthew-henry/SNG/1.json'
+    checksums = {
+        'books.json': _write_generation(
+            source_dir, 'books.json', _json_bytes(catalog), catalog_url,
+        ),
+        'GEN-1.json': _write_generation(
+            source_dir, 'GEN-1.json', _json_bytes({
+                **_chapter_document(), 'commentary': catalog['commentary'],
+                'book': catalog['books'][0],
+            }), genesis_url,
+        ),
+        'SNG-1.json': _write_generation(
+            source_dir, 'SNG-1.json', b'{}', song_url,
+        ),
+    }
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
+            name: {'url': url, 'sha256': checksums[name]}
+            for name, url in {
+                'books.json': catalog_url, 'GEN-1.json': genesis_url,
+                'SNG-1.json': song_url,
+            }.items()
+        }}},
+    }), encoding='utf-8')
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=2,
+        expected_source_books=('GEN', 'SNG'), provider_dataset_checksum='a' * 64,
+    )
+
+    with pytest.raises(ValueError, match='zero-chapter'):
+        cli._load_stage_input(
+            'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+        )
 
 
 def test_stage_rejects_self_authored_sidecar_without_reviewed_digest(tmp_path):
@@ -359,32 +565,36 @@ def test_stage_rejects_self_authored_sidecar_without_reviewed_digest(tmp_path):
 
     source_dir = tmp_path / 'matthew-henry'
     source_dir.mkdir()
-    fixture = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
-    raw = fixture.read_bytes()
+    raw = _json_bytes(_chapter_document())
     digest = sha256(raw).hexdigest()
-    generation = source_dir / 'generations' / 'GEN.json' / digest
+    generation = source_dir / 'generations' / 'GEN-1.json' / digest
     generation.mkdir(parents=True)
-    (generation / 'GEN.json').write_bytes(raw)
-    (generation / 'GEN.json.sha256').write_text(f'{digest}  GEN.json\n', encoding='ascii')
-    (source_dir / 'GEN.json.current.json').write_text(json.dumps({
-        'schema_version': 1, 'source_id': 'matthew-henry', 'artifact': 'GEN.json',
-        'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN.json',
-        'sha256': digest, 'generation': f'generations/GEN.json/{digest}',
+    (generation / 'GEN-1.json').write_bytes(raw)
+    (generation / 'GEN-1.json.sha256').write_text(
+        f'{digest}  GEN-1.json\n', encoding='ascii',
+    )
+    chapter_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
+    (source_dir / 'GEN-1.json.current.json').write_text(json.dumps({
+        'schema_version': 1, 'source_id': 'matthew-henry', 'artifact': 'GEN-1.json',
+        'url': chapter_url, 'sha256': digest,
+        'generation': f'generations/GEN-1.json/{digest}',
     }), encoding='utf-8')
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+    catalog = _json_bytes(_catalog_document())
+    catalog_digest = _write_generation(source_dir, 'books.json', catalog, catalog_url)
     metadata = replace(
         cli._registry()['matthew-henry'], expected_book_count=1,
-        expected_source_books=('GEN',), source_checksum='a' * 64,
+        expected_source_books=('GEN',), provider_dataset_checksum='a' * 64,
     )
     reviewed = tmp_path / 'reviewed.json'
     reviewed.write_text(json.dumps({
         'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
-            'GEN.json': {
-                'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN.json',
+            'GEN-1.json': {
+                'url': chapter_url,
                 'sha256': 'b' * 64,
             },
             'books.json': {
-                'url': 'https://bible.helloao.org/api/c/matthew-henry/books.json',
-                'sha256': 'a' * 64,
+                'url': catalog_url, 'sha256': catalog_digest,
             },
         }}},
     }), encoding='utf-8')
@@ -395,14 +605,198 @@ def test_stage_rejects_self_authored_sidecar_without_reviewed_digest(tmp_path):
         )
 
 
-def test_production_review_manifest_blocks_unreviewed_book_staging():
+def _reviewed_exclusions(path, records):
+    path.write_text(json.dumps({
+        'schema_version': 1, 'exclusions': records,
+    }), encoding='utf-8')
+    return path
+
+
+def _exclusion_record(artifact, digest, index):
+    return {
+        'source_id': 'matthew-henry', 'artifact': artifact,
+        'artifact_sha256': digest, 'content_index': index,
+        'reason': 'Verified misfiled land-division note; not commentary on this chapter.',
+        'reviewer': 'Test reviewer', 'reviewed_on': '2026-08-04',
+    }
+
+
+def test_stage_applies_exact_checksum_reviewed_exclusion_and_records_audit_metadata(tmp_path):
+    from dataclasses import replace
     from app.commentary.ingest import cli
 
-    with pytest.raises(ValueError, match='incomplete'):
-        cli._reviewed_source_artifacts(
-            'matthew-henry', cli._registry()['matthew-henry'],
-            cli._REVIEWED_ARTIFACTS_PATH,
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    catalog = _catalog_document()
+    catalog['commentary']['totalNumberOfVerses'] = 3
+    catalog['books'][0]['totalNumberOfVerses'] = 3
+    chapter = _chapter_document()
+    chapter['commentary'] = catalog['commentary']
+    chapter['book'] = catalog['books'][0]
+    chapter['numberOfVerses'] = 3
+    chapter['chapter']['content'].append({
+        'type': 'verse', 'number': 48, 'content': ['Misfiled land-division note.'],
+    })
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+    chapter_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
+    catalog_digest = _write_generation(
+        source_dir, 'books.json', _json_bytes(catalog), catalog_url,
+    )
+    chapter_digest = _write_generation(
+        source_dir, 'GEN-1.json', _json_bytes(chapter), chapter_url,
+    )
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
+            'books.json': {'url': catalog_url, 'sha256': catalog_digest},
+            'GEN-1.json': {'url': chapter_url, 'sha256': chapter_digest},
+        }}},
+    }), encoding='utf-8')
+    exclusions = _reviewed_exclusions(
+        tmp_path / 'exclusions.json',
+        [_exclusion_record('GEN-1.json', chapter_digest, 2)],
+    )
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=1,
+        expected_source_books=('GEN',), provider_dataset_checksum='a' * 64,
+    )
+    applied = []
+
+    rows, _ = cli._load_stage_input(
+        'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+        reviewed_exclusions_path=exclusions, applied_exclusions=applied,
+    )
+
+    assert 'Misfiled land-division note.' not in {row.body for row in rows}
+    assert [row.position for row in rows] == list(range(len(rows)))
+    assert applied == [_exclusion_record('GEN-1.json', chapter_digest, 2)]
+
+
+@pytest.mark.parametrize(('change', 'message'), [
+    (lambda record: record.update(artifact_sha256='f' * 64), 'digest'),
+    (lambda record: record.update(artifact='EXO-1.json'), 'artifact'),
+    (lambda record: record.update(content_index=99), 'exclusion'),
+    (lambda record: record.update(source_id='unknown-source'), 'source'),
+])
+def test_stage_rejects_stale_unknown_or_out_of_range_reviewed_exclusion(
+    tmp_path, change, message,
+):
+    from dataclasses import replace
+    from app.commentary.ingest import cli
+
+    source_dir = tmp_path / 'matthew-henry'
+    source_dir.mkdir()
+    catalog_raw = _json_bytes(_catalog_document())
+    chapter_raw = _json_bytes(_chapter_document())
+    catalog_url = 'https://bible.helloao.org/api/c/matthew-henry/books.json'
+    chapter_url = 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json'
+    catalog_digest = _write_generation(source_dir, 'books.json', catalog_raw, catalog_url)
+    chapter_digest = _write_generation(source_dir, 'GEN-1.json', chapter_raw, chapter_url)
+    reviewed = tmp_path / 'reviewed.json'
+    reviewed.write_text(json.dumps({
+        'schema_version': 1, 'sources': {'matthew-henry': {'artifacts': {
+            'books.json': {'url': catalog_url, 'sha256': catalog_digest},
+            'GEN-1.json': {'url': chapter_url, 'sha256': chapter_digest},
+        }}},
+    }), encoding='utf-8')
+    record = _exclusion_record('GEN-1.json', chapter_digest, 1)
+    change(record)
+    exclusions = _reviewed_exclusions(tmp_path / 'exclusions.json', [record])
+    metadata = replace(
+        cli._registry()['matthew-henry'], expected_book_count=1,
+        expected_source_books=('GEN',), provider_dataset_checksum='a' * 64,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        cli._load_stage_input(
+            'matthew-henry', source_dir, metadata, reviewed_manifest_path=reviewed,
+            reviewed_exclusions_path=exclusions,
         )
+
+
+def test_reviewed_exclusions_reject_duplicate_records_and_tampered_schema(tmp_path):
+    from app.commentary.ingest import cli
+
+    reviewed = {'GEN-1.json': {
+        'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json',
+        'sha256': 'a' * 64,
+    }}
+    record = _exclusion_record('GEN-1.json', 'a' * 64, 1)
+    duplicate = _reviewed_exclusions(tmp_path / 'duplicate.json', [record, record])
+    with pytest.raises(ValueError, match='duplicate'):
+        cli._reviewed_source_exclusions('matthew-henry', duplicate, reviewed)
+
+    tampered = tmp_path / 'tampered.json'
+    tampered.write_text(
+        '{"schema_version":1,"schema_version":1,"exclusions":[]}', encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='valid JSON'):
+        cli._reviewed_source_exclusions('matthew-henry', tampered, reviewed)
+
+
+@pytest.mark.parametrize('unsafe_reason', [
+    '<em>reviewed</em>', 'reviewed\ud800', ' reviewed ', 'line\nbreak',
+])
+def test_reviewed_exclusions_reject_unsafe_or_noncanonical_review_text(
+    tmp_path, unsafe_reason,
+):
+    from app.commentary.ingest import cli
+
+    reviewed = {'GEN-1.json': {
+        'url': 'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json',
+        'sha256': 'a' * 64,
+    }}
+    record = _exclusion_record('GEN-1.json', 'a' * 64, 1)
+    record['reason'] = unsafe_reason
+    path = _reviewed_exclusions(tmp_path / 'unsafe.json', [record])
+
+    with pytest.raises(ValueError, match='reason'):
+        cli._reviewed_source_exclusions('matthew-henry', path, reviewed)
+
+
+def test_metadata_snapshot_records_reviewed_exclusions_and_count():
+    from app.commentary.ingest import cli
+
+    exclusion = _exclusion_record('EZK-40.json', 'a' * 64, 4)
+    snapshot = cli._metadata_snapshot(
+        cli._registry()['matthew-henry'], reviewed_exclusions=[exclusion],
+    )
+
+    assert snapshot['reviewed_exclusion_count'] == 1
+    assert snapshot['reviewed_exclusions'] == [exclusion]
+
+
+def test_production_review_manifest_has_complete_reviewed_chapter_set():
+    from app.commentary.ingest import cli
+
+    artifacts = cli._reviewed_source_artifacts(
+        'matthew-henry', cli._registry()['matthew-henry'],
+        cli._REVIEWED_ARTIFACTS_PATH,
+    )
+
+    assert 'books.json' in artifacts
+    assert 'EZK-40.json' in artifacts
+    assert len(artifacts) > 1_000
+
+
+def test_production_exclusion_is_exactly_checksum_bound_to_misfiled_ezekiel_record():
+    from app.commentary.ingest import cli
+
+    artifacts = cli._reviewed_source_artifacts(
+        'matthew-henry', cli._registry()['matthew-henry'],
+        cli._REVIEWED_ARTIFACTS_PATH,
+    )
+    exclusions = cli._reviewed_source_exclusions(
+        'matthew-henry', cli._REVIEWED_EXCLUSIONS_PATH, artifacts,
+    )
+
+    assert exclusions == ({
+        'source_id': 'matthew-henry', 'artifact': 'EZK-40.json',
+        'artifact_sha256': '1906ea01374f9db6edb02fc15f22ebe5a313a11c989165cd84933c270493616f',
+        'content_index': 4,
+        'reason': 'Verified misfiled land-division commentary belonging to Ezekiel 48; not commentary on Ezekiel 40.',
+        'reviewer': 'Codex-assisted review', 'reviewed_on': '2026-08-05',
+    },)
 
 
 def _run_cli(*arguments: str):
@@ -412,6 +806,57 @@ def _run_cli(*arguments: str):
         [sys.executable, '-m', 'app.commentary.ingest.cli', *arguments],
         cwd=BACKEND, env=environment, text=True, capture_output=True, check=False,
     )
+
+
+def test_standalone_stage_registers_library_metadata_before_flushing(tmp_path):
+    from app.commentary import models as commentary_models  # noqa: F401
+    from app.config import Settings
+    from app.database import Base, create_database_engine, create_session_factory
+    from app.library.seed import seed_ethiopian_canon
+
+    database = tmp_path / 'standalone-stage.sqlite'
+    database_url = f'sqlite:///{database}'
+    engine = create_database_engine(Settings(environment='test', database_url=database_url))
+    Base.metadata.create_all(engine)
+    factory = create_session_factory(engine)
+    with factory() as session:
+        seed_ethiopian_canon(session)
+        session.commit()
+    engine.dispose()
+
+    # Run stage in a fresh interpreter, as the administrator command is run in production.
+    # Only the bundle loader is replaced so this small regression does not need the full
+    # reviewed multi-gigabyte source bundle; database/session/staging behavior stays real.
+    script = """
+import os
+
+from app.commentary.ingest import cli
+from app.commentary.ingest.types import NormalizedCommentaryEntry
+
+cli._load_stage_input = lambda *_args, **_kwargs: ([
+    NormalizedCommentaryEntry(
+        'genesis', 1, 1, 1, 'verse', None, 'In the beginning.',
+        'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json', 0,
+    )
+], 'a' * 64)
+cli.app(args=[
+    'stage', '--source', 'matthew-henry', '--input', '.',
+    '--database-url', os.environ['DATABASE_URL_FOR_TEST'],
+])
+"""
+    environment = os.environ.copy()
+    environment['PYTHONPATH'] = str(BACKEND)
+    environment['DATABASE_URL_FOR_TEST'] = database_url
+    result = subprocess.run(
+        [sys.executable, '-c', script], cwd=BACKEND, env=environment,
+        text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == ''
+    document = json.loads(result.stdout)
+    assert document['status'] == 'staged'
+    assert document['staged_count'] == 1
 
 
 @pytest.mark.parametrize(('arguments', 'command', 'code', 'exit_code'), [

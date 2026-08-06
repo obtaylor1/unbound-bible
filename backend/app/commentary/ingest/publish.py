@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import date
 from hashlib import sha256
 import json
 import re
+from types import MappingProxyType
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
@@ -24,11 +27,197 @@ from app.commentary.models import (
     StagedCommentaryEntry,
 )
 
-from .types import NormalizedCommentaryEntry
-from .validate import has_exact_chapter_coverage, validate_commentary
+from .types import NormalizedCommentaryEntry, _normalize_scalar
+from .validate import ValidationFinding, has_exact_chapter_coverage, validate_commentary
 
 
 _CHECKSUM = re.compile(r'^[0-9a-f]{64}$')
+_EXCLUSION_ARTIFACT = re.compile(r'^[A-Z0-9]{3}-[1-9][0-9]*\.json$')
+_EXCLUSION_FIELDS = frozenset({
+    'source_id', 'artifact', 'artifact_sha256', 'content_index',
+    'reason', 'reviewer', 'reviewed_on',
+})
+_ENTRY_TYPES = ('book_intro', 'chapter_intro', 'verse', 'verse_range')
+_PROVIDER_AUDIT_FIELDS = frozenset({
+    'provider_book_count', 'provider_chapter_count', 'provider_content_record_count',
+    'acquired_normalized_entry_count', 'normalized_entry_type_counts',
+    'reviewed_exclusion_count', 'covered_normalized_chapter_count',
+    'empty_provider_chapters',
+})
+_PROVIDER_AUDIT_DERIVED_FIELDS = frozenset({
+    'formula', 'expected_normalized_entry_count', 'variance',
+})
+_WARNING_REVIEW_POLICY = MappingProxyType({
+    'missing_chapter_intro': MappingProxyType({
+        'disposition': 'accepted',
+        'rationale': (
+            'The provider omits a chapter introduction; the application preserves that '
+            'absence and does not fabricate commentary.'
+        ),
+    }),
+    'multiple_notes_at_anchor': MappingProxyType({
+        'disposition': 'accepted',
+        'rationale': 'Distinct provider notes at the same anchor are preserved as distinct entries.',
+    }),
+    'reviewed_exclusion': MappingProxyType({
+        'disposition': 'accepted',
+        'rationale': 'The exclusion is accepted only through a checksum-bound reviewed decision.',
+    }),
+})
+_AUDIT_FORMULA = (
+    'normalized entries = provider content records - reviewed exclusions '
+    '+ book introductions + chapter introductions'
+)
+
+
+def _audit_nonnegative_integer(name: str, value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f'provider audit {name} must be a nonnegative integer.')
+    return value
+
+
+def reconcile_provider_audit(
+    audit: object, rows: Iterable[NormalizedCommentaryEntry],
+) -> dict[str, object]:
+    """Recompute and seal the provider-to-normalized count reconciliation."""
+    if not isinstance(audit, Mapping):
+        raise ValueError('provider audit must be a JSON object.')
+    fields = set(audit)
+    if fields not in (
+        _PROVIDER_AUDIT_FIELDS,
+        _PROVIDER_AUDIT_FIELDS | _PROVIDER_AUDIT_DERIVED_FIELDS,
+    ):
+        raise ValueError('provider audit has an invalid schema.')
+    materialized = tuple(rows)
+    if not all(isinstance(row, NormalizedCommentaryEntry) for row in materialized):
+        raise ValueError('provider audit rows must be normalized commentary entries.')
+    counts = {
+        field: _audit_nonnegative_integer(field, audit[field])
+        for field in _PROVIDER_AUDIT_FIELDS
+        if field not in {'normalized_entry_type_counts', 'empty_provider_chapters'}
+    }
+    raw_breakdown = audit['normalized_entry_type_counts']
+    if not isinstance(raw_breakdown, Mapping) or set(raw_breakdown) != set(_ENTRY_TYPES):
+        raise ValueError('provider audit normalized entry type counts have an invalid schema.')
+    breakdown = {
+        entry_type: _audit_nonnegative_integer(
+            f'normalized_entry_type_counts.{entry_type}', raw_breakdown[entry_type],
+        )
+        for entry_type in _ENTRY_TYPES
+    }
+    actual_breakdown = Counter(row.entry_type for row in materialized)
+    if breakdown != {entry_type: actual_breakdown[entry_type] for entry_type in _ENTRY_TYPES}:
+        raise ValueError('provider audit normalized entry type counts do not match staged rows.')
+    if counts['acquired_normalized_entry_count'] != len(materialized):
+        raise ValueError('provider audit acquired normalized entry count does not match staged rows.')
+    observed_books = {row.work_id for row in materialized}
+    if counts['provider_book_count'] != len(observed_books):
+        raise ValueError('provider audit book count does not match normalized books.')
+    covered_chapters = {
+        (row.work_id, row.chapter) for row in materialized if row.chapter is not None
+    }
+    if counts['covered_normalized_chapter_count'] != len(covered_chapters):
+        raise ValueError('provider audit covered chapter count does not match staged rows.')
+    empty_value = audit['empty_provider_chapters']
+    if type(empty_value) is not list:
+        raise ValueError('provider audit empty provider chapters must be a list.')
+    empty_chapters: list[dict[str, object]] = []
+    empty_identities: set[tuple[str, str, int]] = set()
+    for value in empty_value:
+        if not isinstance(value, Mapping) or set(value) != {
+            'source_book_id', 'work_id', 'chapter',
+        }:
+            raise ValueError('provider audit empty provider chapter has an invalid schema.')
+        source_book_id, work_id, chapter = (
+            value['source_book_id'], value['work_id'], value['chapter'],
+        )
+        if (
+            type(source_book_id) is not str
+            or re.fullmatch(r'[A-Z0-9]{1,16}', source_book_id) is None
+            or type(work_id) is not str or not work_id
+            or type(chapter) is not int or chapter <= 0
+            or (work_id, chapter) in covered_chapters
+            or (source_book_id, work_id, chapter) in empty_identities
+        ):
+            raise ValueError('provider audit empty provider chapter is invalid or covered.')
+        empty_identities.add((source_book_id, work_id, chapter))
+        empty_chapters.append({
+            'source_book_id': source_book_id, 'work_id': work_id, 'chapter': chapter,
+        })
+    empty_chapters.sort(key=lambda value: (
+        value['source_book_id'], value['chapter'], value['work_id'],
+    ))
+    if empty_value != empty_chapters:
+        raise ValueError('provider audit empty provider chapters must be canonical and ordered.')
+    if (
+        counts['provider_chapter_count']
+        != counts['covered_normalized_chapter_count'] + len(empty_chapters)
+    ):
+        raise ValueError('provider audit chapter counts do not reconcile with empty chapters.')
+    expected = (
+        counts['provider_content_record_count'] - counts['reviewed_exclusion_count']
+        + breakdown['book_intro'] + breakdown['chapter_intro']
+    )
+    variance = counts['acquired_normalized_entry_count'] - expected
+    if expected < 0 or variance != 0:
+        raise ValueError('provider audit normalized entry formula has a nonzero variance.')
+    result = {
+        **{field: counts[field] for field in _PROVIDER_AUDIT_FIELDS
+           if field not in {'normalized_entry_type_counts', 'empty_provider_chapters'}},
+        'normalized_entry_type_counts': breakdown,
+        'empty_provider_chapters': empty_chapters,
+        'formula': _AUDIT_FORMULA,
+        'expected_normalized_entry_count': expected,
+        'variance': variance,
+    }
+    if fields == _PROVIDER_AUDIT_FIELDS | _PROVIDER_AUDIT_DERIVED_FIELDS and dict(audit) != result:
+        raise ValueError('provider audit derived reconciliation was tampered with.')
+    return result
+
+
+def warning_review_snapshot(counts_by_code: object) -> dict[str, object]:
+    """Acknowledge only warnings covered by the bounded reviewed policy."""
+    if not isinstance(counts_by_code, Mapping):
+        raise ValueError('warning counts must be a mapping.')
+    counts: dict[str, int] = {}
+    for code in sorted(counts_by_code):
+        count = counts_by_code[code]
+        if type(code) is not str or type(count) is not int or count <= 0:
+            raise ValueError('warning counts must use warning codes and positive integers.')
+        if code not in _WARNING_REVIEW_POLICY:
+            raise ValueError(f'warning code {code!r} has no reviewed disposition.')
+        counts[code] = count
+    dispositions = {
+        code: dict(_WARNING_REVIEW_POLICY[code]) for code in counts
+    }
+    warning_count = sum(counts.values())
+    return {
+        'policy_version': 1,
+        'counts_by_code': counts,
+        'dispositions_by_code': dispositions,
+        'warning_count': warning_count,
+        'acknowledged_warning_count': warning_count,
+        'all_warnings_reviewed': True,
+    }
+
+
+def _safe_exclusion_text(name: str, value: object, maximum: int) -> bool:
+    try:
+        return _normalize_scalar(name, value, maximum=maximum) == value
+    except ValueError:
+        return False
+
+
+def _valid_review_date(value: object) -> bool:
+    if type(value) is not str or not _safe_exclusion_text(
+        'reviewed exclusion date', value, 10,
+    ):
+        return False
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return False
+    return value == parsed.isoformat() and parsed <= date.today()
 _PUBLICATION_CONSTRAINTS = frozenset({
     'uq_commentary_editions_source_dataset_version',
     'uq_commentary_publications_source_version',
@@ -259,6 +448,55 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
         expected_books=set(expected),
         previous_coverage=_previous_coverage(session, run.source_id),
     )
+    exclusions = metadata.get('reviewed_exclusions', [])
+    exclusion_count = metadata.get('reviewed_exclusion_count', 0)
+    if (
+        type(exclusions) is not list or type(exclusion_count) is not int
+        or exclusion_count != len(exclusions)
+    ):
+        raise ValueError('metadata_snapshot reviewed exclusions are inconsistent.')
+    reviewed_findings: list[ValidationFinding] = []
+    seen_exclusions: set[tuple[str, int]] = set()
+    for exclusion in exclusions:
+        if type(exclusion) is not dict or set(exclusion) != _EXCLUSION_FIELDS:
+            raise ValueError('metadata_snapshot reviewed exclusion has an invalid schema.')
+        artifact = exclusion['artifact']
+        content_index = exclusion['content_index']
+        identity = (artifact, content_index)
+        if (
+            exclusion['source_id'] != run.source_id
+            or type(artifact) is not str or _EXCLUSION_ARTIFACT.fullmatch(artifact) is None
+            or type(exclusion['artifact_sha256']) is not str
+            or _CHECKSUM.fullmatch(exclusion['artifact_sha256']) is None
+            or type(content_index) is not int or content_index < 0
+            or identity in seen_exclusions
+            or not _safe_exclusion_text('reviewed exclusion reason', exclusion['reason'], 1000)
+            or not _safe_exclusion_text('reviewed exclusion reviewer', exclusion['reviewer'], 1000)
+            or not _valid_review_date(exclusion['reviewed_on'])
+        ):
+            raise ValueError('metadata_snapshot reviewed exclusion is invalid.')
+        seen_exclusions.add(identity)
+        reviewed_findings.append(ValidationFinding(
+            'warning', 'reviewed_exclusion',
+            f'{artifact} content index {content_index} was excluded after checksum-bound review: '
+            f'{exclusion["reason"]}',
+        ))
+    findings = (*result.findings, *reviewed_findings)
+    if 'provider_audit' in metadata:
+        metadata['provider_audit'] = reconcile_provider_audit(
+            metadata['provider_audit'], normalized_rows,
+        )
+        warning_counts = Counter(
+            finding.code for finding in findings if finding.severity == 'warning'
+        )
+        metadata['warning_review'] = warning_review_snapshot(warning_counts)
+        if (
+            metadata['provider_audit']['reviewed_exclusion_count']
+            != len(reviewed_findings)
+        ):
+            raise ValueError(
+                'provider audit reviewed exclusion count does not match reviewed decisions.'
+            )
     session.execute(delete(CommentaryValidationFinding).where(
         CommentaryValidationFinding.run_id == run.id
     ))
@@ -272,7 +510,7 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
             verse=finding.verse,
             message=finding.message,
         )
-        for finding in result.findings
+        for finding in findings
     ])
     metadata['coverage'] = {
         'books': result.coverage['books'],
@@ -292,7 +530,7 @@ def validate_run(session: Session, run_id: UUID) -> CommentaryImportRun:
     )
     run.metadata_snapshot = metadata
     run.error_count = result.error_count
-    run.warning_count = result.warning_count
+    run.warning_count = result.warning_count + len(reviewed_findings)
     run.status = 'verified' if result.publishable else 'validated'
     session.flush()
     return run

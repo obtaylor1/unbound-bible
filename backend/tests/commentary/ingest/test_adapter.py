@@ -9,6 +9,350 @@ import pytest
 FIXTURE = Path(__file__).parents[1] / 'fixtures' / 'helloao-genesis-1.json'
 
 
+def _live_catalog():
+    return {
+        'commentary': {
+            'id': 'matthew-henry', 'name': 'Matthew Henry Bible Commentary',
+            'website': 'https://en.wikipedia.org/wiki/Matthew_Henry',
+            'licenseUrl': 'https://creativecommons.org/publicdomain/mark/1.0/',
+            'licenseNotes': None, 'licenseNotice': None,
+            'englishName': 'Matthew Henry Bible Commentary', 'language': 'eng',
+            'textDirection': 'rtl', 'sha256': 'a' * 64,
+            'availableFormats': ['json'],
+            'listOfBooksApiLink': '/api/c/matthew-henry/books.json',
+            'listOfProfilesApiLink': '/api/c/matthew-henry/profiles.json',
+            'numberOfBooks': 1, 'totalNumberOfChapters': 1,
+            'totalNumberOfVerses': 2, 'totalNumberOfProfiles': 0,
+            'languageName': 'English', 'languageEnglishName': 'English',
+        },
+        'books': [{
+            'id': 'GEN', 'commentaryId': 'matthew-henry', 'name': 'Genesis',
+            'commonName': 'Genesis', 'introduction': 'Book introduction.', 'order': 1,
+            'numberOfChapters': 1, 'firstChapterNumber': 1,
+            'firstChapterApiLink': '/api/c/matthew-henry/GEN/1.json',
+            'firstChapterReference': {
+                'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+            },
+            'lastChapterNumber': 1,
+            'lastChapterApiLink': '/api/c/matthew-henry/GEN/1.json',
+            'lastChapterReference': {
+                'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+            },
+            'sha256': 'b' * 64,
+            'totalNumberOfVerses': 2,
+        }],
+    }
+
+
+def _live_chapter():
+    catalog = _live_catalog()
+    return {
+        'commentary': catalog['commentary'], 'book': catalog['books'][0],
+        'thisChapterLink': '/api/c/matthew-henry/GEN/1.json',
+        'thisChapterReference': {
+            'commentaryId': 'matthew-henry', 'book': 'GEN', 'chapter': 1,
+        },
+        'nextChapterApiLink': None, 'previousChapterApiLink': None,
+        'nextChapterReference': None, 'previousChapterReference': None,
+        'numberOfVerses': 2,
+        'chapter': {'number': 1, 'introduction': 'Chapter introduction.', 'content': [
+            {'type': 'verse', 'number': 1, 'content': ['One.']},
+            {'type': 'verse', 'number': '2-3', 'content': ['Two through three.']},
+        ]},
+    }
+
+
+def test_loads_documented_catalog_and_chapter_artifacts():
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(_live_catalog()).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    rows = load_helloao_chapter_bytes(
+        json.dumps(_live_chapter()).encode(), 'matthew-henry', books[0], 1,
+    )
+
+    assert books[0].artifact_names == ('GEN-1.json',)
+    assert books[0].chapter_urls == (
+        'https://bible.helloao.org/api/c/matthew-henry/GEN/1.json',
+    )
+    assert [(row.entry_type, row.position) for row in rows] == [
+        ('chapter_intro', 0), ('verse', 1), ('verse_range', 2),
+    ]
+    assert rows[-1].source_locator == 'helloao:matthew-henry:GEN:chapter:1:verse:2-3'
+
+
+@pytest.mark.parametrize(('source_id', 'book_id', 'chapter', 'verse'), [
+    ('adam-clarke', '2SA', 14, 27),
+    ('jamieson-fausset-brown', 'HEB', 13, 7),
+    ('keil-delitzsch', 'ISA', 38, 21),
+])
+def test_chapter_adapter_preserves_legitimate_multiple_notes_at_one_anchor(
+    source_id, book_id, chapter, verse,
+):
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    catalog = _live_catalog()
+    catalog['commentary']['id'] = source_id
+    catalog['commentary']['listOfBooksApiLink'] = f'/api/c/{source_id}/books.json'
+    catalog['books'][0].update({
+        'id': book_id, 'commentaryId': source_id,
+        'name': {'2SA': '2 Samuel', 'HEB': 'Hebrews', 'ISA': 'Isaiah'}[book_id],
+        'commonName': {'2SA': '2 Samuel', 'HEB': 'Hebrews', 'ISA': 'Isaiah'}[book_id],
+        'numberOfChapters': chapter, 'firstChapterApiLink': f'/api/c/{source_id}/{book_id}/1.json',
+        'lastChapterNumber': chapter,
+        'lastChapterApiLink': f'/api/c/{source_id}/{book_id}/{chapter}.json',
+        'lastChapterReference': {'commentaryId': source_id, 'book': book_id, 'chapter': chapter},
+        'firstChapterReference': {'commentaryId': source_id, 'book': book_id, 'chapter': 1},
+        'totalNumberOfVerses': 2,
+    })
+    catalog['commentary']['totalNumberOfChapters'] = chapter
+    books = load_helloao_catalog_bytes(
+        json.dumps(catalog).encode(), source_id, {book_id: catalog['books'][0]['name']},
+    )
+    document = _live_chapter()
+    document.update({
+        'commentary': catalog['commentary'], 'book': catalog['books'][0],
+        'thisChapterLink': f'/api/c/{source_id}/{book_id}/{chapter}.json',
+        'thisChapterReference': {'commentaryId': source_id, 'book': book_id, 'chapter': chapter},
+        'numberOfVerses': 2,
+        'chapter': {'number': chapter, 'content': [
+            {'type': 'verse', 'number': verse, 'content': ['First distinct note.']},
+            {'type': 'verse', 'number': verse, 'content': ['Second distinct note.']},
+        ]},
+    })
+    document['nextChapterApiLink'] = document['nextChapterReference'] = None
+    document['previousChapterApiLink'] = document['previousChapterReference'] = None
+
+    rows = load_helloao_chapter_bytes(
+        json.dumps(document).encode(), source_id, books[0], chapter,
+    )
+
+    assert [row.body for row in rows] == ['First distinct note.', 'Second distinct note.']
+    assert [row.position for row in rows] == [0, 1]
+    assert [row.source_locator for row in rows] == [
+        f'helloao:{source_id}:{book_id}:chapter:{chapter}:verse:{verse}:occurrence:1',
+        f'helloao:{source_id}:{book_id}:chapter:{chapter}:verse:{verse}:occurrence:2',
+    ]
+
+
+def test_chapter_adapter_quarantines_only_reviewed_raw_content_index():
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    catalog = _live_catalog()
+    catalog['commentary']['totalNumberOfVerses'] = 3
+    catalog['books'][0]['totalNumberOfVerses'] = 3
+    books = load_helloao_catalog_bytes(
+        json.dumps(catalog).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    document = _live_chapter()
+    document['commentary'] = catalog['commentary']
+    document['book'] = catalog['books'][0]
+    document['numberOfVerses'] = 3
+    document['chapter']['content'].append(
+        {'type': 'verse', 'number': 48, 'content': ['Misfiled land-division note.']},
+    )
+
+    rows = load_helloao_chapter_bytes(
+        json.dumps(document).encode(), 'matthew-henry', books[0], 1,
+        excluded_content_indices=frozenset({2}),
+    )
+
+    assert [row.body for row in rows if row.entry_type != 'chapter_intro'] == [
+        'One.', 'Two through three.',
+    ]
+
+
+def test_identical_repeated_provider_notes_remain_blocking_after_occurrence_locators():
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+    from app.commentary.ingest.validate import validate_commentary
+
+    catalog = _live_catalog()
+    books = load_helloao_catalog_bytes(
+        json.dumps(catalog).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    document = _live_chapter()
+    document['chapter']['content'][1] = {
+        'type': 'verse', 'number': 1, 'content': ['One.'],
+    }
+    rows = load_helloao_chapter_bytes(
+        json.dumps(document).encode(), 'matthew-henry', books[0], 1,
+    )
+
+    result = validate_commentary(rows, {'genesis'})
+
+    verse_rows = [row for row in rows if row.entry_type == 'verse']
+    assert verse_rows[0].source_locator != verse_rows[1].source_locator
+    assert 'duplicate_normalized_row' in {finding.code for finding in result.findings}
+    assert result.publishable is False
+
+
+@pytest.mark.parametrize('indices', [frozenset({99}), frozenset({-1}), {0}])
+def test_chapter_adapter_rejects_unknown_or_noncanonical_exclusion_indices(indices):
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(_live_catalog()).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    with pytest.raises(ValueError, match='exclusion'):
+        load_helloao_chapter_bytes(
+            json.dumps(_live_chapter()).encode(), 'matthew-henry', books[0], 1,
+            excluded_content_indices=indices,
+        )
+
+
+def test_catalog_accepts_bounded_declared_chapter_gap_without_guessing_its_location():
+    from app.commentary.ingest.adapter import load_helloao_catalog_bytes
+
+    value = _live_catalog()
+    book = value['books'][0]
+    book['numberOfChapters'] = 67
+    book['lastChapterNumber'] = 68
+    book['lastChapterApiLink'] = '/api/c/matthew-henry/GEN/68.json'
+    book['lastChapterReference']['chapter'] = 68
+    value['commentary']['totalNumberOfChapters'] = 67
+
+    descriptor = load_helloao_catalog_bytes(
+        json.dumps(value).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )[0]
+
+    assert descriptor.chapter_count == 67
+    assert descriptor.last_chapter == 68
+
+
+def test_catalog_accepts_real_zero_chapter_book_and_retains_its_introduction():
+    from app.commentary.ingest.adapter import load_helloao_catalog_bytes
+
+    value = _live_catalog()
+    value['commentary']['numberOfBooks'] = 2
+    value['books'].append({
+        'id': 'SNG', 'commentaryId': 'matthew-henry',
+        'name': 'Song of Songs', 'commonName': 'Song of Songs',
+        'introduction': 'Song introduction.', 'order': 2,
+        'numberOfChapters': 0, 'firstChapterNumber': None,
+        'firstChapterApiLink': None, 'firstChapterReference': None,
+        'lastChapterNumber': None, 'lastChapterApiLink': None,
+        'lastChapterReference': None, 'sha256': 'c' * 64,
+        'totalNumberOfVerses': 0,
+    })
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(value).encode(), 'matthew-henry',
+        {'GEN': 'genesis', 'SNG': 'song-of-solomon'},
+    )
+
+    assert tuple(book.source_book_id for book in books) == ('GEN', 'SNG')
+    assert books[1].chapter_count == 0
+    assert books[1].first_chapter is None
+    assert books[1].last_chapter is None
+    assert books[1].artifact_names == ()
+    assert books[1].chapter_urls == ()
+    assert books[1].introduction == 'Song introduction.'
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('numberOfChapters', -1),
+    ('numberOfChapters', 1),
+    ('totalNumberOfVerses', 1),
+    ('firstChapterNumber', 1),
+    ('lastChapterNumber', 1),
+    ('firstChapterApiLink', '/api/c/matthew-henry/SNG/1.json'),
+    ('lastChapterApiLink', '/api/c/matthew-henry/SNG/1.json'),
+    ('firstChapterReference', {
+        'commentaryId': 'matthew-henry', 'book': 'SNG', 'chapter': 1,
+    }),
+    ('lastChapterReference', {
+        'commentaryId': 'matthew-henry', 'book': 'SNG', 'chapter': 1,
+    }),
+])
+def test_catalog_rejects_invalid_or_partial_zero_chapter_book(field, value):
+    from app.commentary.ingest.adapter import load_helloao_catalog_bytes
+
+    value_catalog = _live_catalog()
+    book = value_catalog['books'][0]
+    book.update({
+        'numberOfChapters': 0, 'firstChapterNumber': None,
+        'firstChapterApiLink': None, 'firstChapterReference': None,
+        'lastChapterNumber': None, 'lastChapterApiLink': None,
+        'lastChapterReference': None, 'totalNumberOfVerses': 0,
+    })
+    value_catalog['commentary']['totalNumberOfChapters'] = 0
+    value_catalog['commentary']['totalNumberOfVerses'] = 0
+    book[field] = value
+
+    with pytest.raises(ValueError):
+        load_helloao_catalog_bytes(
+            json.dumps(value_catalog).encode(), 'matthew-henry', {'GEN': 'genesis'},
+        )
+
+
+@pytest.mark.parametrize('field', ['sha256', 'licenseUrl', 'language'])
+def test_chapter_commentary_identity_must_match_catalog(field):
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(_live_catalog()).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    value = _live_chapter()
+    value['commentary'][field] = 'c' * 64 if field == 'sha256' else 'changed'
+
+    with pytest.raises(ValueError, match='commentary metadata'):
+        load_helloao_chapter_bytes(
+            json.dumps(value).encode(), 'matthew-henry', books[0], 1,
+        )
+
+
+def test_chapter_payload_must_match_expected_artifact_number():
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(_live_catalog()).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+
+    with pytest.raises(ValueError, match='expected artifact'):
+        load_helloao_chapter_bytes(
+            json.dumps(_live_chapter()).encode(), 'matthew-henry', books[0], 2,
+        )
+
+
+@pytest.mark.parametrize('mutation', ['translation', 'unknown_content', 'wrong_chapter'])
+def test_documented_chapter_adapter_rejects_wrong_source_shapes(mutation):
+    from app.commentary.ingest.adapter import (
+        load_helloao_catalog_bytes, load_helloao_chapter_bytes,
+    )
+
+    books = load_helloao_catalog_bytes(
+        json.dumps(_live_catalog()).encode(), 'matthew-henry', {'GEN': 'genesis'},
+    )
+    value = _live_chapter()
+    if mutation == 'translation':
+        value['translation'] = value.pop('commentary')
+    elif mutation == 'unknown_content':
+        value['chapter']['content'][0] = {'type': 'heading', 'content': ['Unsafe shape']}
+    else:
+        value['chapter']['number'] = 2
+
+    with pytest.raises(ValueError):
+        tuple(load_helloao_chapter_bytes(
+            json.dumps(value).encode(), 'matthew-henry', books[0],
+            1,
+        ))
+
+
 def _bundle():
     return json.loads(FIXTURE.read_text(encoding='utf-8'))
 
@@ -232,8 +576,11 @@ def test_rejects_duplicate_verse_identity_even_when_positions_differ(tmp_path):
         {'type': 'verse', 'number': 1, 'content': ['Repeated.']},
     )
 
-    with pytest.raises(ValueError, match='duplicate'):
-        _load(_write_bundle(tmp_path / 'bundle.json', bundle))
+    rows = _load(_write_bundle(tmp_path / 'bundle.json', bundle))
+
+    assert [row.body for row in rows if row.verse_start == 1] == [
+        'In the beginning.', 'Repeated.',
+    ]
 
 
 def test_rejects_invalid_later_record_before_any_rows_are_observable(tmp_path):

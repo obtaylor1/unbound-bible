@@ -1315,6 +1315,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "certifi" },
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "langchain" },
@@ -1342,6 +1343,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.18.5" },
+    { name = "certifi", specifier = ">=2025.8.3" },
     { name = "email-validator", specifier = ">=2.3.0" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "langchain", specifier = ">=0.3.27" },

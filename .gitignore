@@ -3,3 +3,5 @@
 node_modules/
 frontend/playwright-report/
 frontend/test-results/
+backend/data/commentaries/raw/
+commentary-coverage/

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "exclusions": [
+    {
+      "source_id": "matthew-henry",
+      "artifact": "EZK-40.json",
+      "artifact_sha256": "1906ea01374f9db6edb02fc15f22ebe5a313a11c989165cd84933c270493616f",
+      "content_index": 4,
+      "reason": "Verified misfiled land-division commentary belonging to Ezekiel 48; not commentary on Ezekiel 40.",
+      "reviewer": "Codex-assisted review",
+      "reviewed_on": "2026-08-05"
+    },
+    {
+      "source_id": "keil-delitzsch",
+      "artifact": "EZK-6.json",
+      "artifact_sha256": "53dc21c4397b41c6101cb8969417dc4549c3eca14d64c62d3b2cd95b2131d031",
+      "content_index": 1,
+      "reason": "Verified blank provider record containing no readable commentary text.",
+      "reviewer": "Codex-assisted review",
+      "reviewed_on": "2026-08-05"
+    }
+  ]
+}

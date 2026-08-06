@@ -162,6 +162,75 @@ def test_validate_run_replaces_findings_and_saves_coverage(commentary_session, c
     assert {finding.code for finding in findings} == {'missing_book_intro', 'missing_chapter_intro'}
 
 
+def test_validate_run_emits_auditable_warning_for_reviewed_exclusion(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import validate_run
+
+    exclusion = {
+        'source_id': commentary_source.id, 'artifact': 'EZK-40.json',
+        'artifact_sha256': 'a' * 64, 'content_index': 4,
+        'reason': 'Verified misfiled record.', 'reviewer': 'Reviewer',
+        'reviewed_on': '2026-08-05',
+    }
+    run = _stage(
+        commentary_session, commentary_source,
+        reviewed_exclusions=[exclusion], reviewed_exclusion_count=1,
+    )
+
+    validate_run(commentary_session, run.id)
+    findings = commentary_session.scalars(select(CommentaryValidationFinding).where(
+        CommentaryValidationFinding.run_id == run.id
+    )).all()
+
+    assert run.status == 'verified'
+    assert run.warning_count == 3
+    warning = next(item for item in findings if item.code == 'reviewed_exclusion')
+    assert 'EZK-40.json content index 4' in warning.message
+    assert run.metadata_snapshot['reviewed_exclusion_count'] == 1
+
+
+def test_validate_run_rejects_tampered_reviewed_exclusion_text(
+    commentary_session, commentary_source,
+):
+    from app.commentary.ingest.publish import validate_run
+
+    run = _stage(
+        commentary_session, commentary_source,
+        reviewed_exclusions=[{
+            'source_id': commentary_source.id, 'artifact': 'EZK-40.json',
+            'artifact_sha256': 'a' * 64, 'content_index': 4,
+            'reason': '<em>tampered</em>', 'reviewer': 'Reviewer',
+            'reviewed_on': '2026-08-05',
+        }],
+        reviewed_exclusion_count=1,
+    )
+
+    with pytest.raises(ValueError, match='reviewed exclusion'):
+        validate_run(commentary_session, run.id)
+
+
+@pytest.mark.parametrize('reviewed_on', ['2026-99-99', '2999-01-01', '2026-8-5'])
+def test_validate_run_rejects_impossible_future_or_noncanonical_exclusion_date(
+    commentary_session, commentary_source, reviewed_on,
+):
+    from app.commentary.ingest.publish import validate_run
+
+    run = _stage(
+        commentary_session, commentary_source,
+        reviewed_exclusions=[{
+            'source_id': commentary_source.id, 'artifact': 'EZK-40.json',
+            'artifact_sha256': 'a' * 64, 'content_index': 4,
+            'reason': 'Reviewed exclusion.', 'reviewer': 'Reviewer',
+            'reviewed_on': reviewed_on,
+        }],
+        reviewed_exclusion_count=1,
+    )
+
+    with pytest.raises(ValueError, match='reviewed exclusion'):
+        validate_run(commentary_session, run.id)
+
+
 def test_validate_run_with_errors_is_validated_not_verified(commentary_session, commentary_source):
     from app.commentary.ingest.publish import validate_run
 

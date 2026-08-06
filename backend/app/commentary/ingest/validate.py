@@ -34,18 +34,19 @@ _APPROVED_SOURCE_ID_SET = frozenset(_APPROVED_SOURCE_IDS)
 _REGISTRY_FIELDS = frozenset({
     'title', 'abbreviation', 'author', 'publication_period', 'tradition', 'language',
     'attribution', 'upstream_url', 'license_spdx', 'license_url', 'license_basis',
-    'license_reviewed_on', 'source_checksum', 'expected_book_count', 'expected_source_books',
+    'license_reviewer', 'license_reviewed_on', 'reviewed_urls', 'provider_dataset_checksum',
+    'expected_book_count', 'expected_source_books',
 })
 _PUBLIC_DOMAIN_SPDX = 'LicenseRef-Public-Domain'
 _PUBLIC_DOMAIN_URL = 'https://creativecommons.org/publicdomain/mark/1.0/'
 _MAX_REGISTRY_BYTES = 256 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 _REVIEWED_RECORD_FINGERPRINTS = {
-    'matthew-henry': '9c9260c8a9a350be9e13622bba29e090fa283e54b4015038ae77fb97baa0f91f',
-    'john-gill': '13f33d7294b7821d9dc9a01d3e651b26a6d41f4987af11d8bd08106db2938061',
-    'adam-clarke': '881eefc52f0d7d54efabf1c61623c79b1f4e164462f3042e0b1f2123d204f0e5',
-    'jamieson-fausset-brown': 'ef527311e9dc79b769a43f8c5d2e06ad021c7125d6c2d36367183f2dbb620773',
-    'keil-delitzsch': '8b4ab311ea1ab112f22d5f612be6858c12186c32cfa8b8f9612653cf148ba901',
+    'matthew-henry': '041d8568551290c8ece82c40209ee85666b8d0a4ac762abfbdc2bc6830449976',
+    'john-gill': 'f2f74a89795d2a66b812360c13e3c95d7732e7c7d34633b48a50ec1e0bd53d9a',
+    'adam-clarke': 'c54615bb156a6e13dd8b202d1cdfc585429702e1f077126cc85602ed6cb126d2',
+    'jamieson-fausset-brown': '10f9fefa703e512c4e9223dfe57ff793364a21f2e35cb47e0a3d3e8468f28fab',
+    'keil-delitzsch': '1fbb4a68ec46ab3c1ed87b3e1d168879b76540ae0950f945c00e6170c0a6253f',
 }
 
 
@@ -180,8 +181,10 @@ class SourceMetadata:
     license_spdx: str
     license_url: str
     license_basis: str
+    license_reviewer: str
     license_reviewed_on: str
-    source_checksum: str
+    reviewed_urls: tuple[str, ...]
+    provider_dataset_checksum: str
     expected_book_count: int
     expected_source_books: tuple[str, ...]
 
@@ -360,6 +363,11 @@ def validate_commentary(
         findings.append(ValidationFinding('error', 'unexpected_book', 'Commentary entries include an unexpected book.', work_id))
 
     identities: dict[tuple[str, int | None, int | None, int | None, str], list[NormalizedCommentaryEntry]] = defaultdict(list)
+    semantic_rows: dict[
+        tuple[str, int | None, int | None, int | None, str, str | None, str],
+        list[NormalizedCommentaryEntry],
+    ] = defaultdict(list)
+    source_locators: dict[str, list[NormalizedCommentaryEntry]] = defaultdict(list)
     ranges: dict[tuple[str, int], list[NormalizedCommentaryEntry]] = defaultdict(list)
     chapters_by_work: dict[str, set[int]] = defaultdict(set)
     has_book_intro: set[str] = set()
@@ -367,6 +375,12 @@ def validate_commentary(
     for row in valid_rows:
         identity = (row.work_id, row.chapter, row.verse_start, row.verse_end, row.entry_type)
         identities[identity].append(row)
+        if row.entry_type in {'verse', 'verse_range'}:
+            semantic_rows[(
+                row.work_id, row.chapter, row.verse_start, row.verse_end,
+                row.entry_type, row.heading, row.body,
+            )].append(row)
+        source_locators[row.source_locator].append(row)
         if row.entry_type == 'book_intro':
             has_book_intro.add(row.work_id)
         if row.chapter is not None:
@@ -376,24 +390,49 @@ def validate_commentary(
         if row.entry_type in {'verse', 'verse_range'} and row.chapter is not None:
             ranges[(row.work_id, row.chapter)].append(row)
 
+    for same_rows in semantic_rows.values():
+        if len(same_rows) > 1:
+            row = same_rows[0]
+            findings.append(ValidationFinding(
+                'error', 'duplicate_normalized_row',
+                'The exact same normalized commentary row appears more than once.',
+                row.work_id, row.chapter, row.verse_start,
+            ))
+    for same_locator in source_locators.values():
+        if len(same_locator) > 1:
+            row = same_locator[0]
+            findings.append(ValidationFinding(
+                'error', 'duplicate_source_locator',
+                'More than one commentary row uses the same source locator.',
+                row.work_id, row.chapter, row.verse_start,
+            ))
     for identity, same_identity in identities.items():
         if len(same_identity) > 1:
-            work_id, chapter, verse_start, _, _ = identity
-            findings.append(ValidationFinding(
-                'error', 'duplicate_identity', 'More than one row has the same normalized identity.',
-                work_id, chapter, verse_start,
-            ))
+            work_id, chapter, verse_start, _, entry_type = identity
+            if entry_type in {'verse', 'verse_range'}:
+                findings.append(ValidationFinding(
+                    'warning', 'multiple_notes_at_anchor',
+                    'The provider supplies multiple distinct commentary notes at this exact anchor.',
+                    work_id, chapter, verse_start,
+                ))
+            else:
+                findings.append(ValidationFinding(
+                    'error', 'duplicate_identity',
+                    'More than one row has the same normalized introduction identity.',
+                    work_id, chapter, verse_start,
+                ))
     for (work_id, chapter), entries in ranges.items():
-        ordered = sorted(entries, key=lambda row: (row.verse_start or 0, row.verse_end or 0, row.entry_type))
+        ordered = sorted({
+            (row.verse_start or 0, row.verse_end or 0) for row in entries
+        })
         furthest_end = 0
-        for row in ordered:
-            if row.verse_start is not None and row.verse_start <= furthest_end:
+        for verse_start, verse_end in ordered:
+            if verse_start <= furthest_end:
                 findings.append(ValidationFinding(
                     'error', 'overlapping_coverage', 'Verse or range coverage overlaps another entry.',
-                    work_id, chapter, row.verse_start,
+                    work_id, chapter, verse_start,
                 ))
-            if row.verse_end is not None:
-                furthest_end = max(furthest_end, row.verse_end)
+            furthest_end = max(furthest_end, verse_end)
 
     for work_id in sorted(observed_books, key=lambda item: (_WORK_ORDER[item], item)):
         if work_id not in has_book_intro:
@@ -498,7 +537,20 @@ def _metadata(source_id: str, value: object) -> SourceMetadata:
     license_spdx = _registry_string('license_spdx', value['license_spdx'], 64)
     license_url = _https_url('license_url', value['license_url'])
     license_basis = _registry_string('license_basis', value['license_basis'], 2048)
+    reviewer = _registry_string('license_reviewer', value['license_reviewer'], 200)
     reviewed = _registry_string('license_reviewed_on', value['license_reviewed_on'], 10)
+    reviewed_urls_value = value['reviewed_urls']
+    if (
+        type(reviewed_urls_value) is not list or len(reviewed_urls_value) < 4
+        or len(reviewed_urls_value) != len(set(reviewed_urls_value))
+    ):
+        raise ValueError('reviewed_urls must contain at least four unique HTTPS URLs.')
+    reviewed_urls = tuple(
+        _https_url('reviewed_urls item', item) for item in reviewed_urls_value
+    )
+    reviewed_urls_include_required_links = (
+        upstream_url in reviewed_urls and license_url in reviewed_urls
+    )
     if license_spdx != _PUBLIC_DOMAIN_SPDX or license_url != _PUBLIC_DOMAIN_URL:
         raise ValueError('registry must use the approved public-domain license metadata.')
     try:
@@ -507,9 +559,13 @@ def _metadata(source_id: str, value: object) -> SourceMetadata:
         raise ValueError('license_reviewed_on must be an ISO date.') from exc
     if reviewed_date.isoformat() != reviewed or reviewed_date > date.today():
         raise ValueError('license_reviewed_on must be an ISO date that is not in the future.')
-    checksum = _registry_string('source_checksum', value['source_checksum'], 64)
+    checksum = _registry_string(
+        'provider_dataset_checksum', value['provider_dataset_checksum'], 64,
+    )
     if _CHECKSUM.fullmatch(checksum) is None:
-        raise ValueError('source_checksum must be 64 lowercase hexadecimal characters.')
+        raise ValueError(
+            'provider_dataset_checksum must be 64 lowercase hexadecimal characters.'
+        )
     count = value['expected_book_count']
     codes = value['expected_source_books']
     if type(count) is not int or count <= 0 or type(codes) is not list:
@@ -523,9 +579,12 @@ def _metadata(source_id: str, value: object) -> SourceMetadata:
     ).encode('utf-8')).hexdigest()
     if fingerprint != _REVIEWED_RECORD_FINGERPRINTS[source_id]:
         raise ValueError('registry does not match the reviewed source record.')
+    if not reviewed_urls_include_required_links:
+        raise ValueError('reviewed_urls must include the upstream and license URLs.')
     return SourceMetadata(
         title, abbreviation, author, publication_period, tradition, language, attribution, upstream_url,
-        license_spdx, license_url, license_basis, reviewed, checksum, count, tuple(codes),
+        license_spdx, license_url, license_basis, reviewer, reviewed, reviewed_urls,
+        checksum, count, tuple(codes),
     )
 
 
