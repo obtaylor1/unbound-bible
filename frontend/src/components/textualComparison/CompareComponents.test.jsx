@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ComparisonToolbar from './ComparisonToolbar'
 import TranslationSelector from './TranslationSelector'
 import ComparisonSummary from './ComparisonSummary'
 import TranslationComparisonCard from './TranslationComparisonCard'
 import ComparisonStudyDrawer from './ComparisonStudyDrawer'
-import { buildSourceState, TRANSLATION_BY_KEY } from './comparisonModel'
+import { buildSourceState, registerInstalledSources, TRANSLATION_BY_KEY } from './comparisonModel'
 
 vi.mock('../StudyAssistantSidebar', () => ({
   default: ({ book, chapter, verse, initialTab, initialInsightSubTab }) => (
@@ -23,8 +23,8 @@ const toolbarProps = {
   chapter: '1',
   verse: '1',
   viewMode: 'verse',
-  baseTranslation: 'eth81',
-  selectedTranslations: ['eth81', 'kjv'],
+  baseTranslation: 'geez1980-research',
+  selectedTranslations: ['geez1980-research', 'kjv'],
   highlightDifferences: true,
   onBookChange: vi.fn(),
   onChapterChange: vi.fn(),
@@ -34,6 +34,17 @@ const toolbarProps = {
   onHighlightDifferencesChange: vi.fn(),
   onOpenStudyTools: vi.fn(),
 }
+
+const installedFixture = [
+  { key: 'geez1980-research', code: 'GEEZ1980-RESEARCH', name: "Ge'ez Bible (1980 EC) — Research Use", tradition: 'Ethiopian Orthodox Tewahedo', year: '1980 EC', language: "Ge'ez", categories: ['ethiopian'] },
+  { key: 'kjv', code: 'KJV', name: 'King James Version', tradition: 'Protestant', year: '1611 / 1769', language: 'English', categories: ['protestant'] },
+  { key: 'asv', code: 'ASV', name: 'American Standard Version', tradition: 'Protestant', year: '1901', language: 'English', categories: ['protestant'] },
+  { key: 'web', code: 'WEB', name: 'World English Bible', tradition: 'Protestant', year: '2001', language: 'English', categories: ['protestant'] },
+  { key: 'webbe', code: 'WEBBE', name: 'World English Bible, British Edition', tradition: 'Protestant', year: '2023', language: 'English', categories: ['protestant'] },
+  { key: '1en_ch', code: '1EN_CH', name: '1 Enoch, R. H. Charles', tradition: 'Ethiopian Pseudepigrapha', year: '1912', language: 'English', categories: ['ethiopian'] },
+]
+
+beforeEach(() => registerInstalledSources(installedFixture))
 
 describe('ComparisonToolbar', () => {
   it('groups passage, view, and comparison controls with visible labels', () => {
@@ -77,8 +88,8 @@ describe('TranslationSelector', () => {
   it('shows compact translations, filters, and comparison capacity', () => {
     render(
       <TranslationSelector
-        selected={['eth81', 'kjv']}
-        baseTranslation="eth81"
+        selected={['geez1980-research', 'kjv']}
+        baseTranslation="geez1980-research"
         onToggle={vi.fn()}
       />,
     )
@@ -95,8 +106,8 @@ describe('TranslationSelector', () => {
     const user = userEvent.setup()
     render(
       <TranslationSelector
-        selected={['eth81', 'kjv']}
-        baseTranslation="eth81"
+        selected={['geez1980-research', 'kjv']}
+        baseTranslation="geez1980-research"
         onToggle={vi.fn()}
       />,
     )
@@ -115,8 +126,8 @@ describe('TranslationSelector', () => {
     const onToggle = vi.fn()
     render(
       <TranslationSelector
-        selected={['eth81', 'kjv', 'asv', 'web']}
-        baseTranslation="eth81"
+        selected={['geez1980-research', 'kjv', 'asv', 'web']}
+        baseTranslation="geez1980-research"
         onToggle={onToggle}
       />,
     )
@@ -156,7 +167,7 @@ describe('ComparisonSummary', () => {
 describe('TranslationComparisonCard', () => {
   const commonProps = {
     reference: 'Genesis 1:1',
-    source: TRANSLATION_BY_KEY.kjv,
+    source: installedFixture.find(({ key }) => key === 'kjv'),
     state: { kind: 'available', text: 'In the beginning God created the heaven and the earth.' },
     baseText: 'At first God made the heaven and the earth.',
     isBase: false,
@@ -190,14 +201,14 @@ describe('TranslationComparisonCard', () => {
     render(
       <TranslationComparisonCard
         {...commonProps}
-        source={TRANSLATION_BY_KEY.eth81}
-        state={buildSourceState({ key: 'eth81', book: 'Genesis', text: null })}
+        source={TRANSLATION_BY_KEY['geez1980-research']}
+        state={buildSourceState({ key: 'geez1980-research', book: 'Genesis', text: null })}
         isBase
       />,
     )
 
     expect(screen.getByText('Text unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/not yet available in the verified Ge'ez research edition/)).toBeInTheDocument()
+    expect(screen.getByText(/does not currently provide this passage/)).toBeInTheDocument()
     expect(screen.queryByText('Canon Exclusion')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Learn more about text availability' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Choose another source' })).toBeInTheDocument()

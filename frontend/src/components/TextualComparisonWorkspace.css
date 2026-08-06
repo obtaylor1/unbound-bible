@@ -468,6 +468,33 @@
 .translation-card-body { flex: 1; padding: 18px 20px; }
 .translation-card-reference { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--compare-purple); font-size: 0.78rem; font-weight: 700; }
 .difference-chip { padding: 7px 9px; color: var(--compare-cyan); border: 1px solid rgba(66, 212, 217, 0.35); background: var(--compare-cyan-soft); white-space: nowrap; }
+.translation-source-details {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--compare-line);
+  border-left: 3px solid var(--compare-gold);
+  border-radius: 9px;
+  color: var(--compare-muted);
+  background: rgba(231, 184, 79, 0.045);
+  font-size: 0.76rem;
+}
+.translation-source-details strong { color: var(--compare-text); font-size: 0.8rem; }
+.translation-source-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.translation-source-badge {
+  width: fit-content;
+  padding: 5px 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.025em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.translation-source-badge.is-fallback { color: #f1ca72; background: var(--compare-gold-soft); }
+.translation-source-badge.is-provisional { color: #d7c2ff; background: var(--compare-purple-soft); }
 .translation-scripture {
   max-width: 36ch;
   margin: 22px auto 0;

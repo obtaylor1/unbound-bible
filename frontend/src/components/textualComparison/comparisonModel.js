@@ -1,29 +1,8 @@
-export const DEFAULT_TRANSLATIONS = ['eth81', 'kjv']
+export const DEFAULT_TRANSLATIONS = ['eotc-composite-en', 'geez1980-research', 'kjv']
 export const MAX_TRANSLATIONS = 4
 
-export const TRANSLATIONS = [
-  { key: 'eth81', code: 'GEEZ1980-RESEARCH', name: "Ge'ez Bible (1980 EC) — Research Use", tradition: 'Ethiopian Orthodox Tewahedo', year: '1980 EC', language: "Ge'ez", categories: ['ethiopian'] },
-  { key: 'kjv', code: 'KJV', name: 'King James Version', tradition: 'Protestant', year: '1611 / 1769', language: 'English', categories: ['protestant'] },
-  { key: 'asv', code: 'ASV', name: 'American Standard Version', tradition: 'Protestant', year: '1901', language: 'English', categories: ['protestant'] },
-  { key: 'web', code: 'WEB', name: 'World English Bible', tradition: 'Protestant / Ecumenical', year: '2001', language: 'English', categories: ['protestant'] },
-  { key: 'webbe', code: 'WEBBE', name: 'World English Bible, British Edition', tradition: 'Protestant / Ecumenical', year: '2023', language: 'English', categories: ['protestant'] },
-  { key: 'bbe', code: 'BBE', name: 'Bible in Basic English', tradition: 'Protestant', year: '1949', language: 'English', categories: ['protestant'] },
-  { key: 'darby', code: 'DARBY', name: 'Darby Translation', tradition: 'Protestant', year: '1890', language: 'English', categories: ['protestant'] },
-  { key: 'dra', code: 'DRA', name: 'Douay-Rheims Version', tradition: 'Catholic', year: '1899', language: 'English', categories: ['catholic'] },
-  { key: 'ylt', code: 'YLT', name: "Young's Literal Translation", tradition: 'Protestant', year: '1862', language: 'English', categories: ['protestant'] },
-  { key: 'nlt', code: 'NLT', name: 'New Living Translation', tradition: 'Protestant', year: '1996 / 2004', language: 'English', categories: ['protestant'] },
-  { key: 'erv', code: 'ERV', name: 'Easy-to-Read Version', tradition: 'Protestant', year: '2006', language: 'English', categories: ['protestant'] },
-  { key: 'oshb', code: 'OSHB', name: 'Open Scriptures Hebrew Bible', tradition: 'Masoretic Text', year: 'Critical text', language: 'Biblical Hebrew', categories: ['original'] },
-  { key: '1en_ch', code: '1EN_CH', name: '1 Enoch, R. H. Charles', tradition: 'Ethiopian Pseudepigrapha', year: '1912', language: 'English', categories: ['ethiopian'] },
-  { key: 'jub_ch', code: 'JUB_CH', name: 'Jubilees, R. H. Charles', tradition: 'Ethiopian Pseudepigrapha', year: '1917', language: 'English', categories: ['ethiopian'] },
-  { key: 'meq1', code: 'MEQ1', name: '1 Meqabyan', tradition: 'Ethiopian Deuterocanon', year: 'English translation', language: 'English', categories: ['ethiopian'] },
-  { key: 'meq2', code: 'MEQ2', name: '2 Meqabyan', tradition: 'Ethiopian Deuterocanon', year: 'English translation', language: 'English', categories: ['ethiopian'] },
-  { key: 'meq3', code: 'MEQ3', name: '3 Meqabyan', tradition: 'Ethiopian Deuterocanon', year: 'English translation', language: 'English', categories: ['ethiopian'] },
-]
-
-export const TRANSLATION_BY_KEY = Object.fromEntries(
-  TRANSLATIONS.map((translation) => [translation.key, translation]),
-)
+export const TRANSLATIONS = []
+export const TRANSLATION_BY_KEY = {}
 
 export const TRANSLATION_FILTERS = [
   { id: 'all', label: 'All' },
@@ -58,6 +37,96 @@ const SOURCE_BOOKS = {
   meq3: new Set(['3 Meqabyan', 'Meqabyan 3']),
 }
 
+function cleanText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function safeHttpUrl(value) {
+  const candidate = cleanText(value)
+  if (!candidate) return null
+  try {
+    const parsed = new URL(candidate)
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+function sourceCategories({ code, tradition, language }) {
+  const description = `${code} ${tradition}`.toLocaleLowerCase()
+  const categories = []
+  if (/ethiop|eotc|geez|ge'ez|meqabyan|enoch|jubilees/.test(description)) categories.push('ethiopian')
+  if (/catholic|douay/.test(description)) categories.push('catholic')
+  if (/protestant|king james|world english|american standard|\bkjv\b|\basv\b|\bweb(?:be)?\b/.test(description)) categories.push('protestant')
+  if (/original|masoretic|hebrew|greek/.test(`${description} ${language}`.toLocaleLowerCase())) categories.push('original')
+  return [...new Set(categories)]
+}
+
+export function sourceFromRow(row) {
+  if (!row || typeof row !== 'object') return null
+  const edition = row.edition && typeof row.edition === 'object' ? row.edition : {}
+  const workSource = row.work_source && typeof row.work_source === 'object' ? row.work_source : {}
+  const rawCode = cleanText(edition.code) ?? cleanText(row.translation)
+  if (!rawCode) return null
+
+  const code = rawCode.toLocaleUpperCase()
+  const language = cleanText(edition.language) ?? 'Unknown language'
+  const tradition = cleanText(workSource.source_tradition)
+    ?? cleanText(edition.source_tradition)
+    ?? 'Source details pending'
+
+  return {
+    key: code.toLocaleLowerCase(),
+    code,
+    name: cleanText(edition.name) ?? code,
+    language,
+    tradition,
+    year: workSource.published_year ?? edition.published_year ?? 'Date not listed',
+    sourceLabel: cleanText(workSource.source_label),
+    fallback: workSource.fallback === true,
+    provisional: workSource.verification_status === 'provisional',
+    translator: cleanText(workSource.translator),
+    attribution: cleanText(workSource.attribution),
+    provenanceUrl: safeHttpUrl(workSource.provenance_url),
+    canonScope: cleanText(workSource.canon_scope),
+    categories: sourceCategories({ code, tradition, language }),
+  }
+}
+
+export function buildInstalledSources(rows = []) {
+  const byCode = new Map()
+  rows.map(sourceFromRow).filter(Boolean).forEach((source) => {
+    if (!byCode.has(source.code)) byCode.set(source.code, source)
+  })
+  return [...byCode.values()].sort((left, right) => left.code.localeCompare(right.code))
+}
+
+export function registerInstalledSources(sources = []) {
+  TRANSLATIONS.splice(0, TRANSLATIONS.length, ...sources)
+  Object.keys(TRANSLATION_BY_KEY).forEach((key) => delete TRANSLATION_BY_KEY[key])
+  sources.forEach((source) => { TRANSLATION_BY_KEY[source.key] = source })
+}
+
+export function reconcileSourceSelection({ installed = [], selected = [], base = null }) {
+  const installedKeys = new Set(installed.map(({ key }) => key))
+  const next = [...new Set(selected.filter((key) => installedKeys.has(key)))]
+  const preferred = installed.find(({ key }) => key === 'eotc-composite-en')?.key
+
+  if (preferred && !next.includes(preferred)) {
+    if (next.length >= MAX_TRANSLATIONS) next.pop()
+    next.push(preferred)
+  }
+  for (const source of installed) {
+    if (next.length >= 2) break
+    if (!next.includes(source.key)) next.push(source.key)
+  }
+
+  return {
+    selected: next.slice(0, MAX_TRANSLATIONS),
+    base: preferred ?? (installedKeys.has(base) && next.includes(base) ? base : next[0] ?? null),
+  }
+}
+
 export function applyTranslationToggle(selected, key, base) {
   if (selected.includes(key)) {
     if (selected.length === 1) return { selected, base, minimumReached: true }
@@ -79,14 +148,14 @@ export function filterTranslations({ category = 'all', query = '' } = {}) {
       translation.tradition,
       translation.year,
       translation.language,
-    ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
+    ].some((value) => String(value ?? '').toLocaleLowerCase().includes(normalizedQuery))
   })
 }
 
 function belongsToSource(key, book) {
   if (SOURCE_BOOKS[key]) return SOURCE_BOOKS[key].has(book)
   const categories = TRANSLATION_BY_KEY[key]?.categories ?? []
-  if (key === 'eth81') return true
+  if (key === 'geez1980-research' || key === 'eotc-composite-en') return true
   if (categories.includes('catholic')) return CATHOLIC_BOOKS.has(book)
   if (categories.includes('protestant') || categories.includes('original')) {
     return PROTESTANT_BOOKS.has(book)
@@ -105,16 +174,9 @@ export function buildSourceState({ key, book, text }) {
       message: `${book} is not included in the ${source?.tradition ?? 'selected'} tradition.`,
     }
   }
-  if (key === 'eth81') {
-    return {
-      kind: 'database-missing',
-      title: 'Text unavailable',
-      message: "This passage is not yet available in the verified Ge'ez research edition.",
-    }
-  }
   return {
     kind: 'translation-unavailable',
-    title: 'Translation unavailable',
+    title: 'Text unavailable',
     message: `${source?.name ?? 'This source'} does not currently provide this passage.`,
   }
 }

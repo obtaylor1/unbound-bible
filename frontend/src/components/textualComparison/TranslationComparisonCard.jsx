@@ -60,6 +60,16 @@ export default function TranslationComparisonCard({
             <span className="difference-chip">{differenceCount} {differenceCount === 1 ? 'difference' : 'differences'}</span>
           )}
         </div>
+        {(source.fallback || source.provisional || source.sourceLabel || source.translator) && (
+          <div className="translation-source-details" aria-label="Text source details">
+            <div className="translation-source-badges">
+              {source.fallback && <span className="translation-source-badge is-fallback">KJV fallback</span>}
+              {source.provisional && <span className="translation-source-badge is-provisional">Provisional source</span>}
+            </div>
+            {source.sourceLabel && <strong>{source.sourceLabel}</strong>}
+            {source.translator && <span>Translated by {source.translator}</span>}
+          </div>
+        )}
         {state.kind === 'available' ? (
           <p className="translation-scripture">
             {renderedWords.map((word, index) => word.differs ? (

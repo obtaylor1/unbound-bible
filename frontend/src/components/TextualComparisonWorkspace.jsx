@@ -11,8 +11,11 @@ import {
   MAX_TRANSLATIONS,
   TRANSLATION_BY_KEY,
   applyTranslationToggle,
+  buildInstalledSources,
   buildSourceState,
   diffWords,
+  reconcileSourceSelection,
+  registerInstalledSources,
   summarizeComparison,
 } from './textualComparison/comparisonModel'
 
@@ -34,6 +37,33 @@ const BOOK_CHAPTERS = {
   '2 Meqabyan': 22, '3 Meqabyan': 10, Tobit: 14, Judith: 16,
   'Wisdom of Solomon': 19, Sirach: 51, Baruch: 5, '1 Maccabees': 16,
   '2 Maccabees': 15, '1 Esdras': 9, '2 Esdras': 16, 'Psalm 151': 1,
+}
+
+const SUPPLEMENTAL_BOOKS = new Set(['Prayer of Manasseh'])
+
+function comparisonRoute() {
+  const query = window.location.hash.split('?')[1] ?? ''
+  const params = new URLSearchParams(query)
+  const canon = params.get('canon')?.trim() || 'ETHIO81'
+  const requestedBook = params.get('book')?.trim() || 'Genesis'
+  return {
+    canon,
+    book: canon.toLocaleUpperCase() === 'ETHIO81' && SUPPLEMENTAL_BOOKS.has(requestedBook)
+      ? 'Genesis'
+      : requestedBook,
+    chapter: params.get('chapter')?.trim() || '1',
+    verse: params.get('verse')?.trim() || '1',
+    translation: params.get('translation')?.trim().toLocaleLowerCase() || null,
+  }
+}
+
+function booksForCanon(books, canon) {
+  if (canon.toLocaleUpperCase() !== 'ETHIO81') return books
+  return books.filter((item) => !SUPPLEMENTAL_BOOKS.has(typeof item === 'string' ? item : item?.name))
+}
+
+function hasAvailableText(value) {
+  return typeof value === 'string' && Boolean(value.trim())
 }
 
 function safeStoredList(key) {
@@ -99,7 +129,13 @@ function ChapterComparison({
       </header>
       <div className="comparison-chapter-table">
         {verses.map((verse) => {
-          const baseText = getText(baseTranslation, verse) ?? ''
+          const preferredBaseText = getText(baseTranslation, verse)
+          const availableBaseText = selectedTranslations
+            .map((key) => getText(key, verse))
+            .find((text) => typeof text === 'string' && text.trim())
+          const baseText = hasAvailableText(preferredBaseText)
+            ? preferredBaseText
+            : availableBaseText || ''
           return (
             <section className="comparison-chapter-row" key={verse} aria-labelledby={`compare-verse-${verse}`}>
               <h3 id={`compare-verse-${verse}`}>Verse {verse}</h3>
@@ -128,15 +164,22 @@ function ChapterComparison({
 }
 
 export default function TextualComparisonWorkspace() {
-  const [book, setBook] = useState('Genesis')
-  const [chapter, setChapter] = useState('1')
-  const [verse, setVerse] = useState('1')
+  const initialRoute = useMemo(comparisonRoute, [])
+  const [canon] = useState(initialRoute.canon)
+  const [book, setBook] = useState(initialRoute.book)
+  const [chapter, setChapter] = useState(initialRoute.chapter)
+  const [verse, setVerse] = useState(initialRoute.verse)
   const [books, setBooks] = useState([])
   const [rows, setRows] = useState([])
   const [requestStatus, setRequestStatus] = useState('loading')
   const [requestRevision, setRequestRevision] = useState(0)
-  const [selectedTranslations, setSelectedTranslations] = useState(DEFAULT_TRANSLATIONS)
-  const [baseTranslation, setBaseTranslation] = useState(DEFAULT_TRANSLATIONS[0])
+  const [selectedTranslations, setSelectedTranslations] = useState(() => (
+    initialRoute.translation
+      ? [initialRoute.translation, ...DEFAULT_TRANSLATIONS.filter((key) => key !== initialRoute.translation)]
+      : DEFAULT_TRANSLATIONS
+  ))
+  const [baseTranslation, setBaseTranslation] = useState(null)
+  const [selectionSourceSignature, setSelectionSourceSignature] = useState('')
   const [highlightDifferences, setHighlightDifferences] = useState(true)
   const [viewMode, setViewMode] = useState('verse')
   const [studyToolsOpen, setStudyToolsOpen] = useState(false)
@@ -241,7 +284,10 @@ export default function TextualComparisonWorkspace() {
     }
   }, [sourcesOpen])
 
-  const bookOptions = books.length ? books : Object.keys(BOOK_CHAPTERS)
+  const availableBookOptions = booksForCanon(books.length ? books : Object.keys(BOOK_CHAPTERS), canon)
+  const bookOptions = availableBookOptions.includes(book)
+    ? availableBookOptions
+    : [book, ...availableBookOptions]
   const chapterOptions = Array.from({ length: BOOK_CHAPTERS[book] ?? 1 }, (_, index) => index + 1)
   const verseOptions = useMemo(
     () => [...new Set(rows.map((row) => Number(row.verse)))].filter(Number.isFinite).sort((left, right) => left - right),
@@ -249,6 +295,47 @@ export default function TextualComparisonWorkspace() {
   )
   const reference = `${book} ${chapter}:${verse}`
   const referenceKey = `${book} ${chapter}:${verse}`
+
+  const installedSources = useMemo(() => buildInstalledSources(rows), [rows])
+  const installedSourceSignature = installedSources.map(({ key }) => key).join('|')
+  registerInstalledSources(requestStatus === 'ready' ? installedSources : [])
+
+  const resolvedSelection = requestStatus === 'ready' && selectionSourceSignature !== installedSourceSignature
+    ? reconcileSourceSelection({
+      installed: installedSources,
+      selected: selectedTranslations,
+      base: baseTranslation,
+    })
+    : requestStatus === 'ready'
+      ? { selected: selectedTranslations, base: baseTranslation }
+      : { selected: [], base: null }
+  const activeTranslations = resolvedSelection.selected
+  const activeBaseTranslation = resolvedSelection.base
+
+  useEffect(() => {
+    if (requestStatus !== 'ready' || selectionSourceSignature === installedSourceSignature) return
+    setSelectedTranslations(resolvedSelection.selected)
+    setBaseTranslation(resolvedSelection.base)
+    setSelectionSourceSignature(installedSourceSignature)
+  }, [
+    installedSourceSignature,
+    requestStatus,
+    resolvedSelection.base,
+    resolvedSelection.selected,
+    selectionSourceSignature,
+  ])
+
+  useEffect(() => {
+    if (requestStatus !== 'ready' || !activeBaseTranslation) return
+    const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+    params.set('book', book)
+    params.set('chapter', chapter)
+    params.set('verse', verse)
+    params.set('translation', TRANSLATION_BY_KEY[activeBaseTranslation]?.code ?? activeBaseTranslation.toLocaleUpperCase())
+    params.set('canon', canon)
+    const nextHash = `#compare?${params.toString()}`
+    if (window.location.hash !== nextHash) window.history.replaceState(window.history.state, '', nextHash)
+  }, [activeBaseTranslation, book, canon, chapter, requestStatus, verse])
 
   const textFor = (key, verseNumber = verse) => {
     const source = TRANSLATION_BY_KEY[key]
@@ -259,12 +346,14 @@ export default function TextualComparisonWorkspace() {
     ))?.text ?? null
   }
 
-  const selectedTexts = selectedTranslations.map((key) => textFor(key))
+  const selectedTexts = activeTranslations.map((key) => textFor(key))
   const summary = summarizeComparison(selectedTexts)
-  const baseText = textFor(baseTranslation) ?? ''
+  const selectedAvailableText = selectedTexts.find(hasAvailableText) ?? ''
+  const preferredBaseText = textFor(activeBaseTranslation)
+  const baseText = hasAvailableText(preferredBaseText) ? preferredBaseText : selectedAvailableText
 
   const handleToggleTranslation = (key) => {
-    const result = applyTranslationToggle(selectedTranslations, key, baseTranslation)
+    const result = applyTranslationToggle(activeTranslations, key, activeBaseTranslation)
     setSelectedTranslations(result.selected)
     setBaseTranslation(result.base)
   }
@@ -316,8 +405,8 @@ export default function TextualComparisonWorkspace() {
     verses: [reference],
     type: 'Textual Comparison Workspace',
     content: {
-      translationsCompared: selectedTranslations.map((key) => TRANSLATION_BY_KEY[key]?.name ?? key),
-      baseTranslation: TRANSLATION_BY_KEY[baseTranslation]?.name ?? baseTranslation,
+      translationsCompared: activeTranslations.map((key) => TRANSLATION_BY_KEY[key]?.name ?? key),
+      baseTranslation: TRANSLATION_BY_KEY[activeBaseTranslation]?.name ?? activeBaseTranslation,
       notes: comparisonNote,
     },
   }
@@ -344,8 +433,8 @@ export default function TextualComparisonWorkspace() {
         chapter={chapter}
         verse={verse}
         viewMode={viewMode}
-        baseTranslation={baseTranslation}
-        selectedTranslations={selectedTranslations}
+        baseTranslation={activeBaseTranslation ?? ''}
+        selectedTranslations={activeTranslations}
         highlightDifferences={highlightDifferences}
         onBookChange={handleBookChange}
         onChapterChange={(value) => { setChapter(value); setVerse('1') }}
@@ -366,7 +455,7 @@ export default function TextualComparisonWorkspace() {
           aria-controls="comparison-sources-panel"
           onClick={() => setSourcesOpen(true)}
         >
-          Choose translations <span>{selectedTranslations.length}/{MAX_TRANSLATIONS}</span>
+          Choose translations <span>{activeTranslations.length}/{MAX_TRANSLATIONS}</span>
         </button>
         {sourcesOpen && (
           <button
@@ -389,8 +478,9 @@ export default function TextualComparisonWorkspace() {
             <button ref={sourcesCloseRef} type="button" aria-label="Close translation selector" onClick={() => { setSourcesOpen(false); sourcesTriggerRef.current?.focus() }}>×</button>
           </header>
           <TranslationSelector
-            selected={selectedTranslations}
-            baseTranslation={baseTranslation}
+            key={installedSourceSignature}
+            selected={activeTranslations}
+            baseTranslation={activeBaseTranslation}
             onToggle={handleToggleTranslation}
           />
           <details className="comparison-note-panel">
@@ -421,9 +511,9 @@ export default function TextualComparisonWorkspace() {
                   className="comparison-card-grid"
                   data-testid="comparison-grid"
                   aria-label={`${reference} translation comparison`}
-                  style={{ '--comparison-columns': selectedTranslations.length }}
+                  style={{ '--comparison-columns': activeTranslations.length }}
                 >
-                  {selectedTranslations.map((key) => {
+                  {activeTranslations.map((key) => {
                     const source = TRANSLATION_BY_KEY[key]
                     const text = textFor(key)
                     return (
@@ -433,7 +523,7 @@ export default function TextualComparisonWorkspace() {
                         source={source}
                         state={buildSourceState({ key, book, text })}
                         baseText={baseText}
-                        isBase={key === baseTranslation}
+                        isBase={key === activeBaseTranslation}
                         highlightDifferences={highlightDifferences}
                         differenceCount={summary.differenceCount}
                         bookmarked={bookmarks.includes(referenceKey)}
@@ -451,8 +541,8 @@ export default function TextualComparisonWorkspace() {
                 book={book}
                 chapter={chapter}
                 verses={verseOptions}
-                selectedTranslations={selectedTranslations}
-                baseTranslation={baseTranslation}
+                selectedTranslations={activeTranslations}
+                baseTranslation={activeBaseTranslation}
                 rows={rows}
                 highlightDifferences={highlightDifferences}
               />
@@ -465,7 +555,7 @@ export default function TextualComparisonWorkspace() {
 
       <p className="comparison-source-note">
         <span aria-hidden="true">i</span>
-        Differences are highlighted against {TRANSLATION_BY_KEY[baseTranslation]?.name}. Source availability reflects the local research database.
+        Differences are highlighted against {TRANSLATION_BY_KEY[activeBaseTranslation]?.name ?? 'the selected available source'}. Source availability reflects the local research database.
       </p>
 
       <ComparisonStudyDrawer
