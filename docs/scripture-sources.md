@@ -137,7 +137,7 @@ PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli stage --manifest 
 Copy the exact `run_id` from the stage command's JSON output, then validate, publish with explicit confirmation, and audit persisted coverage:
 
 ```bash
-export COMPOSITE_RUN_ID=<run-id-from-stage>
+export COMPOSITE_RUN_ID="paste-run-id-from-stage-here"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli validate --run-id "$COMPOSITE_RUN_ID" --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli publish --run-id "$COMPOSITE_RUN_ID" --confirm --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli coverage-report --run-id "$COMPOSITE_RUN_ID" --edition EOTC-COMPOSITE-EN --database-url "$COMPOSITE_DB_URL"
@@ -157,6 +157,7 @@ After the rehearsal and any rollback audit are complete, confirm `COMPOSITE_DB_D
 
 ```bash
 test -n "$COMPOSITE_DB_DIR" && test "$COMPOSITE_DB_DIR" != /private/tmp || exit 1
+test "$COMPOSITE_DB_PATH" = "$COMPOSITE_DB_DIR/audit.db" || exit 1
 rm -f -- "$COMPOSITE_DB_PATH"
 rmdir -- "$COMPOSITE_DB_DIR"
 ```
