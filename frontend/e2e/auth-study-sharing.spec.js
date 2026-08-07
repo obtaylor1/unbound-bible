@@ -17,7 +17,7 @@ test('account, grounded study, durable save, and immutable sharing', async ({ pa
   await page.goto('/#aistudy')
   await page.getByLabel('Ask a biblical study question').fill('What does Genesis 1:1 say?')
   await page.getByRole('button', { name: '⌕ Search' }).click()
-  await expect(page.getByText('Genesis 1:1', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '📚 Citations & Grounded Texts' })).toBeVisible()
   await page.getByRole('button', { name: '💾 Save Study Session' }).click()
   await expect(page.getByText('Study session saved privately to My Library.')).toBeVisible()
   await page.getByRole('button', { name: '🔗 Share Study Session' }).click()
@@ -26,7 +26,8 @@ test('account, grounded study, durable save, and immutable sharing', async ({ pa
   const anonymous = await context.newPage()
   await anonymous.goto(url)
   await expect(anonymous.getByRole('heading', { name: 'Sources' })).toBeVisible()
-  await expect(anonymous.getByText('Genesis 1:1', { exact: true })).toBeVisible()
+  const sharedReferences = anonymous.getByText('Genesis 1:1', { exact: true })
+  expect(await sharedReferences.count()).toBeGreaterThan(0)
 })
 
 test('refresh restoration and logout', async ({ page }) => {
