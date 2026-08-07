@@ -77,13 +77,13 @@ Every reader response carries per-work provenance. Do not describe the collectio
 
 | Works | Literal source family | Status and reuse responsibility |
 |---|---|---|
-| 39 Old Testament works | World Messianic Bible (WMB), user-archive revision | Public-domain archive text; upstream revision is unverified, so retain the provisional label and attribution. |
-| 27 New Testament works | James Murdock's 1852 English Peshitta | Public domain; translated from Syriac Aramaic. Retain the provisional archive-revision label. |
-| 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom, and Sirach | Official eBible World English Bible British Edition with Deuterocanon (WEBBE) | Public domain; preserve the official source link and declared Sirach gaps. |
-| Baruch, Letter of Jeremiah, Prayer of Azariah, Susanna, Bel and the Dragon, and Prayer of Manasseh | KJV 1611 archive fallback | Public domain; always show a literal **KJV fallback** label. These are not distinct Ethiopian Orthodox translations. |
-| 1–3 Meqabyan | Wikisource translations from Ge'ez | CC BY-SA 4.0. Reuse must credit contributors, identify changes, link the license, and preserve ShareAlike terms. Use permanent revisions [1 Meqabyan oldid 16044809](https://en.wikisource.org/w/index.php?title=Translation:1_Meqabyan&oldid=16044809), [2 Meqabyan oldid 16044810](https://en.wikisource.org/w/index.php?title=Translation:2_Meqabyan&oldid=16044810), and [3 Meqabyan oldid 16044811](https://en.wikisource.org/w/index.php?title=Translation:3_Meqabyan&oldid=16044811). |
-| 1 Enoch | R. H. Charles, Project Gutenberg ebook 77935 | Public domain in the USA; retain the Gutenberg attribution and modification disclosure. |
-| Jubilees | R. H. Charles-related archive text | Public-domain archive text with unavailable exact upstream provenance; retain the provisional warning. |
+| 39 Old Testament works | World Messianic Bible (WMB), user-archive revision | Public-domain archive text; upstream revision is unverified. Source chapter identifiers were normalized to numeric order and app work names were standardized; scripture prose and source verse labels were not changed. Retain the provisional label and attribution. |
+| 27 New Testament works | James Murdock's 1852 English Peshitta | Public domain; translated from Syriac Aramaic. Source chapter identifiers and app work names were standardized, `FI`/`RF` apparatus was removed, ten blank positions were declared, and four U+000F separators were normalized; scripture words outside source apparatus and source verse labels were not changed. Retain the provisional archive-revision label. |
+| 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom, and Sirach | [Official eBible World English Bible British Edition with Deuterocanon (WEBBE)](https://ebible.org/details.php?id=eng-webbe) | Public domain. The official VPL's 24 explicit blank Sirach rows and 12 additional absent numeric labels were omitted and declared; every nonblank scripture row retains its official chapter and verse identity. Preserve the official source link and provisional verification status. |
+| Baruch, Letter of Jeremiah, Prayer of Azariah, Susanna, Bel and the Dragon, and Prayer of Manasseh | KJV 1611 archive fallback | Public-domain archive text, recorded as unmodified. Always show a literal **KJV fallback** label. These are not distinct Ethiopian Orthodox translations. |
+| 1–3 Meqabyan | Wikisource translations from Ge'ez | CC BY-SA 4.0. Source extraction and JSON formatting were applied without changing scripture prose; 2 Meqabyan also records its two absent labels. Reuse must credit contributors, identify changes, link the license, and preserve ShareAlike terms. Use permanent revisions [1 Meqabyan oldid 16044809](https://en.wikisource.org/w/index.php?title=Translation:1_Meqabyan&oldid=16044809), [2 Meqabyan oldid 16044810](https://en.wikisource.org/w/index.php?title=Translation:2_Meqabyan&oldid=16044810), and [3 Meqabyan oldid 16044811](https://en.wikisource.org/w/index.php?title=Translation:3_Meqabyan&oldid=16044811). |
+| 1 Enoch | [R. H. Charles, Project Gutenberg ebook 77935](https://www.gutenberg.org/ebooks/77935) | Public domain in the USA. The Ethiopic (`E`) main reading, excluded alternates, joined fragments, normalized whitespace, and structural numbering are disclosed below and in the per-work source record. |
+| Jubilees | R. H. Charles-related archive text | Public-domain archive text with unavailable exact upstream provenance. Source chapter identifiers were normalized to numeric order and the app work identifier was standardized; scripture prose was not changed. Retain the provisional warning. |
 
 Source and license claims remain the responsibility of anyone redistributing the texts. In particular, downstream Meqabyan reuse must satisfy CC BY-SA 4.0, and operators must not erase per-work attribution, fallback, verification, canon-placement, modification, or provenance fields.
 
@@ -125,9 +125,10 @@ To regenerate reviewed outputs intentionally, omit `--check`, run `build_bundle.
 Publication changes the selected database. First rehearse against a new disposable, migrated SQLite database—not a production file and not the repository's normal development database. Choose a unique path, confirm it does not already exist, and keep the URL explicit on every command:
 
 ```bash
-export COMPOSITE_DB_PATH=/private/tmp/unbound-composite-english-audit.db
+export COMPOSITE_DB_DIR="$(mktemp -d /private/tmp/unbound-composite-english.XXXXXX)"
+export COMPOSITE_DB_PATH="$COMPOSITE_DB_DIR/audit.db"
 export COMPOSITE_DB_URL="sqlite:///$COMPOSITE_DB_PATH"
-test ! -e "$COMPOSITE_DB_PATH"
+test ! -e "$COMPOSITE_DB_PATH" || exit 1
 DATABASE_URL="$COMPOSITE_DB_URL" ./venv/bin/alembic -c backend/alembic.ini upgrade head
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli seed-canon --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli stage --manifest backend/data/scripture/eotc-composite-en/manifest.json --database-url "$COMPOSITE_DB_URL"
@@ -150,4 +151,12 @@ Rollback restores only the immediate distinct predecessor and therefore requires
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli coverage-report --edition EOTC-COMPOSITE-EN --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli rollback --edition EOTC-COMPOSITE-EN --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli coverage-report --edition EOTC-COMPOSITE-EN --database-url "$COMPOSITE_DB_URL"
+```
+
+After the rehearsal and any rollback audit are complete, confirm `COMPOSITE_DB_DIR` is the temporary directory created above, then remove only its database file and the now-empty directory:
+
+```bash
+test -n "$COMPOSITE_DB_DIR" && test "$COMPOSITE_DB_DIR" != /private/tmp || exit 1
+rm -f -- "$COMPOSITE_DB_PATH"
+rmdir -- "$COMPOSITE_DB_DIR"
 ```

@@ -170,9 +170,11 @@ test('loads the recommended Genesis composite edition and discloses its source b
 
   const sourcePicker = page.getByLabel('Change translation')
   await sourcePicker.focus()
-  await sourcePicker.press('Home')
-  await sourcePicker.press('Enter')
-  await expect(sourcePicker).toBeFocused()
+  await sourcePicker.press('k')
+  await expect(sourcePicker).toHaveValue('KJV')
+  await expect(page).toHaveURL(/translation=KJV/)
+  await expect(page.getByText(rowsByBook.Genesis[1].text, { exact: true })).toBeVisible()
+  await expect(page.locator('.text-source-disclosure__identity strong')).toHaveText('King James Version')
 })
 
 test('labels Baruch as a literal KJV fallback instead of implying an Ethiopian translation', async ({ page }) => {
@@ -214,8 +216,22 @@ test('keeps the supplemental Prayer of Manasseh behind the LIBRARY catalog', asy
     }
   })
 
+  await page.goto(readerUrl('Genesis', 'ETHIO81'))
+  await expect(page.getByText(rowsByBook.Genesis[0].text, { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Choose a book' }).click()
+  const ethioPicker = page.getByRole('dialog', { name: 'Choose a book and chapter' })
+  await expect(ethioPicker).toBeVisible()
+  await expect(ethioPicker.getByRole('button', { name: 'Prayer of Manasseh' })).toHaveCount(0)
+  await expect(ethioPicker.getByRole('button', { name: 'Genesis', exact: true })).toBeVisible()
+  expect(catalogCanons).toContain('ETHIO81')
+  await page.keyboard.press('Escape')
+  await expect(ethioPicker).toBeHidden()
+
   await page.goto(readerUrl('Prayer of Manasseh', 'LIBRARY'))
   await expect(page.getByText(rowsByBook['Prayer of Manasseh'][0].text, { exact: true })).toBeVisible()
+  const persistedPicker = page.getByRole('dialog', { name: 'Choose a book and chapter' })
+  if (await persistedPicker.isVisible()) await page.keyboard.press('Escape')
+  await expect(persistedPicker).toBeHidden()
   await page.getByText('About this text', { exact: true }).click()
   await expect(page.getByText('Supplemental text', { exact: true })).toBeVisible()
   expect(catalogCanons).toContain('LIBRARY')
