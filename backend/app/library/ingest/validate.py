@@ -178,6 +178,46 @@ def _normalize_coverage(expected_works: object) -> dict[str, _Coverage]:
     return normalized
 
 
+def _normalize_known_missing_verses(
+    value: object,
+    expected: dict[str, _Coverage],
+) -> dict[str, dict[int, frozenset[int]]]:
+    if value is None:
+        return {}
+    if type(value) is not dict:
+        raise ValueError('known missing verses must be a dictionary keyed by work ID.')
+
+    normalized: dict[str, dict[int, frozenset[int]]] = {}
+    for work_id, raw_chapters in value.items():
+        if type(work_id) is not str or work_id not in expected:
+            raise ValueError('known missing verses must target an expected canonical work.')
+        if type(raw_chapters) is not dict or not raw_chapters:
+            raise ValueError('known missing verses chapters must be a nonempty dictionary.')
+
+        chapters: dict[int, frozenset[int]] = {}
+        for chapter_key, raw_verses in raw_chapters.items():
+            if type(chapter_key) is not str or not re.fullmatch(r'[1-9][0-9]*', chapter_key):
+                raise ValueError('known missing verses chapter keys must be positive integers.')
+            chapter = int(chapter_key)
+            coverage = expected[work_id]
+            if chapter > coverage.chapters:
+                raise ValueError('known missing verses chapter exceeds expected coverage.')
+            if type(raw_verses) is not list or not raw_verses:
+                raise ValueError('known missing verses lists must be nonempty lists.')
+            if any(type(verse) is not int or not 0 < verse <= _MAX_VERSE for verse in raw_verses):
+                raise ValueError('known missing verses must contain positive integer labels.')
+            if any(left >= right for left, right in zip(raw_verses, raw_verses[1:])):
+                raise ValueError('known missing verses must be strictly sorted and unique.')
+
+            declared = frozenset(raw_verses)
+            expected_count = coverage.verse_counts.get(chapter)
+            if expected_count is not None and max(declared) > expected_count + len(declared):
+                raise ValueError('known missing verses exceed the declared numbering domain.')
+            chapters[chapter] = declared
+        normalized[work_id] = chapters
+    return normalized
+
+
 def _normalize_warning(warning: object) -> str:
     if type(warning) is not str:
         raise ValueError('warning must be a string identifier.')
@@ -269,9 +309,13 @@ def validate_edition(
     verses: Iterable[NormalizedVerse],
     expected_works: object,
     warnings: Iterable[str] = (),
+    known_missing_verses: object = None,
 ) -> ValidationResult:
     """Validate one normalized edition without mutating or re-iterating its rows."""
     expected = _normalize_coverage(expected_works)
+    declared_missing = _normalize_known_missing_verses(
+        known_missing_verses, expected
+    )
     rows = tuple(verses)
     if not all(isinstance(row, NormalizedVerse) for row in rows):
         raise ValueError('verses must contain only NormalizedVerse values.')
@@ -350,6 +394,16 @@ def validate_edition(
                 work_id, chapter, verse,
             ))
 
+    for work_id, chapters in declared_missing.items():
+        work_observed = observed.get(work_id, {})
+        for chapter, declared_verses in chapters.items():
+            for verse in sorted(declared_verses & work_observed.get(chapter, set())):
+                findings.append(ValidationFinding(
+                    'error', 'declared_missing_verse_present',
+                    'A verse declared absent is present in the staged source.',
+                    work_id, chapter, verse,
+                ))
+
     for work_id, coverage in expected.items():
         work_observed = observed.get(work_id, {})
         if not work_observed:
@@ -361,8 +415,16 @@ def validate_edition(
                 findings.append(ValidationFinding('error', 'missing_chapter', 'Expected chapter has no observed verses.', work_id, chapter))
                 continue
             expected_verse_count = coverage.verse_counts.get(chapter)
-            maximum = expected_verse_count if expected_verse_count is not None else max(verses_in_chapter)
-            for start, end in _missing_verse_ranges(verses_in_chapter, maximum):
+            chapter_missing = declared_missing.get(work_id, {}).get(
+                chapter, frozenset()
+            )
+            maximum = (
+                expected_verse_count + len(chapter_missing)
+                if expected_verse_count is not None
+                else max(verses_in_chapter | chapter_missing)
+            )
+            accounted_verses = verses_in_chapter | chapter_missing
+            for start, end in _missing_verse_ranges(accounted_verses, maximum):
                 findings.append(ValidationFinding(
                     'error', 'missing_verse', _missing_verse_message(start, end),
                     work_id, chapter, start,
@@ -376,7 +438,12 @@ def validate_edition(
                     findings.append(ValidationFinding('error', 'observed_coverage_mismatch', 'Observed verse belongs to an unexpected work.', work_id, chapter, verse))
                 elif chapter > coverage.chapters:
                     findings.append(ValidationFinding('error', 'observed_coverage_mismatch', 'Observed verse is beyond declared chapters.', work_id, chapter, verse))
-                elif (expected_count := coverage.verse_counts.get(chapter)) is not None and verse > expected_count:
+                elif (
+                    (expected_count := coverage.verse_counts.get(chapter)) is not None
+                    and verse > expected_count + len(
+                        declared_missing.get(work_id, {}).get(chapter, frozenset())
+                    )
+                ):
                     findings.append(ValidationFinding('error', 'observed_coverage_mismatch', 'Observed verse is beyond declared verse count.', work_id, chapter, verse))
 
     return ValidationResult(tuple(findings))

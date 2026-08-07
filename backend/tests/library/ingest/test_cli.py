@@ -408,6 +408,47 @@ def test_stage_validate_publish_and_coverage_report(cli_database, tmp_path, monk
     assert 'error count' in rejected_retry.output.lower()
 
 
+def test_validate_passes_composite_declared_omissions_to_quality_gate(
+    cli_database, monkeypatch
+):
+    from app.library.ingest import cli
+    from app.library.ingest.types import NormalizedVerse
+    from app.library.ingest.validate import ValidationResult
+
+    manifest_path = Path(
+        'backend/data/scripture/eotc-composite-en/manifest.json'
+    ).resolve()
+    monkeypatch.setitem(cli.ADAPTERS, 'composite_english_bundle', lambda *_: (
+        NormalizedVerse(
+            'genesis', 'Genesis', 1, 1, 'In the beginning.',
+            'corrected-bundle.zip:GEN.json:1:1',
+        ),
+    ))
+    captured = {}
+
+    def fake_validate(rows, expected, warnings=(), known_missing_verses=None):
+        captured['known_missing_verses'] = known_missing_verses
+        return ValidationResult(())
+
+    monkeypatch.setattr(cli, 'validate_edition', fake_validate)
+    staged = _json(runner.invoke(cli.app, [
+        'stage', '--manifest', str(manifest_path), '--database-url', cli_database,
+    ]))
+    validated = _json(runner.invoke(cli.app, [
+        'validate', '--run-id', staged['run_id'], '--database-url', cli_database,
+    ]))
+
+    assert validated['errors'] == 0
+    assert captured['known_missing_verses']['2-meqabyan'] == {
+        '16': [9], '21': [9],
+    }
+    assert sum(
+        len(verses)
+        for chapters in captured['known_missing_verses'].values()
+        for verses in chapters.values()
+    ) == 48
+
+
 def test_validate_records_errors_and_publish_refuses_the_run(
     cli_database, tmp_path, monkeypatch
 ):

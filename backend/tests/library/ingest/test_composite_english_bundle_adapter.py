@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 import pytest
 
 from app.library.ingest.manifest import SourceManifest
+from app.library.ingest.validate import validate_edition
 
 
 def _work_source(source_key="world-messianic-bible", *, scope="ethio81"):
@@ -973,6 +974,13 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
     assert len({row.work_id for row in rows}) == 83
     assert len({(row.work_id, row.chapter) for row in rows}) == 1_520
     assert len({(row.work_id, row.chapter, row.verse) for row in rows}) == len(rows)
+    validation = validate_edition(
+        rows,
+        manifest.expected_works,
+        known_missing_verses=manifest.adapter_options.known_missing_verses,
+    )
+    assert validation.error_count == 0
+    assert validation.warning_count == 130
     assert any(
         row.work_id == "1-enoch" and row.chapter == 80 and row.verse == 1
         and row.text

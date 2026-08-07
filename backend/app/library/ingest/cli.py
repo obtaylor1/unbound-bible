@@ -275,7 +275,12 @@ def validate(
                 ('related_recension',) if manifest.relationship == 'related_recension' else ()
             )
             result = validate_edition(
-                rows, manifest.expected_works, warnings=relationship_warnings
+                rows,
+                manifest.expected_works,
+                warnings=relationship_warnings,
+                known_missing_verses=getattr(
+                    manifest.adapter_options, 'known_missing_verses', {}
+                ),
             )
             session.execute(delete(ScriptureValidationFinding).where(
                 ScriptureValidationFinding.run_id == run.id

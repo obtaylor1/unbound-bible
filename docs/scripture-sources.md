@@ -129,10 +129,16 @@ export COMPOSITE_DB_DIR="$(mktemp -d /private/tmp/unbound-composite-english.XXXX
 export COMPOSITE_DB_PATH="$COMPOSITE_DB_DIR/audit.db"
 export COMPOSITE_DB_URL="sqlite:///$COMPOSITE_DB_PATH"
 test ! -e "$COMPOSITE_DB_PATH" || exit 1
-DATABASE_URL="$COMPOSITE_DB_URL" ./venv/bin/alembic -c backend/alembic.ini upgrade head
+PYTHONPATH=backend DATABASE_URL="$COMPOSITE_DB_URL" ./venv/bin/python -c \
+  'from database import engine; from models import Base; Base.metadata.create_all(bind=engine)'
+PYTHONPATH=backend DATABASE_URL="$COMPOSITE_DB_URL" ./venv/bin/alembic -c backend/alembic.ini upgrade head
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli seed-canon --database-url "$COMPOSITE_DB_URL"
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli stage --manifest backend/data/scripture/eotc-composite-en/manifest.json --database-url "$COMPOSITE_DB_URL"
 ```
+
+The legacy runtime bootstrap must run before Alembic. The application still
+mirrors published reading text into `biblical_texts`; migration 0007 inspects
+that table and adds its unique verse-identity index when the table is present.
 
 Copy the exact `run_id` from the stage command's JSON output, then validate, publish with explicit confirmation, and audit persisted coverage:
 

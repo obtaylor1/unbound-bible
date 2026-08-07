@@ -265,6 +265,55 @@ def test_missing_verses_without_declared_counts_include_start_and_interior_gaps(
     ]
 
 
+def test_declared_source_omissions_preserve_verse_identities_without_errors():
+    result = validate_edition(
+        [verse(1, 1), verse(1, 3), verse(1, 4)],
+        coverage(verse_counts={'1': 3}),
+        known_missing_verses={'genesis': {'1': [2]}},
+    )
+
+    assert result.publishable
+    assert result.errors == ()
+
+
+def test_declared_trailing_source_omission_extends_numbering_domain():
+    result = validate_edition(
+        [verse(1, 1), verse(1, 2)],
+        coverage(verse_counts={'1': 2}),
+        known_missing_verses={'genesis': {'1': [3]}},
+    )
+
+    assert result.publishable
+    assert result.errors == ()
+
+
+def test_declared_missing_position_that_is_present_is_an_error():
+    result = validate_edition(
+        [verse(1, 1), verse(1, 2)],
+        coverage(verse_counts={'1': 2}),
+        known_missing_verses={'genesis': {'1': [2]}},
+    )
+
+    assert 'declared_missing_verse_present' in {
+        finding.code for finding in result.errors
+    }
+
+
+@pytest.mark.parametrize('known_missing_verses', [
+    {'unknown-work': {'1': [1]}},
+    {'genesis': {'2': [1]}},
+    {'genesis': {'1': []}},
+    {'genesis': {'1': [2, 1]}},
+    {'genesis': {1: [2]}},
+])
+def test_invalid_declared_source_omissions_are_rejected(known_missing_verses):
+    with pytest.raises(ValueError, match='known missing'):
+        validate_edition(
+            [verse(1, 1)], coverage(),
+            known_missing_verses=known_missing_verses,
+        )
+
+
 def test_contiguous_missing_verses_are_reported_as_ranges():
     result = validate_edition(
         [verse(1, 3), verse(1, 7)], coverage(verse_counts={'1': 10})
