@@ -133,6 +133,8 @@ function AskTheBible({ onPageChange }) {
     const title = `Grounded Q&A: ${messages[0]?.content.slice(0, 30) || 'New study'}...`
     const study = await api.post('/studies', { title })
     for (const message of messages) await api.post(`/studies/${study.id}/messages`, { role: message.type === 'ai' ? 'assistant' : 'user', content: message.content })
+    const sources = messages.flatMap((message) => message.sources || [])
+    for (const source of sources) await api.post(`/studies/${study.id}/sources`, { title: source.title || 'Library reference', url: source.url || null, citation: source.citation || source.reference || null })
     setStudyId(study.id)
     return study.id
   }
@@ -363,7 +365,7 @@ function AskTheBible({ onPageChange }) {
               <div className="chat-actions-row">
                 <button className="chat-action-btn-utility" onClick={handleSaveConversation}>💾 Save Study Session</button>
                 <button className="chat-action-btn-utility" onClick={handleShare}>🔗 Share Study Session</button>
-                <button className="chat-action-btn-utility clear" onClick={() => setMessages([])}>✕ Clear Chat</button>
+                <button className="chat-action-btn-utility clear" onClick={() => { setMessages([]); setStudyId(null); setStatusMessage('') }}>✕ Clear Chat</button>
               </div>
             )}
             <div className="ub-search-form">

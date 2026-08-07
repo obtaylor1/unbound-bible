@@ -2,6 +2,9 @@ from sqlalchemy import text
 from fastapi.testclient import TestClient
 
 from app.application import create_application
+from app.ai.contracts import ChatResult
+from app.ai.models import AIOperation
+from sqlalchemy import select
 
 
 def seed_scripture(app):
@@ -20,6 +23,10 @@ def test_exact_reference_answer_has_only_verified_citations(test_settings):
     assert data['sources']
     assert all(source['reference'] == 'Genesis 1:1' for source in data['sources'])
     assert set(data['citation_ids']) == {source['id'] for source in data['sources']}
+    with app.state.session_factory() as session:
+        operation = session.scalar(select(AIOperation))
+        assert operation.grounding_status == 'grounded'
+        assert operation.question_hash != 'What does Genesis 1:1 say?'
 
 
 def test_missing_evidence_is_insufficient_and_has_no_fake_citations(test_settings):
@@ -30,4 +37,16 @@ def test_missing_evidence_is_insufficient_and_has_no_fake_citations(test_setting
     data = response.json()
     assert data['grounding_status'] == 'insufficient'
     assert data['sources'] == []
+    assert data['citation_ids'] == []
+
+
+def test_uncited_provider_output_is_not_labeled_grounded(test_settings, monkeypatch):
+    class UncitedProvider:
+        name = 'test'
+        async def complete(self, messages): return ChatResult(content='A claim without a citation.', provider='test', model='test-model')
+    monkeypatch.setattr('app.ai.router.create_chat_provider', lambda *args, **kwargs: UncitedProvider())
+    app = create_application(test_settings); seed_scripture(app)
+    with TestClient(app) as client:
+        data = client.post('/api/v1/chat/ask', json={'question': 'What does Genesis 1:1 say?'}).json()
+    assert data['grounding_status'] == 'evidence_only'
     assert data['citation_ids'] == []

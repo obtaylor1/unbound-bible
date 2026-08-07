@@ -1,7 +1,7 @@
 import { diffWords, safeProvenanceUrl } from './comparisonModel'
 
 function SourceStatus({ state, onChooseSource, onLearnMore }) {
-  const warning = ['database-missing', 'translation-unavailable'].includes(state.kind)
+  const warning = ['edition-unavailable', 'translation-unavailable'].includes(state.kind)
   return (
     <div className={`source-status source-status-${warning ? 'warning' : 'neutral'}`} role="status">
       <span className="source-status-icon" aria-hidden="true">{warning ? 'i' : '—'}</span>

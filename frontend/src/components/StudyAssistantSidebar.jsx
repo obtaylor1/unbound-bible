@@ -203,6 +203,7 @@ function StudyAssistantSidebar({
       try {
         const study = await api.post('/studies', { title: `Study of ${book} ${chapter}:${verse}` })
         for (const message of chatMessages.filter((item) => item.id !== 'welcome')) await api.post(`/studies/${study.id}/messages`, { role: message.type === 'ai' ? 'assistant' : 'user', content: message.content })
+        for (const source of chatMessages.flatMap((item) => item.sources || [])) await api.post(`/studies/${study.id}/sources`, { title: source.title || 'Library reference', url: source.url || null, citation: source.citation || source.reference || null })
         persistedId = study.id; setStudyId(study.id)
       } catch (error) { console.error('Could not save study before sharing:', error); return }
     }

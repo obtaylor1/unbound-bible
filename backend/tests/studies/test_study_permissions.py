@@ -42,6 +42,9 @@ def test_studies_and_messages_are_private(test_settings):
             json={"role": "user", "content": "What does blessed mean here?"},
         )
         assert message.status_code == 201
+        source = client.post(f"/api/v1/studies/{study_id}/sources", headers=owner, json={"title": "Genesis", "citation": "Genesis 1:1"})
+        assert source.status_code == 201
+        assert client.post(f"/api/v1/studies/{study_id}/sources", headers=stranger, json={"title": "Hidden"}).status_code == 404
         assert client.get(f"/api/v1/studies/{study_id}", headers=owner).json()["messages"][0]["content"].startswith("What")
         assert client.get(f"/api/v1/studies/{study_id}", headers=stranger).status_code == 404
         assert client.delete(f"/api/v1/studies/{study_id}", headers=stranger).status_code == 404

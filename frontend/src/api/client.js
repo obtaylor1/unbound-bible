@@ -25,10 +25,12 @@ async function parse(response) {
 }
 
 function normalizedError(response, data) {
-  const error = new Error(data?.detail || data?.message || `Request failed (${response.status})`)
+  const validation = Array.isArray(data?.detail) ? data.detail : null
+  const message = validation ? validation.map((item) => item.msg || 'Invalid value').join('. ') : data?.detail || data?.message || `Request failed (${response.status})`
+  const error = new Error(typeof message === 'string' ? message : `Request failed (${response.status})`)
   error.status = response.status
   error.code = data?.code || 'request_failed'
-  error.fieldErrors = data?.field_errors || null
+  error.fieldErrors = data?.field_errors || (validation ? Object.fromEntries(validation.map((item) => [item.loc?.at(-1) || 'form', item.msg])) : null)
   return error
 }
 

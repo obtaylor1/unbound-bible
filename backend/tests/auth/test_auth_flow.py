@@ -51,6 +51,7 @@ def test_refresh_rotates_and_logout_revokes_refresh_token(test_settings):
 
         assert client.post("/api/v1/auth/logout", json={"refresh_token": rotated["refresh_token"]}).status_code == 204
         assert client.post("/api/v1/auth/refresh", json={"refresh_token": rotated["refresh_token"]}).status_code == 401
+        assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {rotated['access_token']}"}).status_code == 401
 
 
 def test_profile_update_and_anonymous_access(test_settings):

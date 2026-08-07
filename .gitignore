@@ -5,3 +5,8 @@ frontend/playwright-report/
 frontend/test-results/
 backend/data/commentaries/raw/
 commentary-coverage/
+__pycache__/
+*.py[cod]
+*.db
+*.db-*
+*.log

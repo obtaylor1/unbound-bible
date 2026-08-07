@@ -20,6 +20,12 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, encoded: str) -> bool:
+    if encoded.startswith(('$2a$', '$2b$', '$2y$')):
+        try:
+            from passlib.hash import bcrypt
+            return bcrypt.verify(password, encoded)
+        except (ValueError, TypeError):
+            return False
     try:
         algorithm, iterations, salt_value, digest_value = encoded.split("$", 3)
         if algorithm != "pbkdf2_sha256":

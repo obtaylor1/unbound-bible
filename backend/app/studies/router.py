@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.auth.dependencies import get_current_user, get_session
 from app.auth.models import User
-from app.studies.models import StudyMessage, StudySession, UserNote
+from app.studies.models import StudyMessage, StudySession, StudySource, UserNote
 from app.studies.repository import StudyRepository
-from app.studies.schemas import MessageCreate, MessageRead, NoteCreate, NoteRead, NoteUpdate, StudyCreate, StudyRead, StudyUpdate
+from app.studies.schemas import MessageCreate, MessageRead, NoteCreate, NoteRead, NoteUpdate, SourceCreate, SourceRead, StudyCreate, StudyRead, StudyUpdate
 
 
 router = APIRouter(tags=["studies"])
@@ -93,3 +93,11 @@ def add_message(study_id: uuid.UUID, payload: MessageCreate, user: User = Depend
     message = StudyMessage(study_id=study.id, **payload.model_dump())
     session.add(message); session.commit(); session.refresh(message)
     return message
+
+
+@router.post("/studies/{study_id}/sources", response_model=SourceRead, status_code=201)
+def add_source(study_id: uuid.UUID, payload: SourceCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    study = owned_study(study_id, user, session)
+    source = StudySource(study_id=study.id, **payload.model_dump())
+    session.add(source); session.commit(); session.refresh(source)
+    return source

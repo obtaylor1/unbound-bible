@@ -27,6 +27,13 @@ def test_login_and_ai_rate_limits(test_settings):
         assert client.post('/api/v1/chat/ask', json={'question': 'Genesis 1:1'}).status_code == 429
 
 
+def test_random_bearer_headers_cannot_bypass_public_rate_limit(test_settings):
+    test_settings.ai_rate_limit = 1
+    with TestClient(create_application(test_settings)) as client:
+        assert client.post('/api/v1/chat/ask', headers={'Authorization': 'Bearer random-one'}, json={'question': 'Genesis 1:1'}).status_code == 200
+        assert client.post('/api/v1/chat/ask', headers={'Authorization': 'Bearer random-two'}, json={'question': 'Genesis 1:1'}).status_code == 429
+
+
 def test_audio_upload_rejects_invalid_and_oversized_files_and_cleans_up(test_settings, tmp_path):
     test_settings.upload_max_bytes = 8
     test_settings.upload_temp_dir = str(tmp_path)

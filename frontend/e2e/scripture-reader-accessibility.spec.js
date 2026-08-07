@@ -314,7 +314,7 @@ test('renders Scripture first with labelled reader structure and no overflow', a
 })
 
 test('keeps primary controls visible at narrow layouts', async ({ page }, testInfo) => {
-  test.skip(!['mobile-320', 'mobile-390'].includes(testInfo.project.name), 'narrow-layout coverage')
+  test.skip(!['mobile-320', 'mobile-chromium'].includes(testInfo.project.name), 'narrow-layout coverage')
   await openReader(page)
 
   for (const name of ['Choose a book', 'Open study tools', 'Previous chapter', 'Next chapter', 'Change text size']) {
@@ -833,7 +833,7 @@ test('keyboard users can add a note for the selected verse', async ({ page }, te
 })
 
 test('search follows the real keyboard combobox flow and restores its opener', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'mobile-390', 'the search opener is the mobile word-labelled navigation')
+  test.skip(testInfo.project.name !== 'mobile-chromium', 'the search opener is the mobile word-labelled navigation')
   await openReader(page)
   const opener = page.getByRole('button', { name: 'Search' })
   await opener.click()
@@ -924,7 +924,7 @@ test('axe finds no WCAG A/AA violations in book picker and Study Tools', async (
 })
 
 test('axe finds no WCAG A/AA violations in the keyboard search dialog', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'mobile-390', 'search is exposed in the mobile navigation')
+  test.skip(testInfo.project.name !== 'mobile-chromium', 'search is exposed in the mobile navigation')
   await openReader(page)
   await page.getByRole('button', { name: 'Search' }).click()
   await page.getByRole('combobox', { name: 'Search the library' }).fill('Genesis')

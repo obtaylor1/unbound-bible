@@ -156,6 +156,9 @@ function RaceMisuse() {
 
             {auditResult && (
               <div className="audit-results-panel">
+                {auditResult.grounding_status === 'insufficient_evidence' && (
+                  <p className="section-desc" role="status">{auditResult.message}</p>
+                )}
                 <div className="audit-score-header">
                   <h4>Audit Report</h4>
                   <div className={`score-badge ${auditResult.metrics.accuracy_score >= 80 ? 'good' : auditResult.metrics.accuracy_score >= 60 ? 'warning' : 'bad'}`}>

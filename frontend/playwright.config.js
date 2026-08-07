@@ -1,22 +1,25 @@
 import { defineConfig, devices } from '@playwright/test'
 import process from 'node:process'
 
+const externalBaseURL = process.env.E2E_BASE_URL
+const localBaseURL = 'http://127.0.0.1:4173'
+
 export default defineConfig({
   testDir: './e2e',
   outputDir: './test-results',
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: [['line'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: externalBaseURL || localBaseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
-  webServer: {
+  webServer: externalBaseURL ? undefined : {
     command: 'npm run dev -- --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
+    url: localBaseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
@@ -41,7 +44,7 @@ export default defineConfig({
       },
     },
     {
-      name: 'mobile-390',
+      name: 'mobile-chromium',
       use: {
         ...devices['iPhone 13'],
         browserName: 'chromium',

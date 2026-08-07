@@ -23,10 +23,6 @@ args = "Frontend Server"
 task = "workflow.run"
 args = "Backend API"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Auth Forum API"
-
 [[workflows.workflow]]
 name = "Frontend Server"
 author = "agent"
@@ -45,23 +41,11 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd backend && python main.py"
+args = "cd backend && python -m uvicorn app.application:app --host 0.0.0.0 --port 8000"
 waitForPort = 8000
 
 [workflows.workflow.metadata]
 outputType = "console"
-
-[[workflows.workflow]]
-name = "Auth Forum API"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd auth-forum-api && python main.py"
-waitForPort = 8008
 
 [[ports]]
 localPort = 5000
@@ -74,7 +58,3 @@ externalPort = 5000
 [[ports]]
 localPort = 8000
 externalPort = 8000
-
-[[ports]]
-localPort = 8008
-externalPort = 8008

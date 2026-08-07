@@ -1,8 +1,8 @@
-import hashlib
 import time
 from collections import defaultdict, deque
 from threading import Lock
 from fastapi import HTTPException, Request
+from app.auth.security import decode_token
 
 
 class InMemoryRateLimiter:
@@ -22,7 +22,12 @@ class InMemoryRateLimiter:
 
 def request_key(request: Request) -> str:
     authorization = request.headers.get('authorization', '')
-    if authorization: return 'token:' + hashlib.sha256(authorization.encode()).hexdigest()[:24]
+    if authorization.lower().startswith('bearer '):
+        try:
+            claims = decode_token(authorization.split(' ', 1)[1], request.app.state.settings, 'access')
+            return 'user:' + claims['sub']
+        except (ValueError, KeyError):
+            pass
     return 'ip:' + (request.client.host if request.client else 'unknown')
 
 

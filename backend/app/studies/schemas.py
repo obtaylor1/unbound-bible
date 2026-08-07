@@ -47,3 +47,14 @@ class StudyRead(StudyCreate):
     created_at: datetime
     updated_at: datetime
     messages: list[MessageRead] = []
+
+
+class SourceCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str | None = Field(default=None, max_length=2048)
+    citation: str | None = Field(default=None, max_length=10_000)
+
+
+class SourceRead(SourceCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID

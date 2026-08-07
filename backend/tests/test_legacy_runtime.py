@@ -37,22 +37,38 @@ def _run_legacy_python(code: str, database_path: Path) -> subprocess.CompletedPr
     )
 
 
+def test_retired_legacy_auth_runtimes_keep_fail_closed_configuration():
+    backend_auth = (BACKEND_ROOT / 'auth.py').read_text(encoding='utf-8')
+    forum_auth = (REPOSITORY_ROOT / 'auth-forum-api' / 'auth.py').read_text(
+        encoding='utf-8'
+    )
+
+    assert 'guest_token' not in backend_auth
+    assert 'default insecure development key' not in backend_auth
+    assert 'default insecure development key' not in forum_auth
+    assert 'JWT_SECRET_KEY environment variable is required' in backend_auth
+    assert 'JWT_SECRET_KEY environment variable is required' in forum_auth
+
+
 def test_replit_backend_launcher_module_imports_with_safe_settings(tmp_path):
     replit_configuration = (REPOSITORY_ROOT / '.replit').read_text(encoding='utf-8')
-    assert 'args = "cd backend && python main.py"' in replit_configuration
+    assert (
+        'args = "cd backend && python -m uvicorn app.application:app '
+        '--host 0.0.0.0 --port 8000"'
+    ) in replit_configuration
 
     result = _run_legacy_python(
         '''
-        import main
-        schema = main.app.openapi()
-        assert '/api/v1/texts/{book}/{chapter}/{verse}/compare' in schema['paths']
-        print(main.app.title)
+        from app.application import app
+        schema = app.openapi()
+        assert '/api/v1/books' in schema['paths']
+        print(app.title)
         ''',
         tmp_path / 'launcher.db',
     )
 
     assert result.returncode == 0, result.stderr
-    assert 'Liberation Bible Project API' in result.stdout
+    assert 'Unbound Bible API' in result.stdout
 
 
 def test_legacy_launcher_exposes_only_migrated_private_study_routes(tmp_path):

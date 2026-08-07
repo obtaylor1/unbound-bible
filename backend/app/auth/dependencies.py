@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.auth.models import User
+from app.auth.models import AuthSession, User
 from app.auth.security import decode_token
 
 
@@ -28,9 +28,10 @@ def get_current_user(
     try:
         claims = decode_token(credentials.credentials, request.app.state.settings, "access")
         user = session.get(User, uuid.UUID(claims["sub"]))
+        auth_session = session.get(AuthSession, uuid.UUID(claims["sid"]))
     except (ValueError, TypeError):
         raise unauthorized from None
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or auth_session is None or auth_session.revoked_at is not None:
         raise unauthorized
     return user
 
@@ -44,7 +45,8 @@ def get_optional_user(
     try:
         claims = decode_token(credentials.credentials, request.app.state.settings, "access")
         user = session.get(User, uuid.UUID(claims["sub"]))
-        return user if user and user.is_active else None
+        auth_session = session.get(AuthSession, uuid.UUID(claims["sid"]))
+        return user if user and user.is_active and auth_session and auth_session.revoked_at is None else None
     except (ValueError, TypeError):
         return None
 

@@ -53,6 +53,7 @@ function App() {
   const [pageContext, setPageContext] = useState(null)
   const mainRef = useRef(null)
   const pendingHashRef = useRef(null)
+  const previousPageRef = useRef(currentPage)
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -69,9 +70,10 @@ function App() {
 
   useEffect(() => {
     document.title = `${titleForPage(currentPage)} · The Unbound Bible`
-    window.requestAnimationFrame(() => {
-      mainRef.current?.focus({ preventScroll: true })
-    })
+    if (previousPageRef.current !== currentPage) {
+      window.requestAnimationFrame(() => mainRef.current?.focus({ preventScroll: true }))
+    }
+    previousPageRef.current = currentPage
   }, [currentPage])
 
   const handlePageChange = (pageId, context = null) => {
