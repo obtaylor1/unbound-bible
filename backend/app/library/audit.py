@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,19 @@ SOURCE_GROUP_KEYS = {
     "web_apocrypha": "world-english-bible-apocrypha",
     "wmb": "world-messianic-bible",
 }
+FROZEN_DECLARED_GAPS_SHA256 = (
+    "1f1055b71545c7b353cf0e9e08d7813c9d7e0811c68d9364ec83c097cf1f73f8"
+)
+FROZEN_FALLBACK_WORK_IDS = frozenset(
+    {
+        "baruch",
+        "bel-and-the-dragon",
+        "letter-of-jeremiah",
+        "prayer-of-azariah",
+        "prayer-of-manasseh",
+        "susanna",
+    }
+)
 
 
 class AuditError(ValueError):
@@ -42,12 +56,43 @@ class AuditError(ValueError):
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise AuditError(f"Unable to load {path.name}: {error}") from error
     if not isinstance(value, dict):
         raise AuditError(f"{path.name} must contain a JSON object.")
     return value
+
+
+def _known_missing_verses_are_well_formed(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for work_id, chapters in value.items():
+        if (
+            not isinstance(work_id, str)
+            or not work_id
+            or not isinstance(chapters, dict)
+        ):
+            return False
+        for chapter, verses in chapters.items():
+            if (
+                not isinstance(chapter, str)
+                or not chapter.isdigit()
+                or int(chapter) < 1
+                or not isinstance(verses, list)
+                or not verses
+                or any(type(verse) is not int or verse < 1 for verse in verses)
+                or len(verses) != len(set(verses))
+            ):
+                return False
+    return True
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    canonical = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return sha256(canonical).hexdigest()
 
 
 def _declared_gap_count(known_missing_verses: Any) -> int:
@@ -171,7 +216,16 @@ def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
         errors.append("quality-report per-work source groups differ from frozen scope")
     if quality.get("undeclared_output_gaps") != []:
         errors.append("quality-report undeclared_output_gaps must be empty")
-    if adapter_options.get("known_missing_verses") != quality.get("known_missing_verses"):
+    manifest_gaps = adapter_options.get("known_missing_verses")
+    quality_gaps = quality.get("known_missing_verses")
+    for label, gaps in (("manifest", manifest_gaps), ("quality-report", quality_gaps)):
+        if not _known_missing_verses_are_well_formed(gaps):
+            errors.append(
+                f"{label} known_missing_verses must contain positive integer lists"
+            )
+        if _canonical_json_sha256(gaps) != FROZEN_DECLARED_GAPS_SHA256:
+            errors.append(f"{label} does not match the frozen declared gaps")
+    if manifest_gaps != quality_gaps:
         errors.append(
             "manifest and quality-report known_missing_verses do not match"
         )
@@ -186,26 +240,43 @@ def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
         for work_id, source in work_sources.items()
         if isinstance(source, dict) and source.get("fallback") is True
     )
-    if len(fallback_work_ids) != FROZEN_SOURCE_GROUP_WORK_COUNTS["kjv_apocrypha"]:
-        errors.append("manifest KJV fallback work count differs from frozen source-group scope")
+    if set(fallback_work_ids) != FROZEN_FALLBACK_WORK_IDS:
+        errors.append("manifest KJV fallback work IDs differ from the frozen reviewed set")
+    for work_id in FROZEN_FALLBACK_WORK_IDS:
+        observed = per_work.get(work_id)
+        if (
+            not isinstance(observed, dict)
+            or observed.get("source_group") != "kjv_apocrypha"
+        ):
+            errors.append(
+                f"KJV fallback work {work_id} must use source group kjv_apocrypha"
+            )
+    if (
+        set(provisional_work_ids) != manifest_work_ids
+        or len(provisional_work_ids) != 83
+    ):
+        errors.append("all 83 reviewed works must remain provisional")
 
     _fail_if_any(errors)
+    source_groups = dict(FROZEN_SOURCE_GROUP_WORK_COUNTS)
+    source_group_work_counts = dict(FROZEN_SOURCE_GROUP_WORK_COUNTS)
+    undeclared_output_gaps = list(quality["undeclared_output_gaps"])
     return {
         "status": "pass",
         "scope": actual_scope,
-        "source_groups": FROZEN_SOURCE_GROUP_WORK_COUNTS,
-        "undeclared_output_gaps": quality["undeclared_output_gaps"],
+        "source_groups": source_groups,
+        "undeclared_output_gaps": undeclared_output_gaps,
         "provisional_works": len(provisional_work_ids),
         "fallback_works": len(fallback_work_ids),
-        "source_group_work_counts": FROZEN_SOURCE_GROUP_WORK_COUNTS,
+        "source_group_work_counts": source_group_work_counts,
         "provisional_source_records": {
             "count": len(provisional_work_ids),
             "work_ids": provisional_work_ids,
         },
         "kjv_fallback_works": fallback_work_ids,
         "gap_status": {
-            "declared_output_gaps": _declared_gap_count(quality.get("known_missing_verses")),
-            "undeclared_output_gaps": quality["undeclared_output_gaps"],
+            "declared_output_gaps": _declared_gap_count(quality_gaps),
+            "undeclared_output_gaps": list(undeclared_output_gaps),
         },
     }
 
@@ -257,17 +328,22 @@ This reviewed release is a mixed-source general-reading compilation, **not one u
 
 
 def _write_atomically(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        with temporary.open("w", encoding="utf-8") as handle:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    except (OSError, UnicodeError) as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            raise AuditError(
+                f"Unable to write {path}: {error}; temporary cleanup failed: {cleanup_error}"
+            ) from error
+        raise AuditError(f"Unable to write {path}: {error}") from error
 
 
 def main(argv: list[str] | None = None) -> int:
