@@ -492,6 +492,7 @@ export default function ScriptureReaderPage({
               chapter={route.chapter}
               verses={verses}
               source={firstContentRow?.workSource}
+              edition={firstContentRow?.edition}
               selectedVerse={route.verse}
               commentaryActive={studyToolsOpen && activeStudyTool === 'commentary'}
               onSelectVerse={(verse) => navigate({ verse })}

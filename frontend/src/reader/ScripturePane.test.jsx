@@ -144,6 +144,32 @@ describe('ScripturePane', () => {
     ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('passes selected edition metadata to the source disclosure', () => {
+    const { rerender } = render(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={verses}
+        source={{ sourceLabel: 'World Messianic Bible' }}
+        edition={{ code: 'EOTC-COMPOSITE-EN' }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'About this translation' })).toBeVisible()
+    expect(screen.getByText('About this text')).toBeVisible()
+
+    rerender(
+      <ScripturePane
+        book="Genesis"
+        chapter={1}
+        verses={verses}
+        source={{ sourceLabel: 'World Messianic Bible' }}
+        edition={{ code: 'KJV' }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'About this translation' })).not.toBeInTheDocument()
+    expect(screen.getByText('About this text')).toBeVisible()
+  })
+
   it('names verse controls readably and selects a numeric verse', async () => {
     const user = userEvent.setup()
     const onSelectVerse = vi.fn()

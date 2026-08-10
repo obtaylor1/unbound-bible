@@ -58,6 +58,7 @@ export default function ScripturePane({
   chapter,
   verses,
   source,
+  edition,
   selectedVerse,
   commentaryActive = false,
   onSelectVerse,
@@ -117,7 +118,7 @@ export default function ScripturePane({
         </p>
       ) : null}
 
-      <TextSourceDisclosure source={source} />
+      <TextSourceDisclosure source={source} edition={edition} />
 
       <ol className="scripture-pane__verses" role="list">
         {normalizedVerses(verses).map((row) => {

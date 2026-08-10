@@ -77,6 +77,27 @@ describe('TextSourceDisclosure', () => {
     expect(screen.queryByText('Provisional source record')).not.toBeInTheDocument()
   })
 
+  it('adds edition-level context only for the normalized composite code', () => {
+    const { rerender } = render(
+      <TextSourceDisclosure
+        source={completeSource}
+        edition={{ code: ' eotc-composite-en ' }}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'About this translation' })).toBeVisible()
+    expect(screen.getByText('About this text')).toBeVisible()
+
+    rerender(
+      <TextSourceDisclosure
+        source={completeSource}
+        edition={{ code: 'WEB' }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'About this translation' })).not.toBeInTheDocument()
+    expect(screen.getByText('About this text')).toBeVisible()
+  })
+
   it('uses a 44px disclosure target, strong focus treatment, responsive wrapping, and reduced motion', () => {
     expect(readerCss).toMatch(/\.text-source-disclosure summary\s*\{[^}]*min-height:\s*44px/s)
     expect(readerCss).toMatch(/\.text-source-disclosure summary:focus-visible\s*\{[^}]*outline:\s*3px solid var\(--reader-gold\)/s)

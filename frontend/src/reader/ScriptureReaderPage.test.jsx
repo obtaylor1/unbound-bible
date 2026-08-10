@@ -222,6 +222,38 @@ describe('ScriptureReaderPage', () => {
     expect(screen.queryByText('Invalid row source')).not.toBeInTheDocument()
   })
 
+  it('passes the selected content row edition to the translation overview', async () => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: {
+        code: ' eotc-composite-en ',
+        name: 'Ethiopian Orthodox Bible — Composite English Edition',
+      },
+      workSource: {
+        sourceLabel: 'World Messianic Bible',
+        verificationStatus: 'provisional',
+      },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    renderReader()
+
+    const trigger = await screen.findByRole('button', { name: 'About this translation' })
+    await user.click(trigger)
+    expect(screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })).toBeInTheDocument()
+  })
+
   it('shows known missing composite English coverage without fabricating a verse', async () => {
     getBookCatalog.mockResolvedValue([{
       id: 'tegsats',
