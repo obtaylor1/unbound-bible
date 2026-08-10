@@ -39,6 +39,10 @@ const test = base.extend({
 
 test.beforeEach(async ({ page, diagnostics }) => {
   void diagnostics
+  await page.route('https://fonts.googleapis.com/**', (route) => route.fulfill({
+    contentType: 'text/css',
+    body: '',
+  }))
   await page.route('**/api/v1/books?**', (route) => route.fulfill({ json: { books: [
     { id: 'genesis', name: 'Genesis', testament: 'Old Testament', collection: 'Pentateuch', recommended_edition: COMPOSITE, unavailable_reason: null },
     { id: 'exodus', name: 'Exodus', testament: 'Old Testament', collection: 'Pentateuch', recommended_edition: COMPOSITE, unavailable_reason: null },
@@ -110,6 +114,10 @@ test('desktop reader release journey', async ({ page }, testInfo) => {
   await skip.focus(); await skip.press('Enter')
   await expect(page.locator('#main-content')).toBeFocused()
   await expect(page.getByRole('navigation')).toBeVisible()
+  await page.getByRole('button', { name: 'Home', exact: true }).click()
+  await page.getByRole('button', { name: 'Scriptures' }).click()
+  await page.getByRole('button', { name: 'Scripture Reader' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Genesis 1' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Choose a book' }).click()
   const picker = page.getByRole('dialog', { name: 'Choose a book and chapter' })
@@ -130,7 +138,9 @@ test('desktop reader release journey', async ({ page }, testInfo) => {
   await expect(translationDialog).toBeHidden()
   await page.getByText('About this text', { exact: true }).click()
   await expect(page.getByText(/Public-domain source text/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Current size: Medium' })).toBeVisible()
   await page.getByRole('button', { name: /Change text size/ }).click()
+  await expect(page.getByRole('button', { name: 'Current size: Large' })).toBeVisible()
   await page.getByRole('button', { name: 'Use light mode' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-reader-theme', 'light')
 
@@ -172,6 +182,7 @@ test('desktop sign-in failure has a safe reading recovery', async ({ page, diagn
   await dialog.getByRole('button', { name: 'Close' }).click()
   await expect(dialog).toBeHidden()
   await expect(page.getByText(GENESIS, { exact: true })).toBeVisible()
+  await expectAxe(page, 'desktop sign-in recovery')
 })
 
 test('mobile reader release journey', async ({ page }, testInfo) => {
@@ -190,7 +201,9 @@ test('mobile reader release journey', async ({ page }, testInfo) => {
   await expect(page.getByRole('heading', { name: 'Exodus 1' })).toBeVisible()
   const translationDialog = await openTranslationOverview(page)
   await translationDialog.getByRole('button', { name: 'Close translation information' }).click()
+  await expect(page.getByRole('button', { name: 'Current size: Medium' })).toBeVisible()
   await page.getByRole('button', { name: /Change text size/ }).click()
+  await expect(page.getByRole('button', { name: 'Current size: Large' })).toBeVisible()
   await page.getByRole('button', { name: 'Use light mode' }).click()
   await page.getByRole('button', { name: 'Open study tools' }).click()
   await page.getByRole('button', { name: 'Commentary' }).click()
@@ -239,4 +252,5 @@ test('unavailable Tegsats never fabricates chapters and recovery works', async (
   await page.getByRole('dialog').getByRole('button', { name: 'Genesis', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Chapter 1' }).click()
   await expect(page.getByText(GENESIS, { exact: true })).toBeVisible()
+  await expectAxe(page, 'unavailable Tegsats recovery')
 })

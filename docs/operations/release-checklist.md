@@ -23,13 +23,13 @@ Record evidence, date, owner, and status for every row. Use **Pending** for work
 
 ## Human public-launch blocker
 
-Public launch is blocked until at least one real participant aged 13–17 (with guardian or responsible-organization consent) and at least one real participant aged 65+ have completed the usability protocol. Severity 1 and 2 findings must be resolved or explicitly accepted by a named owner with rationale and date.
+Public launch is blocked until at least one real participant aged 13–17 (with guardian or responsible-organization consent) and at least one real participant aged 65+ have completed the usability protocol. Severity 1 findings must be resolved. Severity 2 findings must be resolved or explicitly accepted by a named owner with rationale and date.
 
 | Required human evidence | Status | Evidence / owner |
 | --- | --- | --- |
 | Age 13–17 session with consent | Pending |  |
 | Age 65+ session | Pending |  |
-| Severity 1/2 findings resolved or owner-accepted | Pending |  |
+| Severity 1 resolved; Severity 2 resolved or owner-accepted | Pending |  |
 
 ## Staging and recovery
 
