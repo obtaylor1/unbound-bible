@@ -22,4 +22,16 @@ describe('Navigation', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
+
+  it.each([
+    ['Ctrl+K', { ctrlKey: true }],
+    ['Cmd+K', { metaKey: true }],
+  ])('opens global search with %s when no modal dialog is active', (_, modifier) => {
+    render(<Navigation currentPage="home" onPageChange={vi.fn()} />)
+
+    fireEvent.keyDown(document, { key: 'k', ...modifier })
+
+    expect(screen.getByRole('dialog', { name: 'Search' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Search the library' })).toHaveFocus()
+  })
 })

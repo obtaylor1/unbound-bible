@@ -935,6 +935,55 @@ describe('ScriptureReaderPage', () => {
     expect(document.querySelector('.translation-overview__backdrop')).toContainElement(dialog)
   })
 
+  it.each([
+    ['Ctrl+K', { ctrlKey: true }],
+    ['Cmd+K', { metaKey: true }],
+  ])('blocks %s global search while translation information is modal', async (_, modifier) => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: { code: 'EOTC-COMPOSITE-EN' },
+      workSource: { sourceLabel: 'World Messianic Bible' },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+
+    const trigger = await screen.findByRole('button', { name: 'About this translation' })
+    await user.click(trigger)
+    const translationDialog = screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })
+    const close = within(translationDialog).getByRole('button', {
+      name: 'Close translation information',
+    })
+    expect(close).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'k', ...modifier })
+
+    expect(screen.queryByRole('dialog', { name: 'Search' })).not.toBeInTheDocument()
+    expect(translationDialog).toBeInTheDocument()
+    expect(close).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
   it('preserves the selected verse when App opens the note destination', async () => {
     const user = userEvent.setup()
     render(
