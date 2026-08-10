@@ -901,6 +901,40 @@ describe('ScriptureReaderPage', () => {
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
   })
 
+  it('keeps the modal dialog present above the still-mounted global navigation', async () => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: { code: 'EOTC-COMPOSITE-EN' },
+      workSource: { sourceLabel: 'World Messianic Bible' },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+
+    const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
+    await user.click(await screen.findByRole('button', { name: 'About this translation' }))
+    const dialog = screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })
+
+    expect(navigation).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(document.querySelector('.translation-overview__backdrop')).toContainElement(dialog)
+  })
+
   it('preserves the selected verse when App opens the note destination', async () => {
     const user = userEvent.setup()
     render(

@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import TranslationOverview from './TranslationOverview'
 
 const readerCss = readFileSync('src/reader/readerTokens.css', 'utf8')
+const navigationCss = readFileSync('src/components/Navigation.css', 'utf8')
+const appCss = readFileSync('src/App.css', 'utf8')
 const compositeEdition = {
   code: 'EOTC-COMPOSITE-EN',
   name: 'Ethiopian Orthodox Bible — Composite English Edition',
@@ -97,6 +99,25 @@ describe('TranslationOverview', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('cycles forward and backward through the actual dialog controls in document order', async () => {
+    const user = userEvent.setup()
+    render(<TranslationOverview edition={compositeEdition} />)
+
+    await user.click(screen.getByRole('button', { name: 'About this translation' }))
+    const close = screen.getByRole('button', { name: 'Close translation information' })
+    const audit = screen.getByRole('link', { name: /read the detailed source audit/i })
+    expect(close).toHaveFocus()
+
+    await user.tab()
+    expect(audit).toHaveFocus()
+    await user.tab()
+    expect(close).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(audit).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(close).toHaveFocus()
+  })
+
   it('ignores dialog clicks but closes from the backdrop', async () => {
     const user = userEvent.setup()
     const { container } = render(<TranslationOverview edition={compositeEdition} />)
@@ -146,5 +167,40 @@ describe('TranslationOverview', () => {
     expect(readerCss).toMatch(/\.translation-overview__content\s*\{[^}]*overflow-wrap:\s*anywhere[^}]*max-width:\s*65ch/s)
     expect(readerCss).toMatch(/@media \(max-width: 30rem\)[\s\S]*\.translation-overview__dialog/s)
     expect(readerCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.translation-overview/s)
+  })
+
+  it('keeps its scrollable dialog bounded to the viewport', () => {
+    expect(readerCss).toMatch(/\.translation-overview__dialog\s*\{[^}]*max-height:\s*min\([^;]*100dvh[^;]*\)[^}]*overflow:\s*hidden/s)
+    expect(readerCss).toMatch(/\.translation-overview__content\s*\{[^}]*overflow-y:\s*auto/s)
+    expect(readerCss).toMatch(/\.translation-overview__backdrop\s*\{[^}]*inset:\s*0[^}]*overflow:\s*hidden/s)
+  })
+
+  it('places the pointer-intercepting backdrop above persistent app navigation without an ancestor stacking context', () => {
+    const navigationLayer = Number(
+      navigationCss.match(/\.navigation\s*\{[^}]*z-index:\s*(\d+)/s)?.[1],
+    )
+    const translationLayer = Number(
+      readerCss.match(/\.translation-overview__backdrop\s*\{[^}]*z-index:\s*(\d+)/s)?.[1],
+    )
+
+    expect(navigationLayer).toBeGreaterThan(0)
+    expect(translationLayer).toBeGreaterThan(navigationLayer)
+    expect(readerCss).toMatch(/\.translation-overview__backdrop\s*\{[^}]*pointer-events:\s*auto/s)
+
+    const stackingContextProperties = /(?:^|;)\s*(?:transform|filter|perspective|isolation|contain|will-change|opacity)\s*:/
+    for (const [css, selector] of [
+      [appCss, '.app'],
+      [readerCss, '.scripture-reader'],
+      [readerCss, '.scripture-reader-shell__main'],
+      [readerCss, '.scripture-pane'],
+      [readerCss, '.text-source-disclosure'],
+      [readerCss, '.translation-overview'],
+    ]) {
+      const escapedSelector = selector.replaceAll('.', '\\.')
+      const declarations = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1]
+      expect(declarations, `${selector} must have a readable CSS block`).toBeTruthy()
+      expect(declarations).not.toMatch(stackingContextProperties)
+      expect(declarations).not.toMatch(/position:\s*[^;]+;[^}]*z-index:/s)
+    }
   })
 })

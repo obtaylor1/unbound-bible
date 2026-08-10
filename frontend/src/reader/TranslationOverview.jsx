@@ -1,13 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { isCompositeEnglishEdition } from './compositeEdition'
 import useDialogFocus from './useDialogFocus'
 
-const COMPOSITE_EDITION_CODE = 'EOTC-COMPOSITE-EN'
 const SOURCE_AUDIT_URL = 'https://github.com/obtaylor1/unbound-bible/blob/main/docs/operations/ethiopian-composite-release-audit.md'
-
-function isCompositeEnglishEdition(edition) {
-  return typeof edition?.code === 'string'
-    && edition.code.trim().toUpperCase() === COMPOSITE_EDITION_CODE
-}
 
 export default function TranslationOverview({ edition }) {
   const [open, setOpen] = useState(false)

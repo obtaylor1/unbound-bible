@@ -1,9 +1,5 @@
 import TranslationOverview from './TranslationOverview'
-
-function isCompositeEnglishEdition(edition) {
-  return typeof edition?.code === 'string'
-    && edition.code.trim().toUpperCase() === 'EOTC-COMPOSITE-EN'
-}
+import { isCompositeEnglishEdition } from './compositeEdition'
 
 function safeProvenanceUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return null
