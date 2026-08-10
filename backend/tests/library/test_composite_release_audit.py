@@ -6,7 +6,12 @@ import sys
 
 import pytest
 
-from app.library.audit import AuditError, audit_bundle, render_markdown
+from app.library.audit import (
+    AuditError,
+    audit_bundle,
+    audit_composite_release,
+    render_markdown,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -14,8 +19,9 @@ REVIEWED_BUNDLE = REPOSITORY_ROOT / "backend/data/scripture/eotc-composite-en"
 
 
 def test_reviewed_composite_bundle_matches_the_frozen_release_scope():
-    report = audit_bundle(REVIEWED_BUNDLE)
+    report = audit_composite_release(REVIEWED_BUNDLE)
 
+    assert report["status"] == "pass"
     assert report["scope"] == {
         "works": 83,
         "ethio81_works": 82,
@@ -23,7 +29,7 @@ def test_reviewed_composite_bundle_matches_the_frozen_release_scope():
         "chapters": 1520,
         "verses": 38938,
     }
-    assert report["source_group_work_counts"] == {
+    assert report["source_groups"] == {
         "extra": 2,
         "kjv_apocrypha": 6,
         "meqabyan": 3,
@@ -31,6 +37,9 @@ def test_reviewed_composite_bundle_matches_the_frozen_release_scope():
         "web_apocrypha": 6,
         "wmb": 39,
     }
+    assert report["undeclared_output_gaps"] == []
+    assert report["provisional_works"] == 83
+    assert report["fallback_works"] == 6
     assert report["provisional_source_records"]["count"] == 83
     assert report["kjv_fallback_works"] == [
         "baruch",
@@ -52,7 +61,19 @@ def test_audit_rejects_a_mismatched_corrected_verse_count(tmp_path):
     report_path.write_text(json.dumps(quality_report))
 
     with pytest.raises(AuditError, match="corrected_verse_count"):
-        audit_bundle(bundle)
+        audit_composite_release(bundle)
+
+
+def test_audit_rejects_manifest_gaps_that_disagree_with_the_quality_report(tmp_path):
+    bundle = tmp_path / "bundle"
+    shutil.copytree(REVIEWED_BUNDLE, bundle)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["adapter_options"]["known_missing_verses"].pop("sirach")
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(AuditError, match="known_missing_verses"):
+        audit_composite_release(bundle)
 
 
 def test_markdown_names_the_composite_scope_and_provenance_caveat():

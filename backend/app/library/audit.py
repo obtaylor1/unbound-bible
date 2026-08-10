@@ -67,9 +67,9 @@ def _fail_if_any(errors: list[str]) -> None:
         raise AuditError("Composite release audit failed:\n- " + "\n- ".join(errors))
 
 
-def audit_bundle(bundle: Path) -> dict[str, Any]:
+def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
     """Validate the reviewed bundle and return its deterministic audit report."""
-    bundle = Path(bundle)
+    bundle = Path(bundle_dir)
     manifest = _load_json(bundle / "manifest.json")
     quality = _load_json(bundle / "data-quality-report.json")
     errors: list[str] = []
@@ -171,6 +171,10 @@ def audit_bundle(bundle: Path) -> dict[str, Any]:
         errors.append("quality-report per-work source groups differ from frozen scope")
     if quality.get("undeclared_output_gaps") != []:
         errors.append("quality-report undeclared_output_gaps must be empty")
+    if adapter_options.get("known_missing_verses") != quality.get("known_missing_verses"):
+        errors.append(
+            "manifest and quality-report known_missing_verses do not match"
+        )
 
     provisional_work_ids = sorted(
         work_id
@@ -187,7 +191,12 @@ def audit_bundle(bundle: Path) -> dict[str, Any]:
 
     _fail_if_any(errors)
     return {
+        "status": "pass",
         "scope": actual_scope,
+        "source_groups": FROZEN_SOURCE_GROUP_WORK_COUNTS,
+        "undeclared_output_gaps": quality["undeclared_output_gaps"],
+        "provisional_works": len(provisional_work_ids),
+        "fallback_works": len(fallback_work_ids),
         "source_group_work_counts": FROZEN_SOURCE_GROUP_WORK_COUNTS,
         "provisional_source_records": {
             "count": len(provisional_work_ids),
@@ -199,6 +208,9 @@ def audit_bundle(bundle: Path) -> dict[str, Any]:
             "undeclared_output_gaps": quality["undeclared_output_gaps"],
         },
     }
+
+
+audit_bundle = audit_composite_release
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -264,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--markdown", type=Path, required=True)
     arguments = parser.parse_args(argv)
     try:
-        report = audit_bundle(arguments.bundle)
+        report = audit_composite_release(arguments.bundle)
         _write_atomically(arguments.markdown, render_markdown(report))
     except AuditError as error:
         print(error, file=sys.stderr)
