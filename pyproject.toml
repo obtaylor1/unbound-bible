@@ -35,9 +35,6 @@ dependencies = [
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
 norecursedirs = ["backend/data", "data"]
-filterwarnings = [
-    "ignore::starlette.exceptions.StarletteDeprecationWarning",
-]
 
 [[tool.uv.index]]
 explicit = true
