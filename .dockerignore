@@ -5,6 +5,9 @@
 !backend/**
 !frontend/
 !frontend/**
+!scripts/
+!scripts/backup-staging.sh
+!scripts/restore-check-staging.sh
 
 # Secrets and repository internals stay outside every image build context.
 .env*

@@ -24,6 +24,9 @@ services:
       - .env.staging
     environment:
       ENVIRONMENT: staging
+      BACKUP_DIR: /var/backups/unbound-bible
+    volumes:
+      - backup_data:/var/backups/unbound-bible
     depends_on:
       db:
         condition: service_healthy
@@ -54,3 +57,4 @@ services:
 
 volumes:
   postgres_data:
+  backup_data:

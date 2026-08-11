@@ -65,6 +65,21 @@ def test_api_image_migrates_before_starting_the_modular_app_as_non_root():
     assert "ghcr.io/astral-sh/uv" not in dockerfile
 
 
+def test_api_image_contains_postgresql_clients_and_only_the_backup_wrappers():
+    dockerfile = _read("backend/Dockerfile")
+    dockerignore = _read(".dockerignore")
+
+    assert "postgresql-client" in dockerfile
+    assert "scripts/backup-staging.sh" in dockerfile
+    assert "scripts/restore-check-staging.sh" in dockerfile
+    assert "chmod 0755" in dockerfile
+    assert "mkdir -p /var/backups/unbound-bible" in dockerfile
+    assert "chown app:app /var/backups/unbound-bible" in dockerfile
+    assert "!scripts/backup-staging.sh" in dockerignore
+    assert "!scripts/restore-check-staging.sh" in dockerignore
+    assert "!scripts/**" not in dockerignore
+
+
 def test_frontend_image_builds_vite_and_serves_with_non_root_nginx():
     dockerfile = _read("frontend/Dockerfile")
     nginx = _read("frontend/nginx.conf")
@@ -94,6 +109,9 @@ def test_staging_compose_uses_postgres_healthchecks_env_file_and_no_embedded_sec
     assert services["db"]["env_file"]
     assert services["api"]["depends_on"]["db"]["condition"] == "service_healthy"
     assert "postgres_data" in compose["volumes"]
+    assert services["api"]["environment"]["BACKUP_DIR"] == "/var/backups/unbound-bible"
+    assert services["api"]["volumes"] == ["backup_data:/var/backups/unbound-bible"]
+    assert "backup_data" in compose["volumes"]
 
     serialized = json.dumps(compose)
     for secret_name in ["JWT_SECRET_KEY", "AI_API_KEY", "POSTGRES_PASSWORD"]:
@@ -193,6 +211,10 @@ def test_runbook_documents_configuration_health_deploy_and_rollback():
         "successful Quality workflow",
         "one staging release at a time",
         "STAGING_DEPLOY_HOOK_URL",
+        "`BACKUP_DIR=/var/backups/unbound-bible`",
+        "`./scripts/backup-staging.sh`",
+        "`./scripts/restore-check-staging.sh`",
+        "disposable database",
         "Rollback",
     ]:
         assert phrase in runbook

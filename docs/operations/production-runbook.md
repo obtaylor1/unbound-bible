@@ -45,6 +45,7 @@ AI_CHAT_PROVIDER=demo
 AI_EMBEDDING_PROVIDER=demo
 AI_TRANSCRIPTION_PROVIDER=demo
 ALLOW_PRODUCTION_DEMO=true
+BACKUP_DIR=/var/backups/unbound-bible
 ```
 
 Staging uses the same fail-closed database, JWT, HTTPS, CORS, and provider checks as production. Use an OpenAI-compatible provider and `AI_API_KEY` instead of the explicit demo override when provider-backed features are under test. Limit access at the provider or TLS proxy; do not expose the database port.
@@ -72,7 +73,23 @@ After deployment, record the commit SHA and immutable image digest references, c
 
 ## Backup and restore
 
-Use platform-native PostgreSQL snapshots plus a logical `pg_dump`. Encrypt backups, restrict access, and test restoration on a separate database. Restore into a new database, run migrations, smoke-test it, then switch the application connection; do not overwrite the only production copy.
+Use platform-native PostgreSQL snapshots plus the repository's logical backup. Encrypt exported backups, restrict operator access, and test restoration on a separate database. The staging API receives an explicit `BACKUP_DIR=/var/backups/unbound-bible`; Compose mounts the persistent `backup_data` volume there. `DATABASE_URL` remains explicit in the protected `.env.staging` file and must never be placed in a command line copied into a ticket or terminal transcript.
+
+Create a custom-format logical backup from the repository root with the `./scripts/backup-staging.sh` wrapper:
+
+```sh
+docker compose --env-file .env.staging -f compose.staging.yml run --rm api ./scripts/backup-staging.sh
+```
+
+The backup wrapper creates the directory with mode `0700`, writes a temporary dump with mode `0600`, and atomically publishes a UTC-named `unbound-bible-YYYYMMDDTHHMMSSZ.dump`. Copy verified backups from the named volume into encrypted, access-controlled storage according to the provider retention policy. A container volume is not a substitute for an off-host encrypted copy.
+
+Before every deploy and on the scheduled recovery rehearsal, verify the newest dump with the `./scripts/restore-check-staging.sh` wrapper:
+
+```sh
+docker compose --env-file .env.staging -f compose.staging.yml run --rm api ./scripts/restore-check-staging.sh
+```
+
+The restore check never restores over the source. It creates a cryptographically random, strictly prefixed disposable database; restores with `pg_restore`; applies Alembic migrations; starts the restored API; checks `/api/v1/health` and `/api/v1/health/providers`; and compares `biblical_texts`, users, studies, notes, shares, notifications, community posts, and community comments. It terminates only connections to that guarded disposable database and drops it in a `finally` cleanup whether verification succeeds or fails. A mismatch, unhealthy endpoint, migration error, restore error, or cleanup error blocks deployment. Never rename a normal database to the disposable prefix or run these wrappers with a superuser broader than the staging cluster requires.
 
 ## Rollback
 

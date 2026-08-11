@@ -7,13 +7,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
-RUN pip install --no-cache-dir uv==0.8.13
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv==0.8.13
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
 COPY backend ./backend
+COPY scripts/backup-staging.sh scripts/restore-check-staging.sh ./backend/scripts/
 RUN groupadd --system app && useradd --system --gid app --home /app app \
-    && chown -R app:app /app
+    && mkdir -p /var/backups/unbound-bible \
+    && chmod 0755 /app/backend/scripts/backup-staging.sh /app/backend/scripts/restore-check-staging.sh \
+    && chown -R app:app /app \
+    && chown app:app /var/backups/unbound-bible
 
 USER app
 WORKDIR /app/backend

@@ -1,0 +1,489 @@
+"""Create PostgreSQL backups and prove they can be restored safely.
+
+The public entry points deliberately accept explicit database and backup
+locations.  Commands are always executed as argument arrays and errors are
+re-raised without command arguments so database credentials cannot appear in
+operator output.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Mapping, Sequence
+
+import psycopg2
+from psycopg2 import sql
+from sqlalchemy.engine import URL, make_url
+
+
+BACKUP_PREFIX = "unbound-bible-"
+DISPOSABLE_DATABASE_PREFIX = "unbound_restore_check_"
+_DISPOSABLE_DATABASE_PATTERN = re.compile(r"^unbound_restore_check_[0-9a-f]{24}$")
+RELEASE_CRITICAL_TABLES = (
+    "biblical_texts",
+    "users",
+    "study_sessions",
+    "user_notes",
+    "shared_studies",
+    "notifications",
+    "community_posts",
+    "community_comments",
+)
+
+
+class BackupError(RuntimeError):
+    """Base class for safe operator-facing backup errors."""
+
+
+class BackupPolicyError(BackupError):
+    """Raised when an operation would violate the backup policy."""
+
+
+class BackupOperationError(BackupError):
+    """Raised when an external backup command fails."""
+
+
+class BackupVerificationError(BackupError):
+    """Raised when an isolated restoration cannot be verified."""
+
+
+@dataclass(frozen=True)
+class BackupSettings:
+    database_url: str
+    backup_dir: Path
+
+
+@dataclass(frozen=True)
+class CountComparison:
+    ok: bool
+    mismatches: dict[str, tuple[int | None, int | None]]
+
+
+@dataclass(frozen=True)
+class RestoreVerification:
+    ok: bool
+    database_name: str
+    counts: CountComparison
+    health: Mapping[str, Mapping[str, object]]
+
+
+def settings_from_environment(environment: Mapping[str, str] | None = None) -> BackupSettings:
+    values = os.environ if environment is None else environment
+    database_url = values.get("DATABASE_URL", "").strip()
+    backup_dir = values.get("BACKUP_DIR", "").strip()
+    if not database_url:
+        raise BackupPolicyError("DATABASE_URL must be set explicitly")
+    if not backup_dir:
+        raise BackupPolicyError("BACKUP_DIR must be set explicitly")
+    _normalized_postgres_url(database_url)
+    return BackupSettings(database_url=database_url, backup_dir=Path(backup_dir))
+
+
+def backup_filename(moment: datetime) -> str:
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("Backup timestamp must be timezone-aware")
+    utc = moment.astimezone(timezone.utc)
+    return f"{BACKUP_PREFIX}{utc:%Y%m%dT%H%M%SZ}.dump"
+
+
+def _normalized_postgres_url(database_url: str) -> str:
+    try:
+        parsed = make_url(database_url)
+    except Exception:
+        raise BackupPolicyError("DATABASE_URL must be a valid PostgreSQL URL") from None
+    if parsed.get_backend_name() != "postgresql" or not parsed.database:
+        raise BackupPolicyError("DATABASE_URL must name an explicit PostgreSQL database")
+    normalized = parsed.set(drivername="postgresql")
+    return normalized.render_as_string(hide_password=False)
+
+
+def _database_name(database_url: str) -> str:
+    parsed = make_url(_normalized_postgres_url(database_url))
+    if not parsed.database:
+        raise BackupPolicyError("DATABASE_URL must name an explicit PostgreSQL database")
+    return parsed.database
+
+
+def _database_url_with_name(database_url: str, database_name: str) -> str:
+    parsed = make_url(_normalized_postgres_url(database_url))
+    return parsed.set(database=database_name).render_as_string(hide_password=False)
+
+
+def _maintenance_database_url(database_url: str) -> str:
+    return _database_url_with_name(database_url, "postgres")
+
+
+def _postgres_cli_connection(database_url: str) -> tuple[str, dict[str, str]]:
+    """Return a password-free connection URI and an isolated client environment."""
+    parsed = make_url(_normalized_postgres_url(database_url))
+    environment = dict(os.environ)
+    if parsed.password is None:
+        environment.pop("PGPASSWORD", None)
+    else:
+        environment["PGPASSWORD"] = parsed.password
+    safe_url = URL.create(
+        drivername=parsed.drivername,
+        username=parsed.username,
+        host=parsed.host,
+        port=parsed.port,
+        database=parsed.database,
+        query=parsed.query,
+    ).render_as_string(hide_password=False)
+    return safe_url, environment
+
+
+def _run_command(
+    argv: Sequence[str], *, env: Mapping[str, str] | None = None, cwd: Path | None = None
+) -> None:
+    arguments = list(argv)
+    if not arguments:
+        raise BackupPolicyError("External command cannot be empty")
+    try:
+        subprocess.run(
+            arguments,
+            check=True,
+            shell=False,
+            env=None if env is None else dict(env),
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise BackupOperationError(f"{Path(arguments[0]).name} failed") from None
+
+
+def create_backup(
+    database_url: str,
+    backup_dir: str | Path,
+    *,
+    now: datetime | None = None,
+) -> Path:
+    postgres_url = _normalized_postgres_url(database_url)
+    command_url, command_environment = _postgres_cli_connection(postgres_url)
+    directory = Path(backup_dir)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    target = directory / backup_filename(now or datetime.now(timezone.utc))
+    if target.exists():
+        raise BackupPolicyError(f"Backup already exists: {target.name}")
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.stem}-", suffix=".tmp", dir=directory
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    temporary.chmod(0o600)
+    try:
+        _run_command(
+            [
+                "pg_dump",
+                "--format=custom",
+                "--no-owner",
+                "--no-privileges",
+                "--file",
+                str(temporary),
+                "--dbname",
+                command_url,
+            ],
+            env=command_environment,
+        )
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise BackupOperationError("pg_dump produced an empty backup")
+        temporary.chmod(0o600)
+        os.replace(temporary, target)
+        target.chmod(0o600)
+        return target
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def compare_release_counts(
+    *, before: Mapping[str, int], after: Mapping[str, int]
+) -> CountComparison:
+    mismatches: dict[str, tuple[int | None, int | None]] = {}
+    for table in sorted(set(before) | set(after)):
+        source_count = before.get(table)
+        restored_count = after.get(table)
+        if source_count != restored_count:
+            mismatches[table] = (source_count, restored_count)
+    return CountComparison(ok=not mismatches, mismatches=mismatches)
+
+
+def disposable_database_name() -> str:
+    return f"{DISPOSABLE_DATABASE_PREFIX}{secrets.token_hex(12)}"
+
+
+def assert_disposable_database_name(database_name: str) -> None:
+    if not _DISPOSABLE_DATABASE_PATTERN.fullmatch(database_name):
+        raise BackupPolicyError("Refusing to operate on a database without a valid disposable name")
+
+
+def _connect_maintenance(database_url: str):
+    try:
+        return psycopg2.connect(_maintenance_database_url(database_url))
+    except Exception:
+        raise BackupOperationError("Could not connect to the PostgreSQL maintenance database") from None
+
+
+def _create_disposable_database(database_url: str, database_name: str) -> None:
+    assert_disposable_database_name(database_name)
+    if database_name == _database_name(database_url):
+        raise BackupPolicyError("Disposable database must not be the source database")
+    connection = _connect_maintenance(database_url)
+    try:
+        connection.autocommit = True
+        with connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
+    except Exception:
+        raise BackupOperationError("Could not create the disposable restore database") from None
+    finally:
+        connection.close()
+
+
+def _drop_disposable_database(database_url: str, database_name: str) -> None:
+    assert_disposable_database_name(database_name)
+    if database_name == _database_name(database_url):
+        raise BackupPolicyError("Refusing to drop the source database")
+    connection = _connect_maintenance(database_url)
+    try:
+        connection.autocommit = True
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = %s AND pid <> pg_backend_pid()
+                """,
+                (database_name,),
+            )
+            cursor.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name))
+            )
+    except Exception:
+        raise BackupOperationError("Could not remove the disposable restore database") from None
+    finally:
+        connection.close()
+
+
+def _read_release_counts(database_url: str) -> dict[str, int]:
+    try:
+        connection = psycopg2.connect(_normalized_postgres_url(database_url))
+    except Exception:
+        raise BackupVerificationError("Could not connect while reading release-critical counts") from None
+    try:
+        counts: dict[str, int] = {}
+        with connection.cursor() as cursor:
+            for table in RELEASE_CRITICAL_TABLES:
+                cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
+                row = cursor.fetchone()
+                if row is None:
+                    raise BackupVerificationError(f"Could not count release-critical table {table}")
+                counts[table] = int(row[0])
+        return counts
+    except BackupError:
+        raise
+    except Exception:
+        raise BackupVerificationError("Could not read release-critical table counts") from None
+    finally:
+        connection.close()
+
+
+def _available_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _read_health(url: str) -> Mapping[str, object]:
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            if response.status != 200:
+                raise BackupVerificationError("Restored application health endpoint was not successful")
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        raise BackupVerificationError("Restored application health endpoint was not reachable") from None
+    if not isinstance(payload, dict) or payload.get("status") != "healthy":
+        raise BackupVerificationError("Restored application reported an unhealthy status")
+    return payload
+
+
+def _verify_restored_application(database_url: str) -> dict[str, Mapping[str, object]]:
+    port = _available_local_port()
+    environment = dict(os.environ)
+    environment["DATABASE_URL"] = database_url
+    backend_root = Path(__file__).resolve().parents[2]
+    process = None
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "app.application:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=backend_root,
+            env=environment,
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        base = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 30
+        primary: Mapping[str, object] | None = None
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise BackupVerificationError("Restored application stopped before becoming healthy")
+            try:
+                primary = _read_health(f"{base}/api/v1/health")
+                break
+            except BackupVerificationError:
+                time.sleep(0.25)
+        if primary is None:
+            raise BackupVerificationError("Restored application did not become healthy")
+        providers = _read_health(f"{base}/api/v1/health/providers")
+        return {
+            "/api/v1/health": primary,
+            "/api/v1/health/providers": providers,
+        }
+    except BackupError:
+        raise
+    except Exception:
+        raise BackupVerificationError("Could not start the restored application") from None
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+def latest_backup(backup_dir: str | Path) -> Path:
+    directory = Path(backup_dir)
+    candidates = sorted(
+        (path for path in directory.glob(f"{BACKUP_PREFIX}*.dump") if path.is_file()),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )
+    if not candidates:
+        raise BackupPolicyError("No backup dump exists in BACKUP_DIR")
+    return candidates[0]
+
+
+def _validated_dump_path(backup_dir: Path, dump_file: str | Path | None) -> Path:
+    candidate = latest_backup(backup_dir) if dump_file is None else Path(dump_file)
+    try:
+        candidate = candidate.resolve(strict=True)
+        directory = backup_dir.resolve(strict=True)
+    except OSError:
+        raise BackupPolicyError("Backup dump does not exist") from None
+    if candidate.parent != directory or candidate.suffix != ".dump" or not candidate.is_file():
+        raise BackupPolicyError("Backup dump must be a .dump file directly inside BACKUP_DIR")
+    if candidate.stat().st_size == 0:
+        raise BackupPolicyError("Backup dump is empty")
+    return candidate
+
+
+def verify_restore(
+    database_url: str,
+    backup_dir: str | Path,
+    *,
+    dump_file: str | Path | None = None,
+) -> RestoreVerification:
+    source_url = _normalized_postgres_url(database_url)
+    directory = Path(backup_dir)
+    dump = _validated_dump_path(directory, dump_file)
+    source_counts = _read_release_counts(source_url)
+    database_name = disposable_database_name()
+    assert_disposable_database_name(database_name)
+    if database_name == _database_name(source_url):
+        raise BackupPolicyError("Disposable database must not be the source database")
+    restored_url = _database_url_with_name(source_url, database_name)
+    restore_command_url, restore_environment = _postgres_cli_connection(restored_url)
+    cleanup_required = False
+    try:
+        # A CREATE DATABASE response can be interrupted after PostgreSQL has
+        # committed it, so cleanup must be attempted even when creation raises.
+        cleanup_required = True
+        _create_disposable_database(source_url, database_name)
+        _run_command(
+            [
+                "pg_restore",
+                "--exit-on-error",
+                "--no-owner",
+                "--no-privileges",
+                "--dbname",
+                restore_command_url,
+                str(dump),
+            ],
+            env=restore_environment,
+        )
+        migration_environment = dict(os.environ)
+        migration_environment["DATABASE_URL"] = restored_url
+        _run_command(
+            ["alembic", "-c", "alembic.ini", "upgrade", "head"],
+            env=migration_environment,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+        health = _verify_restored_application(restored_url)
+        restored_counts = _read_release_counts(restored_url)
+        comparison = compare_release_counts(before=source_counts, after=restored_counts)
+        if not comparison.ok:
+            names = ", ".join(sorted(comparison.mismatches))
+            raise BackupVerificationError(f"Release-critical row counts differ: {names}")
+        return RestoreVerification(
+            ok=True,
+            database_name=database_name,
+            counts=comparison,
+            health=health,
+        )
+    finally:
+        if cleanup_required:
+            _drop_disposable_database(source_url, database_name)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Safe PostgreSQL backup operations")
+    parser.add_argument("operation", choices=("backup", "restore-check"))
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    try:
+        settings = settings_from_environment()
+        if arguments.operation == "backup":
+            output = create_backup(settings.database_url, settings.backup_dir)
+            print(f"Backup created: {output}")
+        else:
+            result = verify_restore(settings.database_url, settings.backup_dir)
+            print(f"Restore verification passed for {result.database_name}")
+        return 0
+    except Exception:
+        print(f"{arguments.operation} failed; see protected service logs", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
