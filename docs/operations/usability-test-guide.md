@@ -16,7 +16,7 @@ Use neutral prompts only: “What are you looking for now?”, “What would you
 
 ### Ages 13–17
 
-Before beginning, confirm guardian or responsible-organization consent and the participant’s assent. Explain that no name, email, school, religious affiliation, or other sensitive information is needed; they can skip any question and stop at any time. Avoid asking about personal belief, trauma, or family circumstances. Offer a guardian/organization contact and use a quiet, accessible setting.
+Before beginning, confirm guardian or responsible-organization consent and the participant’s assent. An organizational-consent pathway may be used only when it is lawful and has been approved for the research context; otherwise obtain guardian consent. Explain that no name, email, school, religious affiliation, or other sensitive information is needed; they can skip any question and stop at any time. Avoid asking about personal belief, trauma, or family circumstances. Offer a guardian/organization contact and use a quiet, accessible setting.
 
 ### Ages 65+
 
@@ -49,6 +49,8 @@ After each task, record completion (complete / partial / not complete), time, er
 ## Findings and privacy
 
 Take only de-identified notes. Assign a random participant code, keep consent records separately from observations, remove direct quotations that identify someone, and restrict access to the research team. Report aggregates, not identities.
+
+Before recruitment, document the minimum lawful retention period for consent records, the people or roles allowed to access them, a deletion date, and the owner responsible for deletion. Delete consent records and the participant-code key on that date unless a documented legal requirement mandates a longer period; retain de-identified findings only for the approved purpose.
 
 Rate findings: **1 Critical**—harm, privacy risk, or task cannot be completed; **2 Serious**—major delay/error with no reliable recovery; **3 Moderate**—clear friction or repeated confusion; **4 Minor**—cosmetic or isolated friction.
 
