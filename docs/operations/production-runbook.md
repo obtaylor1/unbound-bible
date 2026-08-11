@@ -116,6 +116,18 @@ For staging, redeploy the last known-good API and web commit SHA as a pair throu
 
 Check, in order: health endpoints, migration revision, database connectivity/pool saturation, provider diagnostics, rate-limit responses and `Retry-After`, disk space in the upload temp directory, and recent redacted application errors. Revoke exposed sessions, rotate compromised secrets, and invalidate provider keys immediately. Never paste raw tokens, uploaded sermon content, or private studies into tickets.
 
+## Release handoff — 2026-08-11
+
+Tested application commit: `09d4e26`.
+
+- Backend: 1,227 passed, 1 skipped. The skip is intentional and remains reported by the suite.
+- Frontend: 30 test files and 423 tests passed; lint was clean; the production build completed with 109 modules.
+- Browser matrix: 146 applicable journeys passed, 94 project/viewport-inapplicable cases were skipped, and none failed. The matrix used an isolated real API, a unique temporary SQLite database removed at shutdown, and the production frontend preview across desktop, tablet, 390px mobile, and 320px mobile projects.
+- Composite audit: the committed report matched byte-for-byte at SHA-256 `ad65d87df85eab6ccaa9b0718baf478737d22ac1e0932d67af596caa1cc07f47`. It records 83 works (82 ETHIO81 and 1 supplemental), 1,520 chapters, 38,938 verses, 48 declared gaps, and no undeclared gaps.
+- Independent specification and code-quality reviews approved the final verification harness and accessibility fixes.
+
+This is a local verification handoff, not public-launch approval. Docker was unavailable on the verification host, so Compose validation, image builds, and a live PostgreSQL backup/restore rehearsal remain blocked. No hosted staging provider, private HTTPS URL, credentials, monitoring owner, or rollback artifact has been selected, so deployment and live health checks remain blocked. The required real usability sessions with one participant aged 13–17 and one aged 65+ also remain incomplete. Keep staging private and public traffic disabled until every blocked checklist row has named evidence and sign-off.
+
 ## Verification record — 2026-07-12
 
 - Empty database upgraded through `0006_platform_integrity` successfully.
