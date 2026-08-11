@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import subprocess
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,7 @@ def test_environment_requires_explicit_database_url_and_backup_dir(monkeypatch, 
 
 def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp_path, monkeypatch):
     calls = []
+    durability_calls = []
     counts = {table: index for index, table in enumerate(backup.RELEASE_CRITICAL_TABLES, 1)}
 
     @contextmanager
@@ -70,6 +72,15 @@ def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp
 
     monkeypatch.setattr(backup, "_run_command", fake_run)
     monkeypatch.setattr(backup, "_release_snapshot", fake_snapshot, raising=False)
+    monkeypatch.setattr(
+        backup, "_fsync_file", lambda path: durability_calls.append(("file", path.name)), raising=False
+    )
+    monkeypatch.setattr(
+        backup,
+        "_fsync_directory",
+        lambda path: durability_calls.append(("directory", path.name)),
+        raising=False,
+    )
 
     output = backup.create_backup(
         DATABASE_URL,
@@ -104,6 +115,39 @@ def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp
     assert env["PGPASSWORD"] == "super-secret"
     assert cwd is None
     assert not list(output.parent.glob("*.tmp"))
+    assert durability_calls[0][0] == "file"
+    assert durability_calls.count(("directory", "backups")) == 2
+
+
+def test_fsync_helpers_sync_the_opened_file_and_directory_descriptors(tmp_path, monkeypatch):
+    target = tmp_path / "backup.dump"
+    target.write_bytes(b"PGDMP-test")
+    calls = []
+    real_open = os.open
+    real_close = os.close
+
+    def observed_open(path, flags):
+        descriptor = real_open(path, flags)
+        calls.append(("open", Path(path), descriptor, flags))
+        return descriptor
+
+    monkeypatch.setattr(backup.os, "open", observed_open)
+    monkeypatch.setattr(backup.os, "fsync", lambda descriptor: calls.append(("fsync", descriptor)))
+    monkeypatch.setattr(
+        backup.os,
+        "close",
+        lambda descriptor: (calls.append(("close", descriptor)), real_close(descriptor))[1],
+    )
+
+    backup._fsync_file(target)
+    backup._fsync_directory(tmp_path)
+
+    opened = [call for call in calls if call[0] == "open"]
+    assert len(opened) == 2
+    assert [call[1] for call in opened] == [target, tmp_path]
+    for _, _, descriptor, _ in opened:
+        assert ("fsync", descriptor) in calls
+        assert ("close", descriptor) in calls
 
 
 def test_release_counts_and_dump_share_one_exported_repeatable_read_snapshot(monkeypatch):
@@ -404,6 +448,77 @@ def test_restore_rejects_invalid_manifest_timestamp_before_database_creation(
 
     with pytest.raises(backup.BackupVerificationError, match="timestamp"):
         backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
+
+    assert calls == []
+
+
+def test_latest_backup_ignores_newer_orphan_and_manifest_symlink(tmp_path):
+    complete = tmp_path / "unbound-bible-20260810T120000Z.dump"
+    complete.write_bytes(b"complete")
+    _write_manifest(complete, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES})
+    orphan = tmp_path / "unbound-bible-20260810T120001Z.dump"
+    orphan.write_bytes(b"orphan")
+    symlinked = tmp_path / "unbound-bible-20260810T120002Z.dump"
+    symlinked.write_bytes(b"symlinked")
+    symlinked.with_suffix(".dump.manifest.json").symlink_to(
+        complete.with_suffix(".dump.manifest.json")
+    )
+    now = time.time_ns()
+    os.utime(complete, ns=(now - 3, now - 3))
+    os.utime(orphan, ns=(now - 2, now - 2))
+    os.utime(symlinked, ns=(now - 1, now - 1))
+
+    assert backup.latest_backup(tmp_path) == complete
+
+
+def test_latest_complete_but_tampered_pair_fails_without_falling_back(tmp_path, monkeypatch):
+    counts = {table: 1 for table in backup.RELEASE_CRITICAL_TABLES}
+    older = tmp_path / "unbound-bible-20260810T120000Z.dump"
+    older.write_bytes(b"older")
+    _write_manifest(older, counts)
+    newer = tmp_path / "unbound-bible-20260810T120001Z.dump"
+    newer.write_bytes(b"newer")
+    _write_manifest(newer, counts, digest="0" * 64)
+    now = time.time_ns()
+    os.utime(older, ns=(now - 1, now - 1))
+    os.utime(newer, ns=(now, now))
+    calls = []
+    monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
+
+    assert backup.latest_backup(tmp_path) == newer
+    with pytest.raises(backup.BackupVerificationError, match="digest"):
+        backup.verify_restore(DATABASE_URL, tmp_path)
+    assert calls == []
+
+
+def test_restore_rejects_symlink_fifo_and_oversized_manifest_without_opening_database(
+    tmp_path, monkeypatch
+):
+    counts = {table: 1 for table in backup.RELEASE_CRITICAL_TABLES}
+    calls = []
+    monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
+
+    symlink_dump = tmp_path / "unbound-bible-20260810T120010Z.dump"
+    symlink_dump.write_bytes(b"symlink")
+    real_manifest = tmp_path / "real-manifest.json"
+    _write_manifest(symlink_dump, counts).replace(real_manifest)
+    symlink_dump.with_suffix(".dump.manifest.json").symlink_to(real_manifest)
+    with pytest.raises(backup.BackupVerificationError, match="manifest"):
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=symlink_dump)
+
+    fifo_dump = tmp_path / "unbound-bible-20260810T120011Z.dump"
+    fifo_dump.write_bytes(b"fifo")
+    os.mkfifo(fifo_dump.with_suffix(".dump.manifest.json"), 0o600)
+    with pytest.raises(backup.BackupVerificationError, match="manifest"):
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=fifo_dump)
+
+    large_dump = tmp_path / "unbound-bible-20260810T120012Z.dump"
+    large_dump.write_bytes(b"large")
+    large_manifest = large_dump.with_suffix(".dump.manifest.json")
+    large_manifest.write_bytes(b"{" + b" " * (backup.MAX_MANIFEST_BYTES + 1) + b"}")
+    large_manifest.chmod(0o600)
+    with pytest.raises(backup.BackupVerificationError, match="too large"):
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=large_dump)
 
     assert calls == []
 

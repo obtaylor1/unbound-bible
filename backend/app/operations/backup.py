@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,7 @@ from sqlalchemy.engine import URL, make_url
 
 BACKUP_PREFIX = "unbound-bible-"
 MANIFEST_SCHEMA_VERSION = 1
+MAX_MANIFEST_BYTES = 64 * 1024
 DISPOSABLE_DATABASE_PREFIX = "unbound_restore_check_"
 _DISPOSABLE_DATABASE_PATTERN = re.compile(r"^unbound_restore_check_[0-9a-f]{24}$")
 RELEASE_CRITICAL_TABLES = (
@@ -171,6 +173,24 @@ def _run_command(
         raise BackupOperationError(f"{Path(arguments[0]).name} failed") from None
 
 
+def _fsync_file(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def create_backup(
     database_url: str,
     backup_dir: str | Path,
@@ -216,6 +236,7 @@ def create_backup(
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise BackupOperationError("pg_dump produced an empty backup")
         temporary.chmod(0o600)
+        _fsync_file(temporary)
         manifest = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "created_at": timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -230,9 +251,9 @@ def create_backup(
         manifest_temporary = _write_temporary_manifest(directory, target, manifest)
         os.replace(temporary, target)
         dump_published = True
+        _fsync_directory(directory)
         os.replace(manifest_temporary, manifest_target)
-        target.chmod(0o600)
-        manifest_target.chmod(0o600)
+        _fsync_directory(directory)
         return target
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -484,8 +505,17 @@ def _verify_restored_application(database_url: str) -> dict[str, Mapping[str, ob
 
 def latest_backup(backup_dir: str | Path) -> Path:
     directory = Path(backup_dir)
+
+    def is_complete_pair(path: Path) -> bool:
+        try:
+            return stat.S_ISREG(path.lstat().st_mode) and stat.S_ISREG(
+                _manifest_path(path).lstat().st_mode
+            )
+        except OSError:
+            return False
+
     candidates = sorted(
-        (path for path in directory.glob(f"{BACKUP_PREFIX}*.dump") if path.is_file()),
+        (path for path in directory.glob(f"{BACKUP_PREFIX}*.dump") if is_complete_pair(path)),
         key=lambda path: (path.stat().st_mtime_ns, path.name),
         reverse=True,
     )
@@ -508,13 +538,54 @@ def _validated_dump_path(backup_dir: Path, dump_file: str | Path | None) -> Path
     return candidate
 
 
+def _read_secure_manifest(manifest_path: Path) -> bytes:
+    try:
+        if not stat.S_ISREG(manifest_path.lstat().st_mode):
+            raise BackupVerificationError("Backup manifest must be a regular non-symlink file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(manifest_path, flags)
+    except BackupError:
+        raise
+    except OSError:
+        raise BackupVerificationError("Backup manifest is missing or unsafe") from None
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BackupVerificationError("Backup manifest must be a regular file")
+        if metadata.st_mode & 0o077:
+            raise BackupPolicyError("Backup manifest permissions must be 0600")
+        if metadata.st_size > MAX_MANIFEST_BYTES:
+            raise BackupVerificationError("Backup manifest is too large")
+        chunks: list[bytes] = []
+        remaining = MAX_MANIFEST_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 8192))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > MAX_MANIFEST_BYTES:
+            raise BackupVerificationError("Backup manifest is too large")
+        return payload
+    except BackupError:
+        raise
+    except OSError:
+        raise BackupVerificationError("Backup manifest could not be read safely") from None
+    finally:
+        os.close(descriptor)
+
+
 def _load_verified_manifest(dump_file: Path) -> dict[str, int]:
     manifest_path = _manifest_path(dump_file)
     try:
-        stat_mode = manifest_path.stat().st_mode & 0o777
-        if stat_mode & 0o077:
-            raise BackupPolicyError("Backup manifest permissions must be 0600")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(_read_secure_manifest(manifest_path).decode("utf-8"))
     except BackupError:
         raise
     except (OSError, ValueError, TypeError):

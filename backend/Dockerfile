@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes postgresql-client-17 \
+    && apt-get install --no-install-recommends --yes postgresql-client-17=17.10-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv==0.8.13
 COPY pyproject.toml uv.lock ./

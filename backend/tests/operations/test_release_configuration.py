@@ -71,7 +71,8 @@ def test_api_image_contains_postgresql_clients_and_only_the_backup_wrappers():
     dockerfile = _read("backend/Dockerfile")
     dockerignore = _read(".dockerignore")
 
-    assert "postgresql-client-17" in dockerfile
+    assert "postgresql-client-17=17.10-0+deb13u1" in dockerfile
+    assert "postgresql-client-17 \\" not in dockerfile
     assert "postgresql-client \\" not in dockerfile
     assert "bookworm" not in dockerfile
     assert "curl" not in dockerfile
