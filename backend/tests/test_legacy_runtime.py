@@ -1,3 +1,5 @@
+import ast
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -6,6 +8,7 @@ import textwrap
 
 import pytest
 from pydantic import ValidationError
+import yaml
 
 from app.config import Settings
 
@@ -16,14 +19,100 @@ REPOSITORY_ROOT = BACKEND_ROOT.parent
 
 def assert_legacy_database_fails_closed(text: str) -> None:
     """Assert that a retired database module cannot silently use a repo SQLite file."""
-    normalized = text.lower()
-    assert 'os.environ.get("database_url")' in normalized
-    assert 'if not database_url:' in normalized
-    assert 'database_url environment variable' in normalized
-    assert 'not set' in normalized
-    assert 'sqlite:///' not in normalized
-    assert 'unbound_bible.db' not in normalized
-    assert 'auth_forum.db' not in normalized
+    tree = ast.parse(text)
+    database_assignments = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == 'DATABASE_URL' for target in targets):
+                database_assignments.append(node)
+
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            value = node.value.strip().lower()
+            assert not value.startswith('sqlite:')
+            assert not value.endswith(('.db', '.sqlite', '.sqlite3'))
+
+    assert len(database_assignments) == 1
+    database_lookup = database_assignments[0]
+    assert isinstance(database_lookup, ast.Assign)
+    assert isinstance(database_lookup.value, ast.Call)
+    assert isinstance(database_lookup.value.func, ast.Attribute)
+    assert database_lookup.value.func.attr == 'get'
+    assert isinstance(database_lookup.value.func.value, ast.Attribute)
+    assert isinstance(database_lookup.value.func.value.value, ast.Name)
+    assert database_lookup.value.func.value.value.id == 'os'
+    assert database_lookup.value.func.value.attr == 'environ'
+    assert database_lookup.value.args
+    assert isinstance(database_lookup.value.args[0], ast.Constant)
+    assert database_lookup.value.args[0].value == 'DATABASE_URL'
+    assert len(database_lookup.value.args) == 1
+
+    missing_environment_guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.UnaryOp)
+        and isinstance(node.test.op, ast.Not)
+        and isinstance(node.test.operand, ast.Name)
+        and node.test.operand.id == 'DATABASE_URL'
+    ]
+    assert len(missing_environment_guards) == 1
+    guard = missing_environment_guards[0]
+    assert any(isinstance(node, ast.Raise) for node in guard.body)
+    messages = [
+        node.value.lower()
+        for statement in guard.body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert any(
+        'database_url environment variable' in message and 'not set' in message
+        for message in messages
+    )
+
+
+def assert_legacy_auth_fails_closed(text: str) -> None:
+    """Assert that a retired auth module has one environment-only signing secret."""
+    tree = ast.parse(text)
+    secret_assignments = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == 'SECRET_KEY' for target in targets):
+                secret_assignments.append(node)
+
+    assert len(secret_assignments) == 1
+    secret_lookup = secret_assignments[0]
+    assert isinstance(secret_lookup, ast.Assign)
+    assert isinstance(secret_lookup.value, ast.Call)
+    assert isinstance(secret_lookup.value.func, ast.Attribute)
+    assert secret_lookup.value.func.attr == 'get'
+    assert isinstance(secret_lookup.value.func.value, ast.Attribute)
+    assert isinstance(secret_lookup.value.func.value.value, ast.Name)
+    assert secret_lookup.value.func.value.value.id == 'os'
+    assert secret_lookup.value.func.value.attr == 'environ'
+    assert len(secret_lookup.value.args) == 1
+    assert isinstance(secret_lookup.value.args[0], ast.Constant)
+    assert secret_lookup.value.args[0].value == 'JWT_SECRET_KEY'
+
+    missing_secret_guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.UnaryOp)
+        and isinstance(node.test.op, ast.Not)
+        and isinstance(node.test.operand, ast.Name)
+        and node.test.operand.id == 'SECRET_KEY'
+    ]
+    assert len(missing_secret_guards) == 1
+    guard = missing_secret_guards[0]
+    messages = [
+        node.value
+        for statement in guard.body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert any('JWT_SECRET_KEY environment variable is required' in message for message in messages)
 
 
 def test_legacy_database_guard_rejects_repo_sqlite_fallback(tmp_path):
@@ -37,6 +126,30 @@ def test_legacy_database_guard_rejects_repo_sqlite_fallback(tmp_path):
         assert_legacy_database_fails_closed(unsafe_module.read_text(encoding='utf-8'))
 
 
+@pytest.mark.parametrize(
+    'unsafe_source',
+    [
+        '''
+        import os
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+        if not DATABASE_URL:
+            raise ValueError("DATABASE_URL environment variable not set")
+        FALLBACK_URL = "sqlite+pysqlite:///local-cache.sqlite"
+        ''',
+        '''
+        import os
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+        if not DATABASE_URL:
+            DATABASE_URL = build_repo_local_url()
+            raise ValueError("DATABASE_URL environment variable not set")
+        ''',
+    ],
+)
+def test_legacy_database_guard_rejects_broader_fallback_shapes(unsafe_source):
+    with pytest.raises(AssertionError):
+        assert_legacy_database_fails_closed(textwrap.dedent(unsafe_source))
+
+
 def test_retired_legacy_databases_do_not_fall_back_to_repo_sqlite_files():
     paths = [
         BACKEND_ROOT / 'database.py',
@@ -45,6 +158,78 @@ def test_retired_legacy_databases_do_not_fall_back_to_repo_sqlite_files():
 
     for path in paths:
         assert_legacy_database_fails_closed(path.read_text(encoding='utf-8'))
+
+
+def _isolated_environment(*missing: str) -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in missing:
+        environment.pop(name, None)
+    environment['PYTHONPATH'] = ''
+    return environment
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        BACKEND_ROOT / 'database.py',
+        REPOSITORY_ROOT / 'auth-forum-api' / 'database.py',
+    ],
+)
+def test_retired_database_imports_fail_before_engine_or_file_fallback(source, tmp_path):
+    isolated_root = tmp_path / source.parent.name
+    isolated_root.mkdir()
+    isolated_module = isolated_root / 'database.py'
+    isolated_module.write_text(source.read_text(encoding='utf-8'), encoding='utf-8')
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-c',
+            textwrap.dedent(
+                '''
+                import atexit
+                import pathlib
+                import runpy
+                import sys
+
+                import dotenv
+                import sqlalchemy
+
+                dotenv.load_dotenv = lambda *_args, **_kwargs: False
+                engine_calls = []
+                sqlalchemy.create_engine = lambda *args, **kwargs: engine_calls.append((args, kwargs))
+
+                def record_probe():
+                    root = pathlib.Path(sys.argv[2])
+                    database_files = [
+                        path
+                        for pattern in ('*.db', '*.sqlite', '*.sqlite3')
+                        for path in root.rglob(pattern)
+                    ]
+                    outcome = 'no fallback' if not engine_calls and not database_files else repr(
+                        {'engine_calls': engine_calls, 'database_files': database_files}
+                    )
+                    (root / 'database-probe.txt').write_text(outcome, encoding='utf-8')
+
+                atexit.register(record_probe)
+                runpy.run_path(sys.argv[1], run_name='__legacy_database_probe__')
+                '''
+            ),
+            str(isolated_module),
+            str(tmp_path),
+        ],
+        cwd=isolated_root,
+        env=_isolated_environment('DATABASE_URL'),
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert 'DATABASE_URL environment variable' in result.stderr
+    assert 'not set' in result.stderr
+    assert (tmp_path / 'database-probe.txt').read_text(encoding='utf-8') == 'no fallback'
 
 
 @pytest.mark.parametrize('environment', ['staging', 'production'])
@@ -64,15 +249,34 @@ def test_active_runtime_rejects_sqlite_outside_development_and_tests(environment
 
 
 def test_production_launchers_import_only_the_modular_application():
-    launchers = [
-        (REPOSITORY_ROOT / '.replit').read_text(encoding='utf-8'),
-        (BACKEND_ROOT / 'Dockerfile').read_text(encoding='utf-8'),
-    ]
+    replit_configuration = (REPOSITORY_ROOT / '.replit').read_text(encoding='utf-8')
+    dockerfile = (BACKEND_ROOT / 'Dockerfile').read_text(encoding='utf-8')
+    compose = yaml.safe_load(
+        (REPOSITORY_ROOT / 'compose.staging.yml').read_text(encoding='utf-8')
+    )
     application = (BACKEND_ROOT / 'app' / 'application.py').read_text(encoding='utf-8')
 
-    for launcher in launchers:
-        assert 'app.application:app' in launcher
-        assert 'main:app' not in launcher
+    assert (
+        'args = "cd backend && python -m uvicorn app.application:app '
+        '--host 0.0.0.0 --port 8000"'
+    ) in replit_configuration
+
+    command_lines = [
+        line.strip()[len('CMD '):]
+        for line in dockerfile.splitlines()
+        if line.strip().upper().startswith('CMD ')
+    ]
+    assert command_lines
+    assert json.loads(command_lines[-1]) == [
+        'sh',
+        '-c',
+        'alembic -c alembic.ini upgrade head && exec uvicorn '
+        'app.application:app --host 0.0.0.0 --port 8000',
+    ]
+
+    api_service = compose['services']['api']
+    assert 'command' not in api_service
+    assert 'entrypoint' not in api_service
 
     assert 'from database import' not in application
     assert 'from auth import' not in application
@@ -114,12 +318,92 @@ def test_retired_legacy_auth_runtimes_keep_fail_closed_configuration():
     )
 
     for text in [backend_auth, forum_auth]:
-        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY")' in text
-        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY",' not in text
-        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or' not in text
+        assert_legacy_auth_fails_closed(text)
         assert 'guest_token' not in text
         assert 'default insecure development key' not in text
-        assert 'JWT_SECRET_KEY environment variable is required' in text
+
+
+def test_legacy_auth_guard_rejects_alternate_secret_assignment():
+    unsafe_source = '''
+    import os
+    SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+    if not SECRET_KEY:
+        SECRET_KEY = load_guest_key()
+        raise RuntimeError("JWT_SECRET_KEY environment variable is required")
+    '''
+
+    with pytest.raises(AssertionError):
+        assert_legacy_auth_fails_closed(textwrap.dedent(unsafe_source))
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        BACKEND_ROOT / 'auth.py',
+        REPOSITORY_ROOT / 'auth-forum-api' / 'auth.py',
+    ],
+)
+def test_retired_auth_imports_fail_closed_without_jwt_secret(source, tmp_path):
+    isolated_root = tmp_path / source.parent.name
+    isolated_root.mkdir()
+    isolated_module = isolated_root / 'auth.py'
+    isolated_module.write_text(source.read_text(encoding='utf-8'), encoding='utf-8')
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-c',
+            textwrap.dedent(
+                '''
+                import atexit
+                import pathlib
+                import runpy
+                import sys
+                import types
+
+                import dotenv
+
+                dotenv.load_dotenv = lambda *_args, **_kwargs: False
+                dependency_calls = []
+
+                database = types.ModuleType('database')
+                database.get_db = lambda: dependency_calls.append('database.get_db')
+                sys.modules['database'] = database
+
+                models = types.ModuleType('models')
+                models.User = type('User', (), {})
+                models.UserRole = type('UserRole', (), {})
+                sys.modules['models'] = models
+
+                schemas = types.ModuleType('schemas')
+                schemas.TokenData = type('TokenData', (), {})
+                sys.modules['schemas'] = schemas
+
+                def record_probe():
+                    outcome = 'no fallback' if not dependency_calls else repr(dependency_calls)
+                    pathlib.Path(sys.argv[2]).joinpath('auth-probe.txt').write_text(
+                        outcome,
+                        encoding='utf-8',
+                    )
+
+                atexit.register(record_probe)
+                runpy.run_path(sys.argv[1], run_name='__legacy_auth_probe__')
+                '''
+            ),
+            str(isolated_module),
+            str(tmp_path),
+        ],
+        cwd=isolated_root,
+        env=_isolated_environment('JWT_SECRET_KEY'),
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert 'JWT_SECRET_KEY environment variable is required' in result.stderr
+    assert (tmp_path / 'auth-probe.txt').read_text(encoding='utf-8') == 'no fallback'
 
 
 def test_replit_backend_launcher_module_imports_with_safe_settings(tmp_path):

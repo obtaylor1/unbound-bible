@@ -23,23 +23,37 @@ release configuration checks, and contradict the production runbook.
 | `backend/app/config.py` | Active and imported | Development and tests may use the documented SQLite default. Staging and production validation reject SQLite, weak/default JWT secrets, insecure public URLs, and unsafe CORS/provider settings. |
 | `backend/app/database.py` | Active and imported | Builds the engine from validated `Settings`; its SQLite support is limited to allowed development/test configuration. |
 | `backend/app/auth/` | Active and imported | Uses the one `Settings.jwt_secret_key`; there is no alternate guest or default signing path in the production launcher. |
-| `.replit` and `backend/Dockerfile` | Active launch configuration | Both select `app.application:app`; neither selects `backend/main.py`. |
+| `.replit`, `backend/Dockerfile`, and `compose.staging.yml` | Active launch configuration | Replit uses the exact modular Uvicorn target. The effective final image command migrates and launches `app.application:app`, and staging Compose does not replace its command or entry point. |
 | `backend/main.py`, `backend/auth.py`, `backend/database.py` | Retired compatibility runtime | Not a production launch path. The database and JWT modules remain fail closed when their required environment values are missing. |
 | `auth-forum-api/main.py`, `auth-forum-api/auth.py`, `auth-forum-api/database.py` | Retired standalone service | Replaced by the modular community and account routes. Its database and JWT modules remain fail closed and have no guest/default signing key. |
 | `backend/alembic/`, explicit ingestion/migration commands, and `backend/tests/` | Migration or test-only | Explicit SQLite URLs are allowed for deterministic local migrations, import rehearsals, and isolated tests. Production migrations receive `DATABASE_URL` through the protected environment. |
 | Older scripts that import top-level `database` | Legacy maintenance | Not imported by `app.application:app` and not approved as production launchers. Operators should prefer the modular CLI/runbook paths. |
 
-The regression suite checks the production launch targets, verifies that the
-modular application source does not import the retired top-level `main`, `auth`,
-or `database` modules, and verifies both retired database modules against the
-same fail-closed policy. It also proves the policy helper rejects a temporary
-module containing `sqlite:///unbound_bible.db`.
+The regression suite parses the effective final Docker JSON command, checks for
+staging Compose command/entry-point overrides, checks the exact Replit command,
+and verifies that importing the modular application does not load the retired
+top-level `main`, `auth`, or `database` modules.
+
+Each retired database source is also copied to its own temporary directory and
+executed in a fresh subprocess with `DATABASE_URL` absent and dotenv loading
+neutralized. The probe requires the documented missing-environment error before
+any instrumented engine creation, requires a nonzero process exit, and verifies
+that no database file appeared.
+The complementary AST policy permits only one `DATABASE_URL` assignment from
+`os.environ.get("DATABASE_URL")`, requires the missing-value raise, and rejects
+all SQLite schemes, database-file literals, or alternate assignments. Temporary
+unsafe fixtures prove this defense covers both direct and constructed fallback
+shapes.
 
 ## Authentication findings
 
-Both retired authentication modules read `JWT_SECRET_KEY` explicitly and raise
-when it is absent. The audit rejects guest-token behavior, an insecure default
-key, or an alternate fallback key. The active modular runtime takes its signing
+Both retired authentication sources are executed separately with
+`JWT_SECRET_KEY` absent, dotenv neutralized, and inert imported dependencies.
+Each exits nonzero with the documented missing-secret error without invoking a
+dependency fallback. An AST policy additionally requires exactly one `SECRET_KEY`
+assignment, sourced only from `os.environ.get("JWT_SECRET_KEY")`, plus the
+missing-value raise. The audit rejects guest-token behavior, an insecure default
+key, or any alternate assignment. The active modular runtime takes its signing
 key from validated `Settings`; staging and production reject the development
 default and secrets shorter than 32 characters.
 
