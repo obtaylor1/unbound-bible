@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import stat
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +16,24 @@ from app.operations import backup
 
 
 DATABASE_URL = "postgresql://staging:super-secret@db:5432/unbound_bible"
+
+
+def _write_manifest(dump: Path, counts: dict[str, int], *, digest: str | None = None) -> Path:
+    path = dump.with_suffix(dump.suffix + ".manifest.json")
+    payload = {
+        "schema_version": 1,
+        "created_at": "2026-08-10T12:00:00Z",
+        "snapshot": {"strategy": "pg_export_snapshot"},
+        "dump": {
+            "filename": dump.name,
+            "format": "postgresql-custom",
+            "sha256": digest or hashlib.sha256(dump.read_bytes()).hexdigest(),
+        },
+        "release_critical_counts": counts,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 def test_backup_filename_is_deterministic_utc_and_contains_no_credentials():
@@ -36,6 +57,11 @@ def test_environment_requires_explicit_database_url_and_backup_dir(monkeypatch, 
 
 def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp_path, monkeypatch):
     calls = []
+    counts = {table: index for index, table in enumerate(backup.RELEASE_CRITICAL_TABLES, 1)}
+
+    @contextmanager
+    def fake_snapshot(_database_url):
+        yield "00000003-0000001B-1", counts
 
     def fake_run(argv, *, env=None, cwd=None):
         calls.append((argv, env, cwd))
@@ -43,6 +69,7 @@ def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp
         output.write_bytes(b"PGDMP-test")
 
     monkeypatch.setattr(backup, "_run_command", fake_run)
+    monkeypatch.setattr(backup, "_release_snapshot", fake_snapshot, raising=False)
 
     output = backup.create_backup(
         DATABASE_URL,
@@ -54,9 +81,22 @@ def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp
     assert output.read_bytes() == b"PGDMP-test"
     assert stat.S_IMODE(output.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    manifest_path = output.with_suffix(".dump.manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
+    assert manifest["schema_version"] == 1
+    assert manifest["created_at"] == "2026-08-10T12:00:00Z"
+    assert manifest["snapshot"] == {"strategy": "pg_export_snapshot"}
+    assert manifest["dump"] == {
+        "filename": output.name,
+        "format": "postgresql-custom",
+        "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+    }
+    assert manifest["release_critical_counts"] == counts
     argv, env, cwd = calls[0]
     assert argv[:3] == ["pg_dump", "--format=custom", "--no-owner"]
     assert "--no-privileges" in argv
+    assert argv[argv.index("--snapshot") + 1] == "00000003-0000001B-1"
     assert DATABASE_URL not in argv
     assert "super-secret" not in " ".join(argv)
     assert argv[argv.index("--dbname") + 1] == "postgresql://staging@db:5432/unbound_bible"
@@ -66,11 +106,63 @@ def test_backup_uses_custom_format_atomic_output_and_restrictive_permissions(tmp
     assert not list(output.parent.glob("*.tmp"))
 
 
+def test_release_counts_and_dump_share_one_exported_repeatable_read_snapshot(monkeypatch):
+    events = []
+    rows = iter([("snapshot-42",), *((index,) for index, _ in enumerate(backup.RELEASE_CRITICAL_TABLES, 1))])
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, parameters=None):
+            events.append(("execute", str(statement), parameters))
+
+        def fetchone(self):
+            return next(rows)
+
+    class Connection:
+        def set_session(self, **kwargs):
+            events.append(("set_session", kwargs))
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            events.append(("rollback",))
+
+        def close(self):
+            events.append(("close",))
+
+    monkeypatch.setattr(backup.psycopg2, "connect", lambda _url: Connection())
+
+    with backup._release_snapshot(DATABASE_URL) as (snapshot_id, counts):
+        events.append(("yield", snapshot_id))
+        assert counts == {
+            table: index for index, table in enumerate(backup.RELEASE_CRITICAL_TABLES, 1)
+        }
+
+    assert snapshot_id == "snapshot-42"
+    assert events[0] == (
+        "set_session",
+        {"isolation_level": "REPEATABLE READ", "readonly": True, "autocommit": False},
+    )
+    assert "pg_export_snapshot" in events[1][1]
+    assert events[-2:] == [("rollback",), ("close",)]
+
+
 def test_backup_failure_removes_partial_file_and_never_exposes_credentials(tmp_path, monkeypatch):
+    @contextmanager
+    def fake_snapshot(_database_url):
+        yield "snapshot-42", {table: 0 for table in backup.RELEASE_CRITICAL_TABLES}
+
     def fail(argv, *, env=None, cwd=None):
         Path(argv[argv.index("--file") + 1]).write_bytes(b"partial")
         raise backup.BackupOperationError("pg_dump failed")
 
+    monkeypatch.setattr(backup, "_release_snapshot", fake_snapshot)
     monkeypatch.setattr(backup, "_run_command", fail)
 
     with pytest.raises(backup.BackupOperationError) as caught:
@@ -161,11 +253,17 @@ def test_restore_check_restores_migrates_starts_app_checks_health_compares_and_c
     name = "unbound_restore_check_" + "d" * 24
     calls = []
     source_counts = {table: index for index, table in enumerate(backup.RELEASE_CRITICAL_TABLES, 1)}
+    _write_manifest(dump, source_counts)
 
     monkeypatch.setattr(backup, "disposable_database_name", lambda: name)
     monkeypatch.setattr(backup, "_create_disposable_database", lambda url, database: calls.append(("create", url, database)))
     monkeypatch.setattr(backup, "_drop_disposable_database", lambda url, database: calls.append(("drop", url, database)))
-    monkeypatch.setattr(backup, "_read_release_counts", lambda url: source_counts.copy())
+    count_urls = []
+    monkeypatch.setattr(
+        backup,
+        "_read_release_counts",
+        lambda url: count_urls.append(url) or source_counts.copy(),
+    )
     monkeypatch.setattr(backup, "_run_command", lambda argv, **kwargs: calls.append(("command", argv, kwargs)))
     monkeypatch.setattr(
         backup,
@@ -196,6 +294,8 @@ def test_restore_check_restores_migrates_starts_app_checks_health_compares_and_c
     assert health_url.endswith("/" + name)
     assert health_url != DATABASE_URL
     assert calls[-1] == ("drop", DATABASE_URL, name)
+    assert len(count_urls) == 1
+    assert count_urls[0].endswith("/" + name)
 
 
 def test_restore_check_fails_on_count_mismatch_and_always_cleans_up(tmp_path, monkeypatch):
@@ -205,13 +305,14 @@ def test_restore_check_fails_on_count_mismatch_and_always_cleans_up(tmp_path, mo
     calls = []
     before = {table: 1 for table in backup.RELEASE_CRITICAL_TABLES}
     after = {**before, "biblical_texts": 0}
+    _write_manifest(dump, before)
 
     monkeypatch.setattr(backup, "disposable_database_name", lambda: name)
     monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
     monkeypatch.setattr(backup, "_drop_disposable_database", lambda *_args: calls.append("drop"))
     monkeypatch.setattr(backup, "_run_command", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(backup, "_verify_restored_application", lambda *_args: {})
-    monkeypatch.setattr(backup, "_read_release_counts", lambda url: before if url == DATABASE_URL else after)
+    monkeypatch.setattr(backup, "_read_release_counts", lambda _url: after)
 
     with pytest.raises(backup.BackupVerificationError, match="biblical_texts"):
         backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
@@ -226,6 +327,7 @@ def test_restore_check_cleans_up_after_migration_or_health_failure_without_leaki
     dump.write_bytes(b"PGDMP-test")
     name = "unbound_restore_check_" + "f" * 24
     calls = []
+    _write_manifest(dump, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES})
 
     monkeypatch.setattr(backup, "disposable_database_name", lambda: name)
     monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
@@ -252,6 +354,7 @@ def test_restore_check_attempts_guarded_cleanup_when_database_creation_partially
     dump.write_bytes(b"PGDMP-test")
     name = "unbound_restore_check_" + "1" * 24
     calls = []
+    _write_manifest(dump, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES})
 
     monkeypatch.setattr(backup, "disposable_database_name", lambda: name)
     monkeypatch.setattr(
@@ -266,6 +369,83 @@ def test_restore_check_attempts_guarded_cleanup_when_database_creation_partially
         backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
 
     assert calls == ["drop"]
+
+
+def test_restore_rejects_a_dump_that_does_not_match_its_manifest_before_database_creation(
+    tmp_path, monkeypatch
+):
+    dump = tmp_path / "unbound-bible-20260810T120000Z.dump"
+    dump.write_bytes(b"PGDMP-original")
+    _write_manifest(dump, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES})
+    dump.write_bytes(b"PGDMP-tampered")
+    calls = []
+    monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
+
+    with pytest.raises(backup.BackupVerificationError, match="digest"):
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
+
+    assert calls == []
+
+
+def test_restore_rejects_invalid_manifest_timestamp_before_database_creation(
+    tmp_path, monkeypatch
+):
+    dump = tmp_path / "unbound-bible-20260810T120000Z.dump"
+    dump.write_bytes(b"PGDMP-test")
+    manifest_path = _write_manifest(
+        dump, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES}
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["created_at"] = "sometime"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_path.chmod(0o600)
+    calls = []
+    monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: calls.append("create"))
+
+    with pytest.raises(backup.BackupVerificationError, match="timestamp"):
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
+
+    assert calls == []
+
+
+def test_primary_restore_failure_is_preserved_when_guarded_cleanup_also_fails(
+    tmp_path, monkeypatch
+):
+    dump = tmp_path / "unbound-bible-20260810T120000Z.dump"
+    dump.write_bytes(b"PGDMP-test")
+    _write_manifest(dump, {table: 1 for table in backup.RELEASE_CRITICAL_TABLES})
+    name = "unbound_restore_check_" + "2" * 24
+    primary = backup.BackupVerificationError("health check failed")
+
+    monkeypatch.setattr(backup, "disposable_database_name", lambda: name)
+    monkeypatch.setattr(backup, "_create_disposable_database", lambda *_args: None)
+    monkeypatch.setattr(backup, "_drop_disposable_database", lambda *_args: (_ for _ in ()).throw(backup.BackupOperationError("cleanup failed")))
+    monkeypatch.setattr(backup, "_run_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(backup, "_verify_restored_application", lambda _url: (_ for _ in ()).throw(primary))
+
+    with pytest.raises(backup.BackupVerificationError, match="health check failed") as caught:
+        backup.verify_restore(DATABASE_URL, tmp_path, dump_file=dump)
+
+    assert caught.value is primary
+    assert any("cleanup also failed" in note.lower() for note in caught.value.__notes__)
+    assert "super-secret" not in " ".join(caught.value.__notes__)
+
+
+def test_cli_reports_safe_primary_and_cleanup_failures_without_credentials(monkeypatch, capsys):
+    primary = backup.BackupVerificationError("restored application health check failed")
+    primary.add_note(
+        "CRITICAL: disposable restore database cleanup also failed; deployment remains blocked"
+    )
+    monkeypatch.setenv("DATABASE_URL", DATABASE_URL)
+    monkeypatch.setenv("BACKUP_DIR", "/secure/backups")
+    monkeypatch.setattr(backup, "verify_restore", lambda *_args: (_ for _ in ()).throw(primary))
+
+    assert backup.main(["restore-check"]) == 1
+    output = capsys.readouterr().err
+    assert "restored application health check failed" in output
+    assert "cleanup also failed" in output
+    assert "deployment remains blocked" in output
+    assert "super-secret" not in output
 
 
 def test_latest_backup_rejects_empty_or_non_dump_directory(tmp_path):

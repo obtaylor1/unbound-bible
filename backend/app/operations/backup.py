@@ -9,6 +9,8 @@ operator output.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -20,6 +22,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +34,7 @@ from sqlalchemy.engine import URL, make_url
 
 
 BACKUP_PREFIX = "unbound-bible-"
+MANIFEST_SCHEMA_VERSION = 1
 DISPOSABLE_DATABASE_PREFIX = "unbound_restore_check_"
 _DISPOSABLE_DATABASE_PATTERN = re.compile(r"^unbound_restore_check_[0-9a-f]{24}$")
 RELEASE_CRITICAL_TABLES = (
@@ -178,8 +182,10 @@ def create_backup(
     directory = Path(backup_dir)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
-    target = directory / backup_filename(now or datetime.now(timezone.utc))
-    if target.exists():
+    timestamp = now or datetime.now(timezone.utc)
+    target = directory / backup_filename(timestamp)
+    manifest_target = _manifest_path(target)
+    if target.exists() or manifest_target.exists():
         raise BackupPolicyError(f"Backup already exists: {target.name}")
 
     descriptor, temporary_name = tempfile.mkstemp(
@@ -188,28 +194,89 @@ def create_backup(
     os.close(descriptor)
     temporary = Path(temporary_name)
     temporary.chmod(0o600)
+    manifest_temporary: Path | None = None
+    dump_published = False
     try:
-        _run_command(
-            [
-                "pg_dump",
-                "--format=custom",
-                "--no-owner",
-                "--no-privileges",
-                "--file",
-                str(temporary),
-                "--dbname",
-                command_url,
-            ],
-            env=command_environment,
-        )
+        with _release_snapshot(postgres_url) as (snapshot_id, release_counts):
+            _run_command(
+                [
+                    "pg_dump",
+                    "--format=custom",
+                    "--no-owner",
+                    "--no-privileges",
+                    "--snapshot",
+                    snapshot_id,
+                    "--file",
+                    str(temporary),
+                    "--dbname",
+                    command_url,
+                ],
+                env=command_environment,
+            )
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise BackupOperationError("pg_dump produced an empty backup")
         temporary.chmod(0o600)
+        manifest = {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "created_at": timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "snapshot": {"strategy": "pg_export_snapshot"},
+            "dump": {
+                "filename": target.name,
+                "format": "postgresql-custom",
+                "sha256": _sha256_file(temporary),
+            },
+            "release_critical_counts": release_counts,
+        }
+        manifest_temporary = _write_temporary_manifest(directory, target, manifest)
         os.replace(temporary, target)
+        dump_published = True
+        os.replace(manifest_temporary, manifest_target)
         target.chmod(0o600)
+        manifest_target.chmod(0o600)
         return target
     except Exception:
         temporary.unlink(missing_ok=True)
+        if manifest_temporary is not None:
+            manifest_temporary.unlink(missing_ok=True)
+        if dump_published:
+            target.unlink(missing_ok=True)
+        manifest_target.unlink(missing_ok=True)
+        raise
+
+
+def _manifest_path(dump_file: Path) -> Path:
+    return dump_file.with_suffix(dump_file.suffix + ".manifest.json")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_temporary_manifest(
+    directory: Path, dump_target: Path, manifest: Mapping[str, object]
+) -> Path:
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{dump_target.stem}-manifest-", suffix=".tmp", dir=directory
+    )
+    path = Path(name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        with os.fdopen(descriptor, "wb") as destination:
+            destination.write(payload)
+            destination.flush()
+            os.fsync(destination.fileno())
+        return path
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        path.unlink(missing_ok=True)
         raise
 
 
@@ -281,27 +348,63 @@ def _drop_disposable_database(database_url: str, database_name: str) -> None:
         connection.close()
 
 
+def _read_release_counts_from_cursor(cursor) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for table in RELEASE_CRITICAL_TABLES:
+        cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
+        row = cursor.fetchone()
+        if row is None:
+            raise BackupVerificationError(f"Could not count release-critical table {table}")
+        counts[table] = int(row[0])
+    return counts
+
+
 def _read_release_counts(database_url: str) -> dict[str, int]:
     try:
         connection = psycopg2.connect(_normalized_postgres_url(database_url))
     except Exception:
         raise BackupVerificationError("Could not connect while reading release-critical counts") from None
     try:
-        counts: dict[str, int] = {}
         with connection.cursor() as cursor:
-            for table in RELEASE_CRITICAL_TABLES:
-                cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
-                row = cursor.fetchone()
-                if row is None:
-                    raise BackupVerificationError(f"Could not count release-critical table {table}")
-                counts[table] = int(row[0])
-        return counts
+            return _read_release_counts_from_cursor(cursor)
     except BackupError:
         raise
     except Exception:
         raise BackupVerificationError("Could not read release-critical table counts") from None
     finally:
         connection.close()
+
+
+@contextmanager
+def _release_snapshot(database_url: str):
+    try:
+        connection = psycopg2.connect(_normalized_postgres_url(database_url))
+    except Exception:
+        raise BackupOperationError("Could not connect to export the backup snapshot") from None
+    try:
+        try:
+            connection.set_session(
+                isolation_level="REPEATABLE READ", readonly=True, autocommit=False
+            )
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_export_snapshot()")
+                row = cursor.fetchone()
+                if row is None or not isinstance(row[0], str) or not row[0]:
+                    raise BackupVerificationError("PostgreSQL did not export a backup snapshot")
+                snapshot_id = row[0]
+                counts = _read_release_counts_from_cursor(cursor)
+        except BackupError:
+            raise
+        except Exception:
+            raise BackupVerificationError(
+                "Could not capture release-critical counts for the backup snapshot"
+            ) from None
+        yield snapshot_id, counts
+    finally:
+        try:
+            connection.rollback()
+        finally:
+            connection.close()
 
 
 def _available_local_port() -> int:
@@ -405,6 +508,49 @@ def _validated_dump_path(backup_dir: Path, dump_file: str | Path | None) -> Path
     return candidate
 
 
+def _load_verified_manifest(dump_file: Path) -> dict[str, int]:
+    manifest_path = _manifest_path(dump_file)
+    try:
+        stat_mode = manifest_path.stat().st_mode & 0o777
+        if stat_mode & 0o077:
+            raise BackupPolicyError("Backup manifest permissions must be 0600")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except BackupError:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise BackupVerificationError("Backup manifest is missing or invalid") from None
+
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise BackupVerificationError("Backup manifest schema version is unsupported")
+    created_at = manifest.get("created_at")
+    if not isinstance(created_at, str):
+        raise BackupVerificationError("Backup manifest timestamp is invalid")
+    try:
+        datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise BackupVerificationError("Backup manifest timestamp is invalid") from None
+    snapshot = manifest.get("snapshot")
+    if snapshot != {"strategy": "pg_export_snapshot"}:
+        raise BackupVerificationError("Backup manifest does not declare an exported snapshot")
+    dump = manifest.get("dump")
+    if not isinstance(dump, dict):
+        raise BackupVerificationError("Backup manifest dump metadata is invalid")
+    if dump.get("filename") != dump_file.name or dump.get("format") != "postgresql-custom":
+        raise BackupVerificationError("Backup manifest does not identify this custom-format dump")
+    expected_digest = dump.get("sha256")
+    if not isinstance(expected_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise BackupVerificationError("Backup manifest SHA-256 digest is invalid")
+    if not hmac.compare_digest(expected_digest, _sha256_file(dump_file)):
+        raise BackupVerificationError("Backup dump digest does not match its manifest")
+
+    counts = manifest.get("release_critical_counts")
+    if not isinstance(counts, dict) or set(counts) != set(RELEASE_CRITICAL_TABLES):
+        raise BackupVerificationError("Backup manifest release-critical counts are incomplete")
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        raise BackupVerificationError("Backup manifest release-critical counts are invalid")
+    return {table: counts[table] for table in RELEASE_CRITICAL_TABLES}
+
+
 def verify_restore(
     database_url: str,
     backup_dir: str | Path,
@@ -414,7 +560,7 @@ def verify_restore(
     source_url = _normalized_postgres_url(database_url)
     directory = Path(backup_dir)
     dump = _validated_dump_path(directory, dump_file)
-    source_counts = _read_release_counts(source_url)
+    recorded_counts = _load_verified_manifest(dump)
     database_name = disposable_database_name()
     assert_disposable_database_name(database_name)
     if database_name == _database_name(source_url):
@@ -422,6 +568,8 @@ def verify_restore(
     restored_url = _database_url_with_name(source_url, database_name)
     restore_command_url, restore_environment = _postgres_cli_connection(restored_url)
     cleanup_required = False
+    primary_error: BaseException | None = None
+    verification: RestoreVerification | None = None
     try:
         # A CREATE DATABASE response can be interrupted after PostgreSQL has
         # committed it, so cleanup must be attempted even when creation raises.
@@ -448,19 +596,39 @@ def verify_restore(
         )
         health = _verify_restored_application(restored_url)
         restored_counts = _read_release_counts(restored_url)
-        comparison = compare_release_counts(before=source_counts, after=restored_counts)
+        comparison = compare_release_counts(before=recorded_counts, after=restored_counts)
         if not comparison.ok:
             names = ", ".join(sorted(comparison.mismatches))
             raise BackupVerificationError(f"Release-critical row counts differ: {names}")
-        return RestoreVerification(
+        verification = RestoreVerification(
             ok=True,
             database_name=database_name,
             counts=comparison,
             health=health,
         )
-    finally:
-        if cleanup_required:
+    except BaseException as exc:
+        primary_error = exc
+
+    cleanup_error: BackupError | None = None
+    if cleanup_required:
+        try:
             _drop_disposable_database(source_url, database_name)
+        except BackupError as exc:
+            cleanup_error = exc
+        except BaseException:
+            cleanup_error = BackupOperationError("Disposable restore database cleanup failed")
+
+    if primary_error is not None:
+        if cleanup_error is not None:
+            primary_error.add_note(
+                "CRITICAL: disposable restore database cleanup also failed; deployment remains blocked"
+            )
+        raise primary_error
+    if cleanup_error is not None:
+        raise cleanup_error
+    if verification is None:
+        raise BackupVerificationError("Restore verification did not complete")
+    return verification
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -480,6 +648,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = verify_restore(settings.database_url, settings.backup_dir)
             print(f"Restore verification passed for {result.database_name}")
         return 0
+    except BackupError as exc:
+        print(f"{arguments.operation} failed: {exc}", file=sys.stderr)
+        for note in getattr(exc, "__notes__", ()):
+            print(note, file=sys.stderr)
+        return 1
     except Exception:
         print(f"{arguments.operation} failed; see protected service logs", file=sys.stderr)
         return 1

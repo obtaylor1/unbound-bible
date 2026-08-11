@@ -81,7 +81,9 @@ Create a custom-format logical backup from the repository root with the `./scrip
 docker compose --env-file .env.staging -f compose.staging.yml run --rm api ./scripts/backup-staging.sh
 ```
 
-The backup wrapper creates the directory with mode `0700`, writes a temporary dump with mode `0600`, and atomically publishes a UTC-named `unbound-bible-YYYYMMDDTHHMMSSZ.dump`. Copy verified backups from the named volume into encrypted, access-controlled storage according to the provider retention policy. A container volume is not a substitute for an off-host encrypted copy.
+The backup wrapper creates the directory with mode `0700`, writes a temporary dump with mode `0600`, and publishes a UTC-named `unbound-bible-YYYYMMDDTHHMMSSZ.dump` alongside an atomically written mode-`0600` `.dump.manifest.json`. The versioned manifest records release-critical counts and the dump's SHA-256 digest. Restoration refuses a missing, malformed, overly permissive, renamed, or digest-mismatched manifest, so counts from one backup cannot silently validate another dump.
+
+Counts and `pg_dump` use the same PostgreSQL exported `REPEATABLE READ`, read-only snapshot: the count transaction remains open while `pg_dump --snapshot` completes. Writes committed after snapshot export are consistently excluded from both the dump and recorded counts. Do not run migrations, DDL, database renames, or table maintenance during the backup window; schedule those only after the dump and manifest have both appeared. Copy both files from the named volume into encrypted, access-controlled storage according to the provider retention policy. A container volume is not a substitute for an off-host encrypted copy.
 
 Before every deploy and on the scheduled recovery rehearsal, verify the newest dump with the `./scripts/restore-check-staging.sh` wrapper:
 
@@ -89,7 +91,7 @@ Before every deploy and on the scheduled recovery rehearsal, verify the newest d
 docker compose --env-file .env.staging -f compose.staging.yml run --rm api ./scripts/restore-check-staging.sh
 ```
 
-The restore check never restores over the source. It creates a cryptographically random, strictly prefixed disposable database; restores with `pg_restore`; applies Alembic migrations; starts the restored API; checks `/api/v1/health` and `/api/v1/health/providers`; and compares `biblical_texts`, users, studies, notes, shares, notifications, community posts, and community comments. It terminates only connections to that guarded disposable database and drops it in a `finally` cleanup whether verification succeeds or fails. A mismatch, unhealthy endpoint, migration error, restore error, or cleanup error blocks deployment. Never rename a normal database to the disposable prefix or run these wrappers with a superuser broader than the staging cluster requires.
+The restore check never restores over the source. It validates the manifest and digest before database creation, then creates a cryptographically random, strictly prefixed disposable database; restores with `pg_restore`; applies Alembic migrations; starts the restored API; checks `/api/v1/health` and `/api/v1/health/providers`; and compares `biblical_texts`, users, studies, notes, shares, notifications, community posts, and community comments against the counts recorded at backup time—not a changing live source. It terminates only connections to that guarded disposable database and attempts to drop it after either success or failure. If verification and cleanup both fail, the primary verification error remains the reported failure and carries a safe critical cleanup note; deployment stays blocked until an operator confirms removal. A mismatch, unhealthy endpoint, migration error, restore error, or cleanup error blocks deployment. Never rename a normal database to the disposable prefix or run these wrappers with a superuser broader than the staging cluster requires.
 
 ## Rollback
 

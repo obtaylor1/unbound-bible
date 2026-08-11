@@ -60,7 +60,9 @@ def test_api_image_migrates_before_starting_the_modular_app_as_non_root():
     )
     assert "USER app" in dockerfile
     assert "--frozen" in dockerfile
-    assert "python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7" in dockerfile
+    assert dockerfile.startswith(
+        "FROM python:3.12.13-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
+    )
     assert "pip install --no-cache-dir uv==0.8.13" in dockerfile
     assert "ghcr.io/astral-sh/uv" not in dockerfile
 
@@ -69,7 +71,10 @@ def test_api_image_contains_postgresql_clients_and_only_the_backup_wrappers():
     dockerfile = _read("backend/Dockerfile")
     dockerignore = _read(".dockerignore")
 
-    assert "postgresql-client" in dockerfile
+    assert "postgresql-client-17" in dockerfile
+    assert "postgresql-client \\" not in dockerfile
+    assert "bookworm" not in dockerfile
+    assert "curl" not in dockerfile
     assert "scripts/backup-staging.sh" in dockerfile
     assert "scripts/restore-check-staging.sh" in dockerfile
     assert "chmod 0755" in dockerfile
