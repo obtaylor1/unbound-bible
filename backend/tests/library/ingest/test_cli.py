@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 
@@ -108,7 +109,7 @@ def test_each_command_has_help_text(command):
     result = runner.invoke(app, [command, '--help'])
 
     assert result.exit_code == 0, result.output
-    assert '--database-url' in result.output
+    assert '--database-url' in unstyle(result.output)
 
 
 def test_stage_has_an_injectable_adapter_boundary_and_structured_output(
