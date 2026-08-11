@@ -28,6 +28,35 @@ Production startup rejects SQLite, HTTP public URLs, wildcard CORS, weak JWT sec
 
 Optional controls include `AUTH_RATE_LIMIT`, `AI_RATE_LIMIT`, `SEARCH_RATE_LIMIT`, `SHARING_RATE_LIMIT`, `SERMON_RATE_LIMIT`, `UPLOAD_MAX_BYTES`, `UPLOAD_MAX_DURATION_SECONDS`, and `UPLOAD_TEMP_DIR`.
 
+## Private staging configuration
+
+Create `.env.staging` only on the protected staging host or in the deployment provider's encrypted configuration. Never commit it. Use this exact template, replacing every angle-bracket value:
+
+```text
+ENVIRONMENT=staging
+POSTGRES_DB=unbound_bible
+POSTGRES_USER=unbound_bible
+POSTGRES_PASSWORD=<random database password>
+DATABASE_URL=postgresql+psycopg2://unbound_bible:<URL-encoded database password>@db:5432/unbound_bible
+JWT_SECRET_KEY=<random value of at least 32 characters>
+PUBLIC_BASE_URL=https://<private-staging-host>
+CORS_ORIGINS=["https://<private-staging-host>"]
+AI_CHAT_PROVIDER=demo
+AI_EMBEDDING_PROVIDER=demo
+AI_TRANSCRIPTION_PROVIDER=demo
+ALLOW_PRODUCTION_DEMO=true
+```
+
+Staging uses the same fail-closed database, JWT, HTTPS, CORS, and provider checks as production. Use an OpenAI-compatible provider and `AI_API_KEY` instead of the explicit demo override when provider-backed features are under test. Limit access at the provider or TLS proxy; do not expose the database port.
+
+From the repository root, validate configuration with `docker compose --env-file .env.staging -f compose.staging.yml config`, then start with `docker compose --env-file .env.staging -f compose.staging.yml up -d --build`. The API container applies Alembic migrations before Uvicorn starts. Readiness requires successful responses from `/api/v1/health`, `/api/v1/health/providers`, and the web container's `/healthz` endpoint.
+
+## Continuous delivery to private staging
+
+The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. The Private staging workflow publishes API and web images tagged with the immutable commit SHA. Configure a protected GitHub environment named `staging`, require reviewer approval, and add `STAGING_DEPLOY_HOOK_URL` as an environment secret. The hook must deploy the two exact image references from the request body and report a non-success HTTP status if the provider rejects the release. The workflow never interprets a secret as shell code.
+
+After deployment, record the commit SHA and image references, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
+
 ## Deployment sequence
 
 1. Back up PostgreSQL and verify that the backup can be listed and restored.
@@ -46,6 +75,8 @@ Use platform-native PostgreSQL snapshots plus a logical `pg_dump`. Encrypt backu
 ## Rollback
 
 Prefer application rollback while leaving forward-compatible migrations in place. Schema downgrades delete data introduced by their corresponding feature and therefore run only on a restored copy or after an explicit data export. The full SQLite rehearsal confirmed that downgrade removes only platform tables and preserves the pre-existing `biblical_texts` table.
+
+For staging, redeploy the last known-good API and web commit SHA as a pair through the same protected deployment hook. Do not use mutable tags such as `latest`. Recheck `/api/v1/health`, `/api/v1/health/providers`, and `/healthz` after rollback. If the failed release included an incompatible migration, keep the current database untouched, restore the verified pre-deploy backup into a new database, run the known-good migrations there, verify counts and health, and only then switch the connection.
 
 ## Provider operations
 

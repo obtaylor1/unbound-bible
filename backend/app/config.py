@@ -15,7 +15,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    environment: Literal["development", "test", "production"] = "development"
+    environment: Literal["development", "test", "staging", "production"] = "development"
     database_url: str = "sqlite:///./unbound_bible.db"
     jwt_secret_key: str = "development-only-secret-change-before-production"
     public_base_url: str = "http://localhost:5001"
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        if self.environment != "production":
+        if self.environment not in {"staging", "production"}:
             return self
 
         errors: list[str] = []
