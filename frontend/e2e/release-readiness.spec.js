@@ -49,9 +49,25 @@ test.beforeEach(async ({ page, diagnostics }) => {
     { id: 'exodus', name: 'Exodus', testament: 'Old Testament', collection: 'Pentateuch', recommended_edition: COMPOSITE, unavailable_reason: null },
     { id: 'tegsats', name: 'Tegsats', testament: 'Old Testament', collection: 'Ethiopian broader canon', recommended_edition: null, unavailable_reason: 'English text not yet available' },
   ] } }))
-  await page.route('**/api/biblical-texts/book-content?**', (route) => route.fulfill({ json: { content: [{ chapter: 1 }, { chapter: 2 }] } }))
+  await page.route('**/api/biblical-texts/book-content?**', (route) => {
+    const params = new URL(route.request().url()).searchParams
+    const book = params.get('book')
+    const keys = [...params.keys()]
+    const knownBook = ['Genesis', 'Exodus', 'Tegsats'].includes(book)
+    if (!knownBook || keys.length !== 1 || keys[0] !== 'book') {
+      return route.fulfill({ status: 400, json: { detail: 'Unexpected book-content request' } })
+    }
+    return route.fulfill({ json: { content: rows[book] ? [{ chapter: 1 }, { chapter: 2 }] : [] } })
+  })
   await page.route('**/api/biblical-texts/chapter-content?**', (route) => {
-    const book = new URL(route.request().url()).searchParams.get('book')
+    const params = new URL(route.request().url()).searchParams
+    const book = params.get('book')
+    const chapter = Number(params.get('chapter'))
+    const keys = [...params.keys()]
+    const exactRequestShape = keys.length === 2 && keys.includes('book') && keys.includes('chapter')
+    if (!rows[book] || chapter !== 1 || !exactRequestShape) {
+      return route.fulfill({ status: 400, json: { detail: 'Unexpected chapter-content request' } })
+    }
     return route.fulfill({ json: { content: rows[book] ?? [] } })
   })
   await page.route('**/api/v1/texts/*/*/*/details', (route) => {
@@ -218,6 +234,7 @@ test('desktop reader release journey', async ({ page }, testInfo) => {
   await expect(exodusChapter).toBeFocused()
   await exodusChapter.press('Enter')
   await expect(page.getByRole('heading', { name: 'Exodus 1' })).toBeVisible()
+  await expect(page.getByText(rows.Exodus[0].text, { exact: true })).toBeVisible()
   await bookOpener.focus()
   await bookOpener.press('Enter')
   const genesis = picker.getByRole('button', { name: 'Genesis', exact: true })
@@ -277,10 +294,20 @@ test('desktop reader release journey', async ({ page }, testInfo) => {
   await bookmark.press('Space')
   await expect(bookmark).toHaveAttribute('aria-pressed', 'true')
   await expect(tools.getByRole('status')).toContainText('Bookmarked Genesis 1:1')
+  await page.reload()
+  await expect(page.getByText(GENESIS, { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /Genesis 1 verse 1/ }).press('Enter')
+  await page.getByRole('button', { name: 'Open study tools' }).press('Enter')
+  const reopenedTools = page.getByRole('dialog', { name: 'Genesis 1:1', exact: true })
+  await reopenedTools.getByRole('button', { name: 'Highlights and bookmarks' }).press('Enter')
+  const persistedHighlight = reopenedTools.getByRole('button', { name: 'Highlight Genesis 1:1' })
+  const persistedBookmark = reopenedTools.getByRole('button', { name: 'Bookmark Genesis 1:1' })
+  await expect(persistedHighlight).toHaveAttribute('aria-pressed', 'true')
+  await expect(persistedBookmark).toHaveAttribute('aria-pressed', 'true')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K')
-  await expect(tools).toBeVisible()
-  await tools.getByRole('button', { name: 'Add or view notes' }).focus()
-  await tools.getByRole('button', { name: 'Add or view notes' }).press('Enter')
+  await expect(reopenedTools).toBeVisible()
+  await reopenedTools.getByRole('button', { name: 'Add or view notes' }).focus()
+  await reopenedTools.getByRole('button', { name: 'Add or view notes' }).press('Enter')
   await expect(page.getByRole('heading', { name: 'Notes & saved studies' })).toBeVisible()
   const noteText = 'Remember that creation begins with God.'
   const noteEditor = page.getByRole('textbox', { name: 'Note for Genesis 1:1' })
@@ -343,6 +370,7 @@ test('mobile reader release journey', async ({ page }, testInfo) => {
   await expectReachable(bookPicker.getByRole('button', { name: 'Chapter 1' }), 'mobile final chapter choice')
   await bookPicker.getByRole('button', { name: 'Chapter 1' }).click()
   await expect(page.getByRole('heading', { name: 'Exodus 1' })).toBeVisible()
+  await expect(page.getByText(rows.Exodus[0].text, { exact: true })).toBeVisible()
   const translationDialog = await openTranslationOverview(page)
   await expectShellFitsViewport(translationDialog, 'mobile translation information')
   await expectTranslationContentReachable(translationDialog, 'mobile translation information')
