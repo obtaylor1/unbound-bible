@@ -130,6 +130,9 @@ def test_staging_workflow_requires_successful_main_quality_and_deploys_image_dig
     assert "types: [completed]" in workflow_text
     assert "branches: [main]" in workflow_text
     assert "github.event.workflow_run.conclusion == 'success'" in workflow_text
+    assert "github.event.workflow_run.event == 'push'" in workflow_text
+    assert "github.event.workflow_run.head_branch == 'main'" in workflow_text
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in workflow_text
     assert "workflow_dispatch:" not in workflow_text
     assert "${{ github.event.workflow_run.head_sha }}" in workflow_text
     assert "ref: ${{ github.event.workflow_run.head_sha }}" in workflow_text
