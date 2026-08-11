@@ -169,6 +169,13 @@ describe('TranslationOverview', () => {
     expect(readerCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.translation-overview/s)
   })
 
+  it('does not animate its background through low-contrast colors during theme changes', () => {
+    const declarations = readerCss.match(/\.translation-overview__trigger\s*\{([^}]*)\}/s)?.[1]
+
+    expect(declarations).toBeTruthy()
+    expect(declarations).not.toMatch(/transition:[^;]*background(?:-color)?/)
+  })
+
   it('keeps its scrollable dialog bounded to the viewport', () => {
     expect(readerCss).toMatch(/\.translation-overview__dialog\s*\{[^}]*max-height:\s*min\([^;]*100dvh[^;]*\)[^}]*overflow:\s*hidden/s)
     expect(readerCss).toMatch(/\.translation-overview__content\s*\{[^}]*overflow-y:\s*auto/s)

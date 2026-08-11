@@ -49,6 +49,13 @@ jobs:
           node-version: "22.18.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.8.13"
+          enable-cache: true
+      - run: uv sync --frozen --project ..
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test --workers=1
+        env:
+          E2E_PYTHON: ../.venv/bin/python
