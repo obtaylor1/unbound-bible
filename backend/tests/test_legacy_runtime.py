@@ -4,9 +4,79 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+from pydantic import ValidationError
+
+from app.config import Settings
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
+
+
+def assert_legacy_database_fails_closed(text: str) -> None:
+    """Assert that a retired database module cannot silently use a repo SQLite file."""
+    normalized = text.lower()
+    assert 'os.environ.get("database_url")' in normalized
+    assert 'if not database_url:' in normalized
+    assert 'database_url environment variable' in normalized
+    assert 'not set' in normalized
+    assert 'sqlite:///' not in normalized
+    assert 'unbound_bible.db' not in normalized
+    assert 'auth_forum.db' not in normalized
+
+
+def test_legacy_database_guard_rejects_repo_sqlite_fallback(tmp_path):
+    unsafe_module = tmp_path / 'database.py'
+    unsafe_module.write_text(
+        'DATABASE_URL = "sqlite:///unbound_bible.db"\n',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(AssertionError):
+        assert_legacy_database_fails_closed(unsafe_module.read_text(encoding='utf-8'))
+
+
+def test_retired_legacy_databases_do_not_fall_back_to_repo_sqlite_files():
+    paths = [
+        BACKEND_ROOT / 'database.py',
+        REPOSITORY_ROOT / 'auth-forum-api' / 'database.py',
+    ]
+
+    for path in paths:
+        assert_legacy_database_fails_closed(path.read_text(encoding='utf-8'))
+
+
+@pytest.mark.parametrize('environment', ['staging', 'production'])
+def test_active_runtime_rejects_sqlite_outside_development_and_tests(environment):
+    with pytest.raises(ValidationError, match='Production database must use PostgreSQL'):
+        Settings(
+            environment=environment,
+            database_url='sqlite:///unbound_bible.db',
+            jwt_secret_key='release-specific-secret-that-is-long-enough',
+            public_base_url='https://staging.example.test',
+            cors_origins=['https://staging.example.test'],
+            ai_chat_provider='openai_compatible',
+            ai_embedding_provider='openai_compatible',
+            ai_transcription_provider='openai_compatible',
+            ai_api_key='test-provider-key',
+        )
+
+
+def test_production_launchers_import_only_the_modular_application():
+    launchers = [
+        (REPOSITORY_ROOT / '.replit').read_text(encoding='utf-8'),
+        (BACKEND_ROOT / 'Dockerfile').read_text(encoding='utf-8'),
+    ]
+    application = (BACKEND_ROOT / 'app' / 'application.py').read_text(encoding='utf-8')
+
+    for launcher in launchers:
+        assert 'app.application:app' in launcher
+        assert 'main:app' not in launcher
+
+    assert 'from database import' not in application
+    assert 'from auth import' not in application
+    assert 'import main' not in application
 
 
 def _safe_environment(database_path: Path) -> dict[str, str]:
@@ -43,11 +113,13 @@ def test_retired_legacy_auth_runtimes_keep_fail_closed_configuration():
         encoding='utf-8'
     )
 
-    assert 'guest_token' not in backend_auth
-    assert 'default insecure development key' not in backend_auth
-    assert 'default insecure development key' not in forum_auth
-    assert 'JWT_SECRET_KEY environment variable is required' in backend_auth
-    assert 'JWT_SECRET_KEY environment variable is required' in forum_auth
+    for text in [backend_auth, forum_auth]:
+        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY")' in text
+        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY",' not in text
+        assert 'SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or' not in text
+        assert 'guest_token' not in text
+        assert 'default insecure development key' not in text
+        assert 'JWT_SECRET_KEY environment variable is required' in text
 
 
 def test_replit_backend_launcher_module_imports_with_safe_settings(tmp_path):
@@ -59,7 +131,9 @@ def test_replit_backend_launcher_module_imports_with_safe_settings(tmp_path):
 
     result = _run_legacy_python(
         '''
+        import sys
         from app.application import app
+        assert {'main', 'auth', 'database'}.isdisjoint(sys.modules)
         schema = app.openapi()
         assert '/api/v1/books' in schema['paths']
         print(app.title)
