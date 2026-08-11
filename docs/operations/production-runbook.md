@@ -53,9 +53,11 @@ From the repository root, validate configuration with `docker compose --env-file
 
 ## Continuous delivery to private staging
 
-The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. The Private staging workflow publishes API and web images tagged with the immutable commit SHA. Configure a protected GitHub environment named `staging`, require reviewer approval, and add `STAGING_DEPLOY_HOOK_URL` as an environment secret. The hook must deploy the two exact image references from the request body and report a non-success HTTP status if the provider rejects the release. The workflow never interprets a secret as shell code.
+The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. A successful Quality workflow on `main` is the only trigger for the Private staging workflow. Staging builds the exact tested commit SHA, publishes API and web images, resolves each pushed manifest to an immutable digest reference (`repository@sha256:...`), and sends only those digest references to the provider. A tag that contains a commit SHA is traceable, but it is not itself immutable.
 
-After deployment, record the commit SHA and image references, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
+Configure a protected GitHub environment named `staging`, require reviewer approval, and add `STAGING_DEPLOY_HOOK_URL` as an environment secret. The hook must deploy the two exact digest references from the request body and report a non-success HTTP status if the provider rejects the release. The workflow never interprets a secret as shell code. Concurrency is serialized so only one staging release at a time can build, await approval, and deploy; later releases queue rather than canceling an approved release.
+
+After deployment, record the commit SHA and immutable image digest references, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
 
 ## Deployment sequence
 

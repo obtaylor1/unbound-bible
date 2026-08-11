@@ -2,7 +2,7 @@ name: unbound-bible-staging
 
 services:
   db:
-    image: postgres:17.6-alpine3.22
+    image: postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
     restart: unless-stopped
     env_file:
       - .env.staging

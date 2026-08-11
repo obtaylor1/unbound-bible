@@ -1,0 +1,35 @@
+*
+!pyproject.toml
+!uv.lock
+!backend/
+!backend/**
+!frontend/
+!frontend/**
+
+# Secrets and repository internals stay outside every image build context.
+.env*
+**/.env*
+.git
+.git/**
+.worktrees
+.worktrees/**
+
+# Local databases, dependencies, caches, reports, and user-generated data.
+*.db
+**/*.db
+**/__pycache__
+**/__pycache__/**
+**/.pytest_cache
+**/.pytest_cache/**
+**/node_modules
+**/node_modules/**
+**/test-results
+**/test-results/**
+**/playwright-report
+**/playwright-report/**
+**/coverage
+**/coverage/**
+**/uploads
+**/uploads/**
+**/temp
+**/temp/**
