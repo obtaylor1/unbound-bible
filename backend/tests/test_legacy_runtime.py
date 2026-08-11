@@ -106,13 +106,38 @@ def assert_legacy_auth_fails_closed(text: str) -> None:
     ]
     assert len(missing_secret_guards) == 1
     guard = missing_secret_guards[0]
+    assert len(guard.body) == 1
+    assert isinstance(guard.body[0], ast.Raise)
     messages = [
         node.value
-        for statement in guard.body
-        for node in ast.walk(statement)
+        for node in ast.walk(guard.body[0])
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
     ]
     assert any('JWT_SECRET_KEY environment variable is required' in message for message in messages)
+
+
+def _docker_instruction_values(text: str, instruction: str) -> list[str]:
+    logical_lines: list[str] = []
+    pending = ''
+    for physical_line in text.splitlines():
+        stripped = physical_line.strip()
+        if not pending and (not stripped or stripped.startswith('#')):
+            continue
+        pending = f'{pending} {stripped}'.strip()
+        if pending.endswith('\\'):
+            pending = pending[:-1].rstrip()
+            continue
+        logical_lines.append(pending)
+        pending = ''
+    if pending:
+        logical_lines.append(pending)
+
+    values = []
+    for line in logical_lines:
+        parts = line.split(None, 1)
+        if parts and parts[0].upper() == instruction.upper():
+            values.append(parts[1] if len(parts) == 2 else '')
+    return values
 
 
 def test_legacy_database_guard_rejects_repo_sqlite_fallback(tmp_path):
@@ -261,11 +286,7 @@ def test_production_launchers_import_only_the_modular_application():
         '--host 0.0.0.0 --port 8000"'
     ) in replit_configuration
 
-    command_lines = [
-        line.strip()[len('CMD '):]
-        for line in dockerfile.splitlines()
-        if line.strip().upper().startswith('CMD ')
-    ]
+    command_lines = _docker_instruction_values(dockerfile, 'CMD')
     assert command_lines
     assert json.loads(command_lines[-1]) == [
         'sh',
@@ -273,6 +294,7 @@ def test_production_launchers_import_only_the_modular_application():
         'alembic -c alembic.ini upgrade head && exec uvicorn '
         'app.application:app --host 0.0.0.0 --port 8000',
     ]
+    assert _docker_instruction_values(dockerfile, 'ENTRYPOINT') == []
 
     api_service = compose['services']['api']
     assert 'command' not in api_service
@@ -281,6 +303,17 @@ def test_production_launchers_import_only_the_modular_application():
     assert 'from database import' not in application
     assert 'from auth import' not in application
     assert 'import main' not in application
+
+
+def test_docker_instruction_parser_ignores_comments_but_finds_active_entrypoint():
+    dockerfile = '''
+    # ENTRYPOINT ["ignored-comment"]
+      entrypoint ["active-entrypoint"]
+    '''
+
+    assert _docker_instruction_values(textwrap.dedent(dockerfile), 'ENTRYPOINT') == [
+        '["active-entrypoint"]'
+    ]
 
 
 def _safe_environment(database_path: Path) -> dict[str, str]:
@@ -330,6 +363,19 @@ def test_legacy_auth_guard_rejects_alternate_secret_assignment():
     if not SECRET_KEY:
         SECRET_KEY = load_guest_key()
         raise RuntimeError("JWT_SECRET_KEY environment variable is required")
+    '''
+
+    with pytest.raises(AssertionError):
+        assert_legacy_auth_fails_closed(textwrap.dedent(unsafe_source))
+
+
+def test_legacy_auth_guard_rejects_indirect_fallback_without_raise():
+    unsafe_source = '''
+    import os
+    SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+    if not SECRET_KEY:
+        print("JWT_SECRET_KEY environment variable is required")
+        globals()["SECRET_KEY"] = load_guest_key()
     '''
 
     with pytest.raises(AssertionError):
