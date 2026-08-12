@@ -141,8 +141,14 @@ def test_ethiopian_scope_returns_only_eligible_ethiopian_records(research_sessio
         {'id': 1, 'book': 'Genesis', 'chapter': 1, 'verse': 1, 'text': 'covenant creation', 'translation': 'KJV'},
         {'id': 2, 'book': '1 Enoch', 'chapter': 1, 'verse': 1, 'text': 'covenant watchers', 'translation': 'EOTC-COMPOSITE-EN'},
         {'id': 3, 'book': 'Antiquities', 'chapter': 1, 'verse': 1, 'text': 'covenant history', 'translation': 'JOSEPHUS'},
+        {'id': 4, 'book': 'Jubilees', 'chapter': 1, 'verse': 1, 'text': 'astronomy calendar cycles', 'translation': 'EOTC-COMPOSITE-EN'},
     ])
     add_ethiopian_edition(research_session)
+    add_ethiopian_edition(
+        research_session,
+        work_id='jubilees',
+        source_tradition='Ethiopic Jubilees',
+    )
 
     evidence = retrieve_research_evidence(
         research_session, 'covenant', [SourceScope.ETHIOPIAN_TRADITION], ResearchDepth.QUICK
@@ -196,6 +202,38 @@ def test_multiple_scopes_permit_relevant_records_without_unrelated_sources(resea
     assert {item.source_type for item in evidence} == {
         'canonical-scripture', 'ethiopian-canon'
     }
+
+
+def test_multiple_scopes_do_not_force_one_result_from_each_scope(research_session):
+    insert_verses(research_session, [
+        {
+            'id': 1,
+            'book': 'Romans',
+            'chapter': 6,
+            'verse': 5,
+            'text': 'resurrection hope and new life',
+            'translation': 'KJV',
+        },
+        {
+            'id': 2,
+            'book': '1 Enoch',
+            'chapter': 1,
+            'verse': 1,
+            'text': 'watchers and astronomy',
+            'translation': 'EOTC-COMPOSITE-EN',
+        },
+    ])
+    add_ethiopian_edition(research_session)
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'resurrection hope',
+        [SourceScope.BIBLICAL_CANON, SourceScope.ETHIOPIAN_TRADITION],
+        ResearchDepth.STUDY,
+    )
+
+    assert [item.id for item in evidence] == ['scripture:1']
+    assert evidence[0].source_type == 'canonical-scripture'
 
 
 def test_explicit_reference_uses_exact_rows_then_applies_scope(research_session):
