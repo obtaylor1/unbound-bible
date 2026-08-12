@@ -99,7 +99,11 @@ def test_frontend_image_builds_vite_and_serves_with_non_root_nginx():
     assert "location = /healthz" in nginx
     assert "ENV API_UPSTREAM=api:8000" in dockerfile
     assert "COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template" in dockerfile
-    assert "proxy_pass http://${API_UPSTREAM}" in nginx
+    assert "COPY frontend/15-dynamic-resolver.envsh /docker-entrypoint.d/15-dynamic-resolver.envsh" in dockerfile
+    assert "chmod 0755 /docker-entrypoint.d/15-dynamic-resolver.envsh" in dockerfile
+    assert "resolver ${NGINX_RESOLVER} valid=10s ipv6=off" in nginx
+    assert "set $api_upstream ${API_UPSTREAM}" in nginx
+    assert "proxy_pass http://$api_upstream" in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
 
 
