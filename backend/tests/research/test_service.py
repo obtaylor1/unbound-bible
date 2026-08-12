@@ -14,7 +14,7 @@ from app.research.schemas import (
     ResearchQueryRequest,
     SourceScope,
 )
-from app.research.service import ResearchService
+from app.research.service import MAX_PROMPT_CHARS, ResearchService
 
 
 class RecordingProvider:
@@ -261,10 +261,10 @@ async def test_prompt_is_compact_strict_and_contains_request_settings_but_no_ai_
     messages = provider.calls[0]
     assert [message.role for message in messages] == ['system', 'user']
     system = messages[0].content
-    assert 'Use only supplied evidence. Return one JSON object matching schema.' in system
-    assert 'Every factual claim/event must cite source_ids from evidence.' in system
-    assert 'Do not treat prior AI text as evidence. State uncertainty when silent.' in system
-    assert 'Do not add source merely because scope enabled.' in system
+    assert 'Use only the supplied evidence. Return one JSON object matching the schema.' in system
+    assert 'Every factual claim and event must cite source_ids from the evidence.' in system
+    assert 'Do not treat prior AI text as evidence. State uncertainty when evidence is silent.' in system
+    assert 'Do not add a source merely because its scope was enabled.' in system
     assert 'narrative and other free-form fields are forbidden' in system
     for key in (
         'summary', 'timeline', 'canonical_account', 'historical_context',
@@ -338,3 +338,87 @@ async def test_audit_failure_rolls_back_without_exposing_database_secrets():
     assert 'database password' not in result.model_dump_json()
     assert session.commits == 1
     assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_retriever_generator_is_not_consumed_past_evidence_limit():
+    consumed = 0
+
+    def generated_evidence():
+        nonlocal consumed
+        for index in range(100):
+            consumed += 1
+            yield ResearchEvidence(
+                id=f'scripture:{index}',
+                title=f'Source {index}',
+                reference=f'Genesis 1:{index + 1}',
+                text='Evidence.',
+                source_type='canonical-scripture',
+                tradition='Protestant',
+            )
+
+    provider = RecordingProvider(provider_document())
+    await ResearchService(
+        retriever=lambda *_: generated_evidence(), provider=provider
+    ).query(request())
+
+    assert consumed == 32
+    payload = json.loads(provider.calls[0][1].content)
+    assert len(payload['evidence']) == 32
+
+
+@pytest.mark.asyncio
+async def test_prompt_is_valid_bounded_json_with_normalized_mode_parameters():
+    raw_parameters = {
+        f'{index:02d}-' + ('k' * 100): 'v' * 1_000_000
+        for index in range(12)
+    }
+    payload_request = request(mode_parameters=raw_parameters)
+    provider = RecordingProvider(provider_document())
+
+    await ResearchService(
+        retriever=lambda *_: evidence(), provider=provider
+    ).query(payload_request)
+
+    prompt = provider.calls[0][1].content
+    parsed = json.loads(prompt)
+    parameters = parsed['settings']['mode_parameters']
+    assert len(prompt) <= MAX_PROMPT_CHARS
+    assert len(parameters) == 8
+    assert list(parameters) == sorted(parameters)
+    assert all(len(key) <= 64 for key in parameters)
+    assert all(len(value) <= 256 for value in parameters.values())
+    assert payload_request.mode_parameters == raw_parameters
+
+
+@pytest.mark.asyncio
+async def test_evidence_records_are_added_only_while_json_prompt_fits_limit():
+    oversized = [
+        ResearchEvidence(
+            id=f'scripture:{index}',
+            title='T' * 1_000,
+            reference='R' * 2_000,
+            text='E' * 100_000,
+            source_type='canonical-scripture',
+            tradition='P' * 2_000,
+            translation='KJV',
+            date_or_era='D' * 2_000,
+            original_language='L' * 2_000,
+            open_target='O' * 2_000,
+        )
+        for index in range(32)
+    ]
+    provider = RecordingProvider(provider_document())
+
+    result = await ResearchService(
+        retriever=lambda *_: oversized, provider=provider
+    ).query(request())
+
+    prompt = provider.calls[0][1].content
+    parsed = json.loads(prompt)
+    assert len(prompt) <= MAX_PROMPT_CHARS
+    assert len(parsed['evidence']) < 32
+    assert all(len(item['text']) <= 2_000 for item in parsed['evidence'])
+    assert [source.id for source in result.sources] == [
+        item['id'] for item in parsed['evidence']
+    ]

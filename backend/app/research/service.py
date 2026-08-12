@@ -6,6 +6,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable, Iterable
+from itertools import islice
 from typing import Any
 
 from app.ai.contracts import ChatMessage, ChatProvider, ProviderError
@@ -31,13 +32,17 @@ from app.research.validation import (
 
 
 _MAX_EVIDENCE_RECORDS = 32
-_MAX_EVIDENCE_TEXT_CHARS = 8_000
+_MAX_EVIDENCE_TEXT_CHARS = 2_000
 _MAX_EVIDENCE_METADATA_CHARS = 2_000
+_MAX_MODE_PARAMETERS = 8
+_MAX_MODE_PARAMETER_KEY_CHARS = 64
+_MAX_MODE_PARAMETER_VALUE_CHARS = 256
+MAX_PROMPT_CHARS = 80_000
 
-_SYSTEM_INSTRUCTION = """Use only supplied evidence. Return one JSON object matching schema.
-Every factual claim/event must cite source_ids from evidence.
-Do not treat prior AI text as evidence. State uncertainty when silent.
-Do not add source merely because scope enabled.
+_SYSTEM_INSTRUCTION = """Use only the supplied evidence. Return one JSON object matching the schema.
+Every factual claim and event must cite source_ids from the evidence.
+Do not treat prior AI text as evidence. State uncertainty when evidence is silent.
+Do not add a source merely because its scope was enabled.
 The only recognized top-level keys are: summary, timeline, canonical_account, historical_context, unknowns, ancient_accounts, language_notes, people, places, related_questions.
 The summary object is required. Section objects contain title and claims only. narrative and other free-form fields are forbidden.
 Claims must contain id, statement, classification, confidence, and source_ids. Timeline events must contain title, description, date_label, source_ids, and confidence."""
@@ -59,12 +64,13 @@ class ResearchService:
         self._user = user
 
     async def query(self, request: ResearchQueryRequest) -> ResearchResponse:
-        evidence = list(self._retriever(
+        candidates = islice(self._retriever(
             self._session,
             request.question,
             request.source_scopes,
             request.depth,
-        ))[:_MAX_EVIDENCE_RECORDS]
+        ), _MAX_EVIDENCE_RECORDS)
+        evidence, user_prompt = _bounded_prompt(request, candidates)
         sources = [_to_source(item) for item in evidence]
 
         if not evidence:
@@ -87,7 +93,7 @@ class ResearchService:
             return response
 
         try:
-            result = await self._provider.complete(_messages(request, evidence))
+            result = await self._provider.complete(_messages(user_prompt))
         except ProviderError:
             response = _fallback_response(
                 request,
@@ -285,26 +291,58 @@ def _evidence_record(evidence: ResearchEvidence) -> dict[str, Any]:
     }
 
 
-def _messages(
+def _normalized_mode_parameters(
     request: ResearchQueryRequest,
-    evidence: list[ResearchEvidence],
-) -> list[ChatMessage]:
-    payload = {
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in sorted(request.mode_parameters.items()):
+        bounded_key = key[:_MAX_MODE_PARAMETER_KEY_CHARS]
+        if bounded_key in normalized:
+            continue
+        normalized[bounded_key] = value[:_MAX_MODE_PARAMETER_VALUE_CHARS]
+        if len(normalized) == _MAX_MODE_PARAMETERS:
+            break
+    return normalized
+
+
+def _base_payload(request: ResearchQueryRequest) -> dict[str, Any]:
+    return {
         'question': request.question,
         'settings': {
             'source_scopes': [scope.value for scope in request.source_scopes],
             'depth': request.depth.value,
             'mode': request.mode.value,
-            'mode_parameters': request.mode_parameters,
+            'mode_parameters': _normalized_mode_parameters(request),
         },
-        'evidence': [_evidence_record(item) for item in evidence],
+        'evidence': [],
     }
+
+
+def _serialize_payload(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+
+
+def _bounded_prompt(
+    request: ResearchQueryRequest,
+    candidates: Iterable[ResearchEvidence],
+) -> tuple[list[ResearchEvidence], str]:
+    payload = _base_payload(request)
+    selected: list[ResearchEvidence] = []
+    for item in candidates:
+        record = _evidence_record(item)
+        payload['evidence'].append(record)
+        candidate_prompt = _serialize_payload(payload)
+        if len(candidate_prompt) > MAX_PROMPT_CHARS:
+            payload['evidence'].pop()
+            break
+        selected.append(item)
+    return selected, _serialize_payload(payload)
+
+
+def _messages(user_prompt: str) -> list[ChatMessage]:
     return [
         ChatMessage(role='system', content=_SYSTEM_INSTRUCTION),
-        ChatMessage(
-            role='user',
-            content=json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
-        ),
+        ChatMessage(role='user', content=user_prompt),
     ]
 
 
