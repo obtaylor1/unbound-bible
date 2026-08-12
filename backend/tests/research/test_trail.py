@@ -8,13 +8,15 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import delete, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from app.application import create_application
 from app.auth.service import AuthService
 from app.research.models import (
+    MAX_TRAIL_DEPTH,
     ResearchNode,
+    ResearchTrailError,
     build_trail_snapshot,
     create_research_node,
     get_owned_research_node,
@@ -258,6 +260,81 @@ def test_create_rejects_parent_or_study_owned_by_another_user_before_insert(
         ) is None
 
 
+def test_create_re_resolves_detached_parent_under_requesting_owner(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        owner = _register(
+            session,
+            test_settings,
+            email='owner@example.com',
+            username='owner',
+        )
+        stranger = _register(
+            session,
+            test_settings,
+            email='stranger@example.com',
+            username='stranger',
+        )
+        real_parent = create_research_node(
+            session,
+            owner.id,
+            _request('Owner-only root'),
+            _snapshot('Owner-only root'),
+        )
+        session.commit()
+        spoofed_parent = ResearchNode(id=real_parent.id, owner_id=stranger.id)
+
+        with pytest.raises(ResearchTrailError) as error:
+            create_research_node(
+                session,
+                stranger.id,
+                _request('Spoofed child', parent_node_id=real_parent.id),
+                _snapshot('Spoofed child'),
+                parent=spoofed_parent,
+            )
+
+        assert error.value.code == 'parent_not_found'
+        assert session.scalar(
+            select(ResearchNode).where(ResearchNode.question == 'Spoofed child')
+        ) is None
+
+
+def test_create_rejects_stale_deleted_parent_before_insert(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        owner = _register(
+            session,
+            test_settings,
+            email='owner@example.com',
+            username='owner',
+        )
+        parent = create_research_node(
+            session,
+            owner.id,
+            _request('Soon deleted'),
+            _snapshot('Soon deleted'),
+        )
+        session.commit()
+        parent_id = parent.id
+        session.expunge(parent)
+        session.execute(delete(ResearchNode).where(ResearchNode.id == parent_id))
+        session.commit()
+
+        with pytest.raises(ResearchTrailError) as error:
+            create_research_node(
+                session,
+                owner.id,
+                _request('Stale child', parent_node_id=parent_id),
+                _snapshot('Stale child'),
+                parent=parent,
+            )
+
+        assert error.value.code == 'parent_not_found'
+        assert session.scalar(
+            select(ResearchNode).where(ResearchNode.question == 'Stale child')
+        ) is None
+
+
 def test_parent_study_mismatch_is_rejected(test_settings):
     application = create_application(test_settings)
     with application.state.session_factory() as session:
@@ -399,6 +476,61 @@ def test_trail_snapshot_is_deterministic_and_cycle_safe(test_settings):
             str(root.id),
             str(current.id),
         ]
+
+
+def test_trail_snapshot_rejects_overlong_ancestry_with_bounded_queries(test_settings):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        owner = _register(
+            session,
+            test_settings,
+            email='owner@example.com',
+            username='owner',
+        )
+        node_ids = [uuid.uuid4() for _ in range(MAX_TRAIL_DEPTH + 1)]
+        session.add_all(
+            ResearchNode(
+                id=node_id,
+                owner_id=owner.id,
+                parent_id=node_ids[index - 1] if index else None,
+                question=f'Node {index}',
+                mode='research-question',
+                source_scopes=['biblical-canon'],
+                depth='quick',
+                response_snapshot=_snapshot(f'Node {index}'),
+            )
+            for index, node_id in enumerate(node_ids)
+        )
+        session.commit()
+        session.expire_all()
+
+        research_selects = 0
+
+        def count_research_selects(_conn, _cursor, statement, *_args):
+            nonlocal research_selects
+            if (
+                statement.lstrip().upper().startswith('SELECT')
+                and 'research_nodes' in statement
+            ):
+                research_selects += 1
+
+        event.listen(
+            application.state.database_engine,
+            'before_cursor_execute',
+            count_research_selects,
+        )
+        try:
+            with pytest.raises(ResearchTrailError) as error:
+                build_trail_snapshot(session, node_ids[-1], owner.id)
+        finally:
+            event.remove(
+                application.state.database_engine,
+                'before_cursor_execute',
+                count_research_selects,
+            )
+
+        assert error.value.code == 'trail_too_deep'
+        assert research_selects <= MAX_TRAIL_DEPTH
 
 
 def test_database_constraints_reject_invalid_values(test_settings):

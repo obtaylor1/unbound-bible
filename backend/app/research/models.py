@@ -27,6 +27,15 @@ from app.studies.models import StudySession
 
 _RESEARCH_MODES = tuple(mode.value for mode in ResearchMode)
 _RESEARCH_DEPTHS = tuple(depth.value for depth in ResearchDepth)
+MAX_TRAIL_DEPTH = 64
+
+
+class ResearchTrailError(ValueError):
+    """A safe, machine-readable research-trail boundary failure."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _sql_values(values: tuple[str, ...]) -> str:
@@ -113,6 +122,8 @@ def create_research_node(
 ) -> ResearchNode:
     """Create a node after enforcing owner and branch boundaries.
 
+    API and route callers must use this helper for every insert so parent IDs are
+    re-resolved under the authenticated owner instead of trusting request objects.
     The response snapshot is retained only for display/history. Callers must never
     reuse its prose as evidence for a later research response.
     """
@@ -136,17 +147,19 @@ def create_research_node(
         and supplied_parent_id is not None
         and requested_parent_id != supplied_parent_id
     ):
-        raise ValueError('request parent and supplied parent must match')
+        raise ResearchTrailError(
+            'parent_mismatch',
+            'request parent and supplied parent must match',
+        )
     parent_id = supplied_parent_id or requested_parent_id
     resolved_parent: ResearchNode | None = None
-    if isinstance(parent, ResearchNode):
-        resolved_parent = parent
-        if resolved_parent.owner_id != owner_id:
-            raise ValueError('parent must belong to the research owner')
-    elif parent_id is not None:
+    if parent_id is not None:
         resolved_parent = get_owned_research_node(session, parent_id, owner_id)
         if resolved_parent is None:
-            raise ValueError('parent must belong to the research owner')
+            raise ResearchTrailError(
+                'parent_not_found',
+                'parent was not found for the research owner',
+            )
 
     if resolved_parent is not None:
         if resolved_study_id is None:
@@ -210,7 +223,7 @@ def build_trail_snapshot(
     node_id: uuid.UUID,
     owner_id: uuid.UUID,
 ) -> dict[str, list[dict[str, Any]]] | None:
-    """Return the active ancestry and direct children in deterministic order."""
+    """Return bounded ancestry and direct children in deterministic order."""
 
     current = get_owned_research_node(session, node_id, owner_id)
     if current is None:
@@ -219,14 +232,20 @@ def build_trail_snapshot(
     reverse_ancestry: list[dict[str, Any]] = []
     visited: set[uuid.UUID] = set()
     cursor: ResearchNode | None = current
-    while cursor is not None and cursor.id not in visited:
+    for depth in range(MAX_TRAIL_DEPTH):
+        if cursor is None or cursor.id in visited:
+            break
         visited.add(cursor.id)
         reverse_ancestry.append(_trail_node(cursor))
-        cursor = (
-            get_owned_research_node(session, cursor.parent_id, owner_id)
-            if cursor.parent_id is not None
-            else None
-        )
+        parent_id = cursor.parent_id
+        if parent_id is None or parent_id in visited:
+            break
+        if depth == MAX_TRAIL_DEPTH - 1:
+            raise ResearchTrailError(
+                'trail_too_deep',
+                f'research trail exceeds the maximum depth of {MAX_TRAIL_DEPTH}',
+            )
+        cursor = get_owned_research_node(session, parent_id, owner_id)
 
     children = session.scalars(
         select(ResearchNode)
