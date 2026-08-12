@@ -1,7 +1,8 @@
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.research import event_catalog
@@ -174,6 +175,97 @@ def test_search_rejects_overlong_normalized_queries_safely(event_session, query)
 
     assert raised.value.code == 'invalid_query'
     assert str(raised.value) == 'Event search query is too long.'
+
+
+@pytest.mark.parametrize('query', [5000 * ' ', object()])
+def test_search_rejects_invalid_raw_queries_before_normalizing(
+    event_session, query, monkeypatch,
+):
+    def normalization_must_not_run(_value):
+        raise AssertionError('normalization should not run')
+
+    monkeypatch.setattr(event_catalog, '_normalized', normalization_must_not_run)
+    with pytest.raises(EventCatalogError) as raised:
+        list_events(event_session, query)
+
+    assert raised.value.code == 'invalid_query'
+    assert str(raised.value) == 'Event search query is too long.'
+
+
+def test_missing_table_is_catalog_unavailable_and_does_not_rollback_caller():
+    engine = create_engine('sqlite:///:memory:')
+    with engine.begin() as connection:
+        connection.execute(text('CREATE TABLE caller_work (value TEXT)'))
+    with Session(engine) as session:
+        session.execute(
+            text('INSERT INTO caller_work (value) VALUES (:value)'),
+            {'value': 'still pending'},
+        )
+
+        with pytest.raises(EventCatalogError) as raised:
+            resolve_between_events(session, 'eden', 'abel-killed')
+
+        assert raised.value.code == 'catalog_unavailable'
+        assert str(raised.value) == 'The verified event catalog is unavailable.'
+        assert isinstance(raised.value.__cause__, OperationalError)
+        assert session.scalar(text('SELECT COUNT(*) FROM caller_work')) == 1
+        assert session.in_transaction()
+
+
+def test_forced_sql_error_is_catalog_unavailable(event_session, monkeypatch):
+    failure = OperationalError('SELECT', {}, RuntimeError('database offline'))
+
+    def fail_execute(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(event_session, 'execute', fail_execute)
+    with pytest.raises(EventCatalogError) as raised:
+        list_events(event_session)
+
+    assert raised.value.code == 'catalog_unavailable'
+    assert raised.value.__cause__ is failure
+
+
+@pytest.mark.parametrize(('operation', 'expected_ids'), [
+    (
+        lambda session: list_events(session),
+        ['eden', 'eden-expulsion', 'cain-born', 'abel-born', 'offerings',
+         'abel-killed'],
+    ),
+    (
+        lambda session: resolve_between_events(
+            session, 'eden-expulsion', 'abel-killed'
+        ),
+        ['eden-expulsion', 'cain-born', 'abel-born', 'offerings',
+         'abel-killed'],
+    ),
+])
+def test_event_resolution_uses_one_bounded_biblical_query(
+    event_session, operation, expected_ids,
+):
+    statements = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        if 'biblical_texts' in statement:
+            statements.append(statement)
+
+    event.listen(
+        event_session.get_bind(), 'before_cursor_execute', record_statement
+    )
+    try:
+        assert [item.id for item in operation(event_session)] == expected_ids
+    finally:
+        event.remove(
+            event_session.get_bind(), 'before_cursor_execute', record_statement
+        )
+
+    assert len(statements) == 1
+    normalized_sql = statements[0].lower()
+    assert 'lower(' not in normalized_sql
+    assert 'upper(' not in normalized_sql
+    assert 'book in' in normalized_sql
+    assert 'chapter =' in normalized_sql
+    assert 'verse between' in normalized_sql
 
 
 def test_between_is_inclusive_and_same_event_is_a_singleton(event_session):

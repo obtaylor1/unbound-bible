@@ -158,9 +158,11 @@ _TRUSTED_TRANSLATIONS = (
     'NLT', 'NRSV', 'WEB', 'WEBBE',
 )
 _MAX_QUERY_LENGTH = 256
+_RAW_QUERY_MAX = 4096
 _WHITESPACE = re.compile(r'\s+')
 _ERRORS = MappingProxyType({
     'invalid_query': 'Event search query is too long.',
+    'catalog_unavailable': 'The verified event catalog is unavailable.',
     'unknown_event': 'Unknown event ID.',
     'different_ordering_group': (
         'Events must belong to the same ordering group.'
@@ -177,7 +179,9 @@ def _normalized(value: str) -> str:
     return _WHITESPACE.sub(' ', normalized).strip().casefold()
 
 
-def _normalized_query(query: str) -> str:
+def _normalized_query(query: object) -> str:
+    if not isinstance(query, str) or len(query) > _RAW_QUERY_MAX:
+        raise _error('invalid_query')
     normalized = _normalized(query)
     if len(normalized) > _MAX_QUERY_LENGTH:
         raise _error('invalid_query')
@@ -202,93 +206,118 @@ def _reference(definition: EventDefinition) -> str:
 
 def _passage_rows(
     session: Session,
-    definition: EventDefinition,
-) -> tuple[str, list[dict[str, Any]]] | None:
+    definitions: list[EventDefinition],
+) -> list[dict[str, Any]]:
+    if not definitions:
+        return []
+
+    params: dict[str, Any] = {}
+    book_names = []
+    for index, book in enumerate(sorted({item.book for item in definitions})):
+        name = f'book_{index}'
+        params[name] = book
+        book_names.append(f':{name}')
+
+    range_clauses = []
+    for index, definition in enumerate(definitions):
+        chapter_name = f'chapter_{index}'
+        start_name = f'verse_start_{index}'
+        end_name = f'verse_end_{index}'
+        params[chapter_name] = definition.chapter
+        params[start_name] = definition.verse_start
+        params[end_name] = definition.verse_end
+        range_clauses.append(
+            f'(chapter = :{chapter_name} '
+            f'AND verse BETWEEN :{start_name} AND :{end_name})'
+        )
+
     translation_names = []
-    params: dict[str, Any] = {
-        'book': definition.book,
-        'chapter': definition.chapter,
-        'verse_start': definition.verse_start,
-        'verse_end': definition.verse_end,
-    }
     for index, translation in enumerate(_TRUSTED_TRANSLATIONS):
         name = f'translation_{index}'
         params[name] = translation
         translation_names.append(f':{name}')
     statement = text(f'''
-        SELECT id, verse, upper(translation) AS translation
+        SELECT id, book, chapter, verse, translation
         FROM biblical_texts
-        WHERE lower(trim(book)) = lower(:book)
-          AND chapter = :chapter
-          AND verse BETWEEN :verse_start AND :verse_end
-          AND upper(coalesce(translation, '')) IN ({', '.join(translation_names)})
-        ORDER BY verse, id
+        WHERE book IN ({', '.join(book_names)})
+          AND ({' OR '.join(range_clauses)})
+          AND translation IN ({', '.join(translation_names)})
+        ORDER BY book, chapter, verse, id
     ''')
     try:
-        rows = [dict(row) for row in session.execute(statement, params).mappings()]
-    except SQLAlchemyError:
-        session.rollback()
-        return None
+        return [dict(row) for row in session.execute(statement, params).mappings()]
+    except SQLAlchemyError as exc:
+        raise _error('catalog_unavailable') from exc
 
+
+def _resolved_event(
+    definition: EventDefinition,
+    rows: list[dict[str, Any]],
+) -> EventRecord | None:
     expected_verses = set(range(definition.verse_start, definition.verse_end + 1))
     by_translation: dict[str, dict[int, dict[str, Any]]] = {}
     for row in rows:
+        if (
+            row['book'] != definition.book
+            or row['chapter'] != definition.chapter
+            or not definition.verse_start <= row['verse'] <= definition.verse_end
+        ):
+            continue
         translation = str(row['translation'])
         by_translation.setdefault(translation, {}).setdefault(row['verse'], row)
     for translation in _TRUSTED_TRANSLATIONS:
         verse_rows = by_translation.get(translation, {})
         if set(verse_rows) == expected_verses:
-            return translation, [verse_rows[verse] for verse in sorted(verse_rows)]
+            ordered_rows = [verse_rows[verse] for verse in sorted(verse_rows)]
+            return EventRecord(
+                id=definition.id,
+                title=definition.title,
+                description=definition.description,
+                aliases=definition.aliases,
+                book=definition.book,
+                chapter=definition.chapter,
+                verse_start=definition.verse_start,
+                verse_end=definition.verse_end,
+                reference=_reference(definition),
+                people=definition.people,
+                places=definition.places,
+                ordering_group=definition.ordering_group,
+                ordinal=definition.ordinal,
+                source_ids=tuple(
+                    f"scripture:{row['id']}" for row in ordered_rows
+                ),
+                translation=translation,
+            )
     return None
 
 
-def _resolve_definition(
+def _resolve_definitions(
     session: Session,
-    definition: EventDefinition,
-) -> EventRecord | None:
-    resolved = _passage_rows(session, definition)
-    if resolved is None:
-        return None
-    translation, rows = resolved
-    return EventRecord(
-        id=definition.id,
-        title=definition.title,
-        description=definition.description,
-        aliases=definition.aliases,
-        book=definition.book,
-        chapter=definition.chapter,
-        verse_start=definition.verse_start,
-        verse_end=definition.verse_end,
-        reference=_reference(definition),
-        people=definition.people,
-        places=definition.places,
-        ordering_group=definition.ordering_group,
-        ordinal=definition.ordinal,
-        source_ids=tuple(f"scripture:{row['id']}" for row in rows),
-        translation=translation,
-    )
+    definitions: list[EventDefinition],
+) -> list[EventRecord | None]:
+    rows = _passage_rows(session, definitions)
+    return [_resolved_event(definition, rows) for definition in definitions]
 
 
 def list_events(session: Session, query: str | None = None) -> list[EventRecord]:
     """Return reviewed events whose complete passages exist in trusted scripture."""
 
-    normalized_query = _normalized_query(query or '')
+    normalized_query = _normalized_query('' if query is None else query)
     definitions = sorted(
         (item for item in EVENT_DEFINITIONS if _matches(item, normalized_query)),
         key=lambda item: (item.ordering_group, item.ordinal, item.id),
     )
-    return [
-        event
-        for definition in definitions
-        if (event := _resolve_definition(session, definition)) is not None
-    ]
+    return [event for event in _resolve_definitions(session, definitions)
+            if event is not None]
 
 
 def get_event(session: Session, event_id: str) -> EventRecord | None:
     """Return one source-backed event, or ``None`` when unknown or incomplete."""
 
     definition = _DEFINITIONS_BY_ID.get(event_id)
-    return _resolve_definition(session, definition) if definition is not None else None
+    if definition is None:
+        return None
+    return _resolve_definitions(session, [definition])[0]
 
 
 def _error(code: str) -> EventCatalogError:
@@ -319,7 +348,7 @@ def resolve_between_events(
         ),
         key=lambda item: (item.ordinal, item.id),
     )
-    resolved = [_resolve_definition(session, item) for item in definitions]
+    resolved = _resolve_definitions(session, definitions)
     if any(item is None for item in resolved):
         raise _error('missing_passage')
     return [item for item in resolved if item is not None]
