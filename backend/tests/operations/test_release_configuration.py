@@ -147,7 +147,7 @@ def test_quality_workflow_runs_every_release_gate_on_prs_and_main():
         assert pinned_action in workflow_text
 
 
-def test_staging_workflow_requires_successful_main_quality_and_deploys_image_digests():
+def test_staging_workflow_requires_successful_main_quality_and_smoke_checks_railway():
     workflow_text = _read(".github/workflows/staging.yml")
     workflow = yaml.safe_load(workflow_text)
 
@@ -160,25 +160,22 @@ def test_staging_workflow_requires_successful_main_quality_and_deploys_image_dig
     assert "github.event.workflow_run.head_branch == 'main'" in workflow_text
     assert "github.event.workflow_run.head_repository.full_name == github.repository" in workflow_text
     assert "workflow_dispatch:" not in workflow_text
-    assert "${{ github.event.workflow_run.head_sha }}" in workflow_text
-    assert "ref: ${{ github.event.workflow_run.head_sha }}" in workflow_text
     assert "environment: staging" in workflow_text
-    assert "secrets.STAGING_DEPLOY_HOOK_URL" in workflow_text
-    assert "docker build" in workflow_text
-    assert "docker push" in workflow_text
-    assert "docker buildx imagetools inspect" in workflow_text
-    assert "@${api_digest}" in workflow_text
-    assert "@${web_digest}" in workflow_text
-    assert "docker/build-push-action" not in workflow_text
+    assert "https://staging.theunboundbible.com" in workflow_text
+    assert "/healthz" in workflow_text
+    assert "/api/v1/health" in workflow_text
+    assert "/api/v1/health/providers" in workflow_text
+    assert "RAILWAY_DEPLOY_TIMEOUT_SECONDS" in workflow_text
+    assert "STAGING_DEPLOY_HOOK_URL" not in workflow_text
+    assert "docker build" not in workflow_text
+    assert "docker push" not in workflow_text
     assert "eval " not in workflow_text
     assert "sh -c" not in workflow_text
     assert "bash -c" not in workflow_text
     assert "cancel-in-progress: false" in workflow_text
     assert "group: private-staging" in workflow_text
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["jobs"]["build"]["permissions"] == {"contents": "read", "packages": "write"}
-    assert workflow["jobs"]["deploy"]["permissions"] == {"contents": "read"}
-    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in workflow_text
+    assert workflow["jobs"]["smoke"]["permissions"] == {"contents": "read"}
 
 
 def test_docker_build_context_is_an_allowlist_that_excludes_secrets_and_artifacts():
@@ -215,10 +212,11 @@ def test_runbook_documents_configuration_health_deploy_and_rollback():
         "`/api/v1/health/providers`",
         "`/healthz`",
         "commit SHA",
-        "digest reference",
         "successful Quality workflow",
         "one staging release at a time",
-        "STAGING_DEPLOY_HOOK_URL",
+        "Railway",
+        "Wait for CI",
+        "staging.theunboundbible.com",
         "`BACKUP_DIR=/var/backups/unbound-bible`",
         "`./scripts/backup-staging.sh`",
         "`./scripts/restore-check-staging.sh`",

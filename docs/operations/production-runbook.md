@@ -54,11 +54,11 @@ From the repository root, validate configuration with `docker compose --env-file
 
 ## Continuous delivery to private staging
 
-The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. Only a successful Quality workflow produced by a push to `main` in this same repository can start the package-writing staging build; pull requests, forks, and similarly named branches cannot trigger it. Staging builds the exact tested commit SHA, publishes API and web images, resolves each pushed manifest to an immutable digest reference (`repository@sha256:...`), and sends only those digest references to the provider. A tag that contains a commit SHA is traceable, but it is not itself immutable.
+The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. The Railway API and web services are connected to the `main` branch with **Wait for CI** enabled, so Railway deploys the exact commit SHA only after GitHub reports successful Quality checks. Pull requests, forks, and similarly named branches do not deploy.
 
-Configure a protected GitHub environment named `staging`, require reviewer approval, and add `STAGING_DEPLOY_HOOK_URL` as an environment secret. The hook must deploy the two exact digest references from the request body and report a non-success HTTP status if the provider rejects the release. The workflow never interprets a secret as shell code. Concurrency is serialized so only one staging release at a time can build, await approval, and deploy; later releases queue rather than canceling an approved release.
+Configure a protected GitHub environment named `staging` for the post-deployment smoke check. After a successful Quality workflow produced by a push to `main` in this repository, the staging workflow waits up to 15 minutes for Railway and verifies `https://staging.theunboundbible.com/healthz`, `/api/v1/health`, and `/api/v1/health/providers`. It requires no deployment hook or long-lived provider secret. Concurrency is serialized so only one staging release at a time performs the smoke check; later releases queue rather than canceling a check in progress.
 
-After deployment, record the commit SHA and immutable image digest references, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
+After deployment, record the commit SHA, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
 
 ## Deployment sequence
 
