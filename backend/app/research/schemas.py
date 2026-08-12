@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class SourceScope(StrEnum):
     BIBLICAL_CANON = 'biblical-canon'
-    ETHIOPIAN_CANON = 'ethiopian-canon'
+    ETHIOPIAN_TRADITION = 'ethiopian-tradition'
     ANCIENT_ACCOUNTS = 'ancient-accounts'
     HISTORICAL_SOURCES = 'historical-sources'
     COMMENTARIES = 'commentaries'
@@ -22,24 +22,40 @@ class SourceScope(StrEnum):
 
 class ResearchDepth(StrEnum):
     QUICK = 'quick'
-    STANDARD = 'standard'
+    STUDY = 'study'
     DEEP = 'deep-research'
+    SCHOLAR = 'scholar'
 
 
 class ResearchMode(StrEnum):
     BETWEEN = 'what-happened-between'
     QUESTION = 'research-question'
+    TOPIC = 'topic-research'
+    PERSON = 'person-study'
+    PLACE = 'place-study'
     TIMELINE = 'timeline'
     PEOPLE_AND_PLACES = 'people-and-places'
 
 
-class SourceClassification(StrEnum):
-    BIBLICAL_CANON = 'biblical-canon'
-    ANCIENT_ACCOUNT = 'ancient-account'
-    HISTORICAL_SOURCE = 'historical-source'
+class ClaimClassification(StrEnum):
+    CANONICAL_SCRIPTURE = 'canonical-scripture'
+    ETHIOPIAN_CANON = 'ethiopian-canon'
+    ANCIENT_TEXT = 'ancient-text'
     COMMENTARY = 'commentary'
+    TRADITION = 'tradition'
+    HISTORICAL = 'historical'
+    SCHOLARSHIP = 'scholarship'
+    AI_SYNTHESIS = 'ai-synthesis'
+
+
+class SourceType(StrEnum):
+    SCRIPTURE = 'scripture'
+    ANCIENT_TEXT = 'ancient-text'
+    COMMENTARY = 'commentary'
+    TRADITION = 'tradition'
+    HISTORICAL = 'historical'
+    SCHOLARSHIP = 'scholarship'
     LANGUAGE_RESOURCE = 'language-resource'
-    USER_SOURCE = 'user-source'
 
 
 class ResearchConfidence(StrEnum):
@@ -53,7 +69,7 @@ class GroundingStatus(StrEnum):
     GROUNDED = 'grounded'
     PARTIALLY_GROUNDED = 'partially-grounded'
     EVIDENCE_ONLY = 'evidence-only'
-    INSUFFICIENT_EVIDENCE = 'insufficient-evidence'
+    INSUFFICIENT = 'insufficient'
 
 
 class StrictResearchModel(BaseModel):
@@ -86,19 +102,24 @@ class ResearchSettings(StrictResearchModel):
 class ResearchSource(StrictResearchModel):
     id: str = Field(min_length=1, max_length=500)
     title: str = Field(min_length=1, max_length=1_000)
-    classification: SourceClassification = SourceClassification.BIBLICAL_CANON
-    reference: str | None = None
+    reference: str = Field(min_length=1, max_length=2_000)
     excerpt: str | None = None
-    author: str | None = None
-    publication_date: str | None = None
-    url: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    text: str | None = None
+    source_type: SourceType
+    tradition: str | None = None
+    date_or_era: str | None = None
+    original_language: str | None = None
+    translation: str | None = None
+    relevance: str | None = None
+    open_target: str | None = None
 
 
 class ResearchClaim(StrictResearchModel):
-    text: str = Field(min_length=1, max_length=50_000)
-    source_ids: list[str] = Field(default_factory=list)
+    id: str = Field(min_length=1, max_length=500)
+    statement: str = Field(min_length=1, max_length=50_000)
+    classification: ClaimClassification
     confidence: ResearchConfidence = ResearchConfidence.MEDIUM
+    source_ids: list[str] = Field(default_factory=list)
 
 
 class ResearchSection(StrictResearchModel):
@@ -182,6 +203,16 @@ class ResearchResponse(StrictResearchModel):
 
     @model_validator(mode='after')
     def validate_source_ids(self) -> ResearchResponse:
+        seen_ids: set[str] = set()
+        duplicates: set[str] = set()
+        for source in self.sources:
+            if source.id in seen_ids:
+                duplicates.add(source.id)
+            seen_ids.add(source.id)
+        if duplicates:
+            formatted = ', '.join(sorted(duplicates))
+            raise ValueError(f'duplicate source ID: {formatted}')
+
         known_ids = {source.id for source in self.sources}
 
         def visit(value: Any) -> None:

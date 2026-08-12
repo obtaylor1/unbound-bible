@@ -3,7 +3,25 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from app.research.schemas import ResearchQueryRequest, ResearchResponse
+from app.research.schemas import (
+    ClaimClassification,
+    GroundingStatus,
+    ResearchDepth,
+    ResearchMode,
+    ResearchQueryRequest,
+    ResearchResponse,
+    SourceScope,
+)
+
+
+def claim(claim_id='claim-1', source_id='known'):
+    return {
+        'id': claim_id,
+        'statement': 'A grounded claim.',
+        'classification': 'canonical-scripture',
+        'confidence': 'high',
+        'source_ids': [source_id],
+    }
 
 
 def test_query_request_uses_grounded_deep_research_defaults():
@@ -43,7 +61,7 @@ def test_query_request_requires_one_to_eight_unique_compatible_scopes(
     'referencing_field',
     [
         {'summary': {'title': 'Summary', 'claims': [
-            {'text': 'A claim', 'source_ids': ['missing']}
+            claim(source_id='missing')
         ]}},
         {'timeline': [{
             'title': 'An event',
@@ -69,9 +87,127 @@ def test_research_response_rejects_unknown_source_ids(referencing_field):
         'mode': 'what-happened-between',
         'settings': {},
         'summary': {'title': 'Summary', 'claims': []},
-        'sources': [{'id': 'known', 'title': 'Genesis'}],
+        'sources': [{
+            'id': 'known',
+            'title': 'Genesis',
+            'reference': 'Genesis 1:1',
+            'excerpt': 'In the beginning',
+            'source_type': 'scripture',
+        }],
         **referencing_field,
     }
 
     with pytest.raises(ValidationError, match='unknown source ID'):
         ResearchResponse.model_validate(payload)
+
+
+def test_planned_enum_values_serialize_as_api_strings():
+    assert SourceScope.ETHIOPIAN_TRADITION.value == 'ethiopian-tradition'
+    assert [depth.value for depth in ResearchDepth] == [
+        'quick', 'study', 'deep-research', 'scholar'
+    ]
+    assert ResearchMode.BETWEEN.value == 'what-happened-between'
+    assert set(classification.value for classification in ClaimClassification) == {
+        'canonical-scripture',
+        'ethiopian-canon',
+        'ancient-text',
+        'commentary',
+        'tradition',
+        'historical',
+        'scholarship',
+        'ai-synthesis',
+    }
+    assert {
+        GroundingStatus.INSUFFICIENT.value,
+        GroundingStatus.EVIDENCE_ONLY.value,
+        GroundingStatus.GROUNDED.value,
+    } == {'insufficient', 'evidence-only', 'grounded'}
+
+
+def test_research_response_accepts_full_nested_grounded_payload():
+    node_id = uuid.uuid4()
+    response = ResearchResponse.model_validate({
+        'id': uuid.uuid4(),
+        'query': 'What happened between Eden and Abel?',
+        'mode': 'what-happened-between',
+        'settings': {
+            'source_scopes': ['biblical-canon', 'ethiopian-tradition'],
+            'depth': 'scholar',
+            'mode_parameters': {'from': 'Eden', 'to': 'Abel'},
+        },
+        'summary': {'title': 'Summary', 'claims': [claim('summary')]},
+        'timeline': [{
+            'title': 'Outside Eden',
+            'description': 'The family lived outside Eden.',
+            'date_label': 'After Eden',
+            'source_ids': ['known'],
+            'confidence': 'high',
+        }],
+        'canonical_account': {
+            'title': 'Canonical account', 'claims': [claim('canonical')]
+        },
+        'historical_context': {
+            'title': 'Historical context', 'claims': [claim('history')]
+        },
+        'unknowns': {'title': 'Unknowns', 'claims': [claim('unknown')]},
+        'ancient_accounts': [
+            {'title': 'Ancient accounts', 'claims': [claim('ancient')]}
+        ],
+        'language_notes': [
+            {'title': 'Language notes', 'claims': [claim('language')]}
+        ],
+        'people': [{
+            'name': 'Abel', 'role': 'son', 'source_ids': ['known']
+        }],
+        'places': [{
+            'name': 'Eden', 'location': 'unknown', 'source_ids': ['known']
+        }],
+        'trail_node': {
+            'id': node_id,
+            'question': 'What happened between Eden and Abel?',
+            'label': 'Eden to Abel',
+        },
+        'sources': [{
+            'id': 'known',
+            'title': 'Genesis',
+            'reference': 'Genesis 3–4',
+            'excerpt': 'They left Eden.',
+            'text': 'A longer source text.',
+            'source_type': 'scripture',
+            'tradition': 'biblical canon',
+            'date_or_era': 'Ancient',
+            'original_language': 'Hebrew',
+            'translation': 'Example translation',
+            'relevance': 'Primary canonical account',
+            'open_target': 'bible://Genesis/3',
+        }],
+        'related_questions': ['What happened next?'],
+        'grounding_status': 'grounded',
+        'provider': 'test-provider',
+        'model': 'test-model',
+    })
+
+    dumped = response.model_dump(mode='json')
+    assert dumped['summary']['claims'][0]['statement'] == 'A grounded claim.'
+    assert dumped['settings']['source_scopes'][1] == 'ethiopian-tradition'
+    assert dumped['sources'][0]['source_type'] == 'scripture'
+
+
+def test_research_response_rejects_duplicate_source_ids():
+    source = {
+        'id': 'duplicate',
+        'title': 'Genesis',
+        'reference': 'Genesis 1:1',
+        'excerpt': 'In the beginning',
+        'source_type': 'scripture',
+    }
+
+    with pytest.raises(ValidationError, match='duplicate source ID'):
+        ResearchResponse.model_validate({
+            'id': uuid.uuid4(),
+            'query': 'What happened?',
+            'mode': 'what-happened-between',
+            'settings': {},
+            'summary': {'title': 'Summary', 'claims': []},
+            'sources': [source, source],
+        })
