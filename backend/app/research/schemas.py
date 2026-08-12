@@ -49,13 +49,17 @@ class ClaimClassification(StrEnum):
 
 
 class SourceType(StrEnum):
-    SCRIPTURE = 'scripture'
+    CANONICAL_SCRIPTURE = 'canonical-scripture'
+    ETHIOPIAN_CANON = 'ethiopian-canon'
     ANCIENT_TEXT = 'ancient-text'
+    MANUSCRIPT = 'manuscript'
+    HISTORICAL_SOURCE = 'historical-source'
+    EARLY_CHRISTIAN_WRITING = 'early-christian-writing'
+    JEWISH_TRADITION = 'jewish-tradition'
+    CHURCH_TRADITION = 'church-tradition'
     COMMENTARY = 'commentary'
-    TRADITION = 'tradition'
-    HISTORICAL = 'historical'
     SCHOLARSHIP = 'scholarship'
-    LANGUAGE_RESOURCE = 'language-resource'
+    AI_SYNTHESIS = 'ai-synthesis'
 
 
 class ResearchConfidence(StrEnum):

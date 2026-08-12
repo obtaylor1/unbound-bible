@@ -11,6 +11,7 @@ from app.research.schemas import (
     ResearchQueryRequest,
     ResearchResponse,
     SourceScope,
+    SourceType,
 )
 
 
@@ -92,7 +93,7 @@ def test_research_response_rejects_unknown_source_ids(referencing_field):
             'title': 'Genesis',
             'reference': 'Genesis 1:1',
             'excerpt': 'In the beginning',
-            'source_type': 'scripture',
+            'source_type': 'canonical-scripture',
         }],
         **referencing_field,
     }
@@ -122,6 +123,19 @@ def test_planned_enum_values_serialize_as_api_strings():
         GroundingStatus.EVIDENCE_ONLY.value,
         GroundingStatus.GROUNDED.value,
     } == {'insufficient', 'evidence-only', 'grounded'}
+    assert {source_type.value for source_type in SourceType} == {
+        'canonical-scripture',
+        'ethiopian-canon',
+        'ancient-text',
+        'manuscript',
+        'historical-source',
+        'early-christian-writing',
+        'jewish-tradition',
+        'church-tradition',
+        'commentary',
+        'scholarship',
+        'ai-synthesis',
+    }
 
 
 def test_research_response_accepts_full_nested_grounded_payload():
@@ -173,7 +187,7 @@ def test_research_response_accepts_full_nested_grounded_payload():
             'reference': 'Genesis 3–4',
             'excerpt': 'They left Eden.',
             'text': 'A longer source text.',
-            'source_type': 'scripture',
+            'source_type': 'canonical-scripture',
             'tradition': 'biblical canon',
             'date_or_era': 'Ancient',
             'original_language': 'Hebrew',
@@ -190,7 +204,7 @@ def test_research_response_accepts_full_nested_grounded_payload():
     dumped = response.model_dump(mode='json')
     assert dumped['summary']['claims'][0]['statement'] == 'A grounded claim.'
     assert dumped['settings']['source_scopes'][1] == 'ethiopian-tradition'
-    assert dumped['sources'][0]['source_type'] == 'scripture'
+    assert dumped['sources'][0]['source_type'] == 'canonical-scripture'
 
 
 def test_research_response_rejects_duplicate_source_ids():
@@ -199,7 +213,7 @@ def test_research_response_rejects_duplicate_source_ids():
         'title': 'Genesis',
         'reference': 'Genesis 1:1',
         'excerpt': 'In the beginning',
-        'source_type': 'scripture',
+        'source_type': 'canonical-scripture',
     }
 
     with pytest.raises(ValidationError, match='duplicate source ID'):
