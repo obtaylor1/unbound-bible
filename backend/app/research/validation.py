@@ -34,8 +34,8 @@ _OUTER_JSON_FENCE = re.compile(
     re.DOTALL,
 )
 _UNCERTAINTY_PATTERN = re.compile(
-    r'\b(?:cannot (?:be )?determined|insufficient evidence|'
-    r'no (?:known )?evidence|not known|uncertain|unknown)\b',
+    r'\b(?:the text does not say|evidence is insufficient|'
+    r'(?:is|are|remains?|appears?)\s+(?:uncertain|unknown|disputed))\b',
     re.IGNORECASE,
 )
 
@@ -88,7 +88,7 @@ def parse_provider_json(content: str) -> dict[str, Any]:
 
     try:
         parsed = json.loads(candidate)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE) from exc
     if not isinstance(parsed, dict):
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
@@ -113,10 +113,9 @@ def _valid_ids(source_ids: list[str], known_ids: frozenset[str]) -> list[str]:
     return result
 
 
-def _allows_uncited_claim(claim: ResearchClaim, *, unknowns: bool) -> bool:
+def _allows_uncited_claim(claim: ResearchClaim) -> bool:
     return (
         claim.classification == ClaimClassification.AI_SYNTHESIS
-        or unknowns
         or _UNCERTAINTY_PATTERN.search(claim.statement) is not None
     )
 
@@ -125,8 +124,6 @@ def _validate_claim(
     raw_claim: Any,
     known_ids: frozenset[str],
     warnings: list[ValidationWarning],
-    *,
-    unknowns: bool,
 ) -> ResearchClaim | None:
     try:
         parsed = ResearchClaim.model_validate(raw_claim)
@@ -139,7 +136,7 @@ def _validate_claim(
 
     valid_ids = _valid_ids(parsed.source_ids, known_ids)
     has_invalid_ids = len(valid_ids) != len(parsed.source_ids)
-    if not valid_ids and not _allows_uncited_claim(parsed, unknowns=unknowns):
+    if not valid_ids and not _allows_uncited_claim(parsed):
         warnings.append(_warning(
             'unsupported_claim_removed',
             'An unsupported factual claim was removed.',
@@ -163,7 +160,6 @@ def _validate_section(
     known_ids: frozenset[str],
     warnings: list[ValidationWarning],
     *,
-    unknowns: bool = False,
     required: bool = False,
 ) -> ResearchSection | None:
     if not isinstance(raw_section, Mapping):
@@ -204,7 +200,6 @@ def _validate_section(
                 raw_claim,
                 known_ids,
                 warnings,
-                unknowns=unknowns,
             )
         ) is not None
     ]
@@ -257,24 +252,16 @@ def _validate_timeline(
                 'A malformed timeline event was removed.',
             ))
             continue
-        valid_ids = _valid_ids(event.source_ids, known_ids)
-        if not valid_ids:
+        has_unknown_id = any(
+            source_id not in known_ids for source_id in event.source_ids
+        )
+        if has_unknown_id or not event.source_ids:
             warnings.append(_warning(
                 'unsupported_timeline_event_removed',
                 'An unsupported timeline event was removed.',
             ))
             continue
-        updates: dict[str, Any] = {}
-        if len(valid_ids) != len(event.source_ids):
-            updates = {
-                'source_ids': valid_ids,
-                'confidence': ResearchConfidence.LOW,
-            }
-            warnings.append(_warning(
-                'timeline_confidence_downgraded',
-                'A timeline event with incomplete support was downgraded.',
-            ))
-        events.append(event.model_copy(update=updates))
+        events.append(event)
     return events
 
 
@@ -303,14 +290,16 @@ def _validate_references(
                 'A malformed person or place reference was removed.',
             ))
             continue
-        valid_ids = _valid_ids(reference.source_ids, known_ids)
-        if not valid_ids:
+        has_unknown_id = any(
+            source_id not in known_ids for source_id in reference.source_ids
+        )
+        if has_unknown_id or not reference.source_ids:
             warnings.append(_warning(
                 'unsupported_reference_removed',
                 'An unsupported person or place reference was removed.',
             ))
             continue
-        references.append(reference.model_copy(update={'source_ids': valid_ids}))
+        references.append(reference)
     return references
 
 
@@ -377,7 +366,7 @@ def validate_provider_document(
             document.get('historical_context'), known_ids, warnings
         ) if document.get('historical_context') is not None else None,
         unknowns=_validate_section(
-            document.get('unknowns'), known_ids, warnings, unknowns=True
+            document.get('unknowns'), known_ids, warnings
         ) if document.get('unknowns') is not None else None,
         ancient_accounts=_validate_section_list(
             document.get('ancient_accounts'), known_ids, warnings

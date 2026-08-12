@@ -85,6 +85,24 @@ def test_parse_provider_json_rejects_content_over_safe_bound():
         parse_provider_json('x' * (MAX_PROVIDER_CONTENT_CHARS + 1))
 
 
+def test_parse_provider_json_safely_rejects_deeply_nested_content(monkeypatch):
+    deeply_nested = '{"value":' + ('[' * 1_100) + '0' + (']' * 1_100) + '}'
+    assert len(deeply_nested) < MAX_PROVIDER_CONTENT_CHARS
+
+    def reject_excessive_depth(_content):
+        raise RecursionError('provider-controlled parser detail')
+
+    monkeypatch.setattr(
+        'app.research.validation.json.loads', reject_excessive_depth
+    )
+
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        parse_provider_json(deeply_nested)
+
+
 def test_validation_removes_factual_claims_without_a_known_source():
     result = validate_provider_document(
         document(summary={
@@ -129,7 +147,12 @@ def test_validation_allows_uncited_synthesis_and_uncertainty_at_low_confidence()
             },
             unknowns={
                 'title': 'Unknowns',
-                'claims': [claim('unknown-detail', [], confidence='disputed')],
+                'claims': [claim(
+                    'unknown-detail',
+                    [],
+                    confidence='disputed',
+                    statement='The text does not say when this occurred.',
+                )],
             },
         ),
         evidence('known'),
@@ -138,6 +161,23 @@ def test_validation_allows_uncited_synthesis_and_uncertainty_at_low_confidence()
     assert result.summary.claims[0].confidence == 'low'
     assert result.historical_context.claims[0].confidence == 'low'
     assert result.unknowns.claims[0].confidence == 'low'
+
+
+def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
+    result = validate_provider_document(
+        document(unknowns={
+            'title': 'Unknowns',
+            'claims': [claim(
+                'generic-fact',
+                [],
+                statement='The journey lasted forty years.',
+            )],
+        }),
+        evidence('known'),
+    )
+
+    assert result.unknowns.claims == []
+    assert result.validation_warnings[-1].code == 'unsupported_claim_removed'
 
 
 def test_validation_filters_nested_references_and_unsupported_entries():
@@ -159,8 +199,14 @@ def test_validation_filters_nested_references_and_unsupported_entries():
             unknowns={'title': 'Unknowns', 'claims': [grounded]},
             timeline=[
                 {
-                    'title': 'Supported',
-                    'description': 'Supported event.',
+                    'title': 'Known',
+                    'description': 'Known event.',
+                    'source_ids': ['known'],
+                    'confidence': 'high',
+                },
+                {
+                    'title': 'Partially supported',
+                    'description': 'Partially supported event.',
                     'source_ids': ['missing', 'known'],
                     'confidence': 'high',
                 },
@@ -171,7 +217,11 @@ def test_validation_filters_nested_references_and_unsupported_entries():
                 },
             ],
             people=[
-                {'name': 'Known person', 'source_ids': ['known', 'missing']},
+                {'name': 'Known person', 'source_ids': ['known']},
+                {
+                    'name': 'Partially known person',
+                    'source_ids': ['known', 'missing'],
+                },
                 {'name': 'Unknown person', 'source_ids': ['missing']},
             ],
             places=[
@@ -189,11 +239,8 @@ def test_validation_filters_nested_references_and_unsupported_entries():
     assert result.historical_context.claims[0].source_ids == ['known']
     assert result.language_notes[0].claims[0].source_ids == ['known']
     assert result.unknowns.claims[0].source_ids == ['known']
-    assert [event.title for event in result.timeline] == ['Supported']
-    assert result.timeline[0].source_ids == ['known']
-    assert result.timeline[0].confidence == 'low'
+    assert [event.title for event in result.timeline] == ['Known']
     assert [person.name for person in result.people] == ['Known person']
-    assert result.people[0].source_ids == ['known']
     assert [place.name for place in result.places] == ['Known place']
 
 
