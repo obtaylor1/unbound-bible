@@ -65,6 +65,9 @@ _SOURCE_UNCERTAINTY_DETAIL = (
     r'when and where this occurred|when, where, or why this occurred|'
     rf'{_RESEARCH_LABEL_OBJECT})'
 )
+_DETERMINATION_DETAIL = (
+    rf'(?:{_EVENT_UNCERTAINTY_DETAIL}|{_RESEARCH_LABEL_OBJECT})'
+)
 _UNCERTAINTY_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -80,6 +83,9 @@ _UNCERTAINTY_PATTERNS = tuple(
         rf'{_RESEARCH_LABEL_OBJECT}\.',
         rf'The {_RESEARCH_LABEL} '
         rf'(?:is|remains) (?:unknown|uncertain|disputed)\.',
+        rf'It cannot be determined {_DETERMINATION_DETAIL}\.',
+        rf'There is insufficient evidence to '
+        rf'(?:identify|establish|determine) {_RESEARCH_LABEL_OBJECT}\.',
     )
 )
 

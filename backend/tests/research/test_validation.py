@@ -273,9 +273,10 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
 @pytest.mark.parametrize(
     ('statement', 'allowed'),
     [
-        ('It cannot be determined when this occurred.', False),
-        ('There is insufficient evidence to identify the location.', False),
+        ('It cannot be determined when this occurred.', True),
+        ('There is insufficient evidence to identify the location.', True),
         ('There is insufficient evidence to determine the location.', True),
+        ('There is insufficient evidence to establish the authorship.', True),
         ('No known evidence establishes the date.', True),
         ('It is uncertain when and where this occurred.', True),
         ('The text does not say when, where, or why this occurred.', True),
@@ -338,6 +339,39 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
         ),
         (
             'No known evidence establishes the date despite a traditional claim.',
+            False,
+        ),
+        (
+            'It cannot be determined when this occurred, records say 4004 BC.',
+            False,
+        ),
+        (
+            'It cannot be determined when this occurred while records disagree.',
+            False,
+        ),
+        (
+            'It cannot be determined when this occurred because records were lost.',
+            False,
+        ),
+        (
+            'It cannot be determined when this occurred. It occurred in 4004 BC.',
+            False,
+        ),
+        (
+            'There is insufficient evidence to identify the location, it was Eden.',
+            False,
+        ),
+        (
+            'There is insufficient evidence to identify the location while maps exist.',
+            False,
+        ),
+        (
+            'There is insufficient evidence to identify the location because '
+            'maps were lost.',
+            False,
+        ),
+        (
+            'There is insufficient evidence to identify the location. It was Eden.',
             False,
         ),
     ],
