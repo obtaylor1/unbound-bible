@@ -260,6 +260,12 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
         ('No known evidence establishes the date.', True),
         ('It is uncertain when and where this occurred.', True),
         ('The text does not say when, where, or why this occurred.', True),
+        ('It is unknown whether this occurred.', True),
+        ('Scripture does not state where this occurred.', True),
+        ('The surviving texts do not identify who did this.', True),
+        ('The evidence does not establish when this occurred.', True),
+        ('There is limited evidence to identify the location.', True),
+        ('This is disputed.', True),
         ('The journey lasted forty years.', False),
         ('Known evidence establishes the date.', False),
         ('The evidence describes an insufficient harvest.', False),
@@ -277,6 +283,22 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
             '4004 BC.',
             False,
         ),
+        (
+            'It is uncertain when this occurred, it occurred in 4004 BC.',
+            False,
+        ),
+        (
+            'It is uncertain when this occurred — records place it in 4004 BC.',
+            False,
+        ),
+        (
+            'It is uncertain when this occurred – records place it in 4004 BC.',
+            False,
+        ),
+        ('It is uncertain when this occurred: records say 4004 BC.', False),
+        ('It is uncertain when this occurred; records say 4004 BC.', False),
+        ('This is unknown', False),
+        ('This is unknown..', False),
     ],
 )
 def test_validation_distinguishes_explicit_uncertainty_from_facts(

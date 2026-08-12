@@ -50,19 +50,40 @@ _OUTER_JSON_FENCE = re.compile(
     r'\A```json[ \t]*\r?\n(?P<body>.*)\r?\n```\Z',
     re.DOTALL,
 )
-_UNCERTAINTY_PATTERN = re.compile(
-    r'^\s*(?:the text does not say\b|evidence is insufficient\b|'
-    r'it cannot be determined\b|there is insufficient evidence\b|'
-    r'no known evidence\b|'
-    r'(?:it|this|the (?:answer|chronology|date|details?|identity|location|'
-    r'record|text|time|timing))\s+(?:is|are|remains?|appears?)\s+'
-    r'(?:uncertain|unknown|disputed)\b)'
-    r'(?:\s+[^\n\r.!?;]{0,400})?[.!?]?\s*$',
-    re.IGNORECASE,
+_WH_WORD = r'(?:whether|when|where|why|how|who|what)'
+_WH_ENUMERATION = (
+    rf'{_WH_WORD}(?:(?: and| or) {_WH_WORD}|'
+    rf'(?:, {_WH_WORD})+, or {_WH_WORD})?'
 )
-_ASSERTIVE_CONTINUATION_PATTERN = re.compile(
-    r'\b(?:although|but|however|yet)\b',
-    re.IGNORECASE,
+_SAFE_UNCERTAINTY_WORD = (
+    r"(?!although\b|but\b|however\b|yet\b)"
+    r"[^\W_]+(?:[-'][^\W_]+)*"
+)
+_SAFE_UNCERTAINTY_TAIL = (
+    rf'{_SAFE_UNCERTAINTY_WORD}'
+    rf'(?: {_SAFE_UNCERTAINTY_WORD}){{0,30}}'
+)
+_TERMINAL_PUNCTUATION = r'[.?]'
+_UNCERTAINTY_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf'It is (?:unknown|uncertain|disputed) {_WH_ENUMERATION} '
+        rf'{_SAFE_UNCERTAINTY_TAIL}{_TERMINAL_PUNCTUATION}',
+        rf'(?:The text|Scripture|The surviving texts|The evidence) '
+        rf'(?:does not|do not) '
+        rf'(?:say|state|identify|establish|tell us|determine) '
+        rf'{_WH_ENUMERATION} {_SAFE_UNCERTAINTY_TAIL}'
+        rf'{_TERMINAL_PUNCTUATION}',
+        rf'(?:There is|There are) (?:insufficient|no|limited) evidence'
+        rf'(?: to {_SAFE_UNCERTAINTY_TAIL})?{_TERMINAL_PUNCTUATION}',
+        rf'No known evidence(?: {_SAFE_UNCERTAINTY_TAIL})?'
+        rf'{_TERMINAL_PUNCTUATION}',
+        rf'This is (?:unknown|uncertain|disputed){_TERMINAL_PUNCTUATION}',
+        rf'It cannot be determined {_WH_ENUMERATION} '
+        rf'{_SAFE_UNCERTAINTY_TAIL}{_TERMINAL_PUNCTUATION}',
+        rf'Evidence is insufficient(?: to {_SAFE_UNCERTAINTY_TAIL})?'
+        rf'{_TERMINAL_PUNCTUATION}',
+    )
 )
 
 
@@ -188,12 +209,15 @@ def _valid_ids(source_ids: list[str], known_ids: frozenset[str]) -> list[str]:
 
 
 def _allows_uncited_claim(claim: ResearchClaim) -> bool:
+    normalized_statement = ' '.join(claim.statement.split())
     return (
         claim.classification == ClaimClassification.AI_SYNTHESIS
         or (
             len(claim.statement) <= _MAX_UNCERTAINTY_STATEMENT_CHARS
-            and _UNCERTAINTY_PATTERN.fullmatch(claim.statement) is not None
-            and _ASSERTIVE_CONTINUATION_PATTERN.search(claim.statement) is None
+            and any(
+                pattern.fullmatch(normalized_statement) is not None
+                for pattern in _UNCERTAINTY_PATTERNS
+            )
         )
     )
 
