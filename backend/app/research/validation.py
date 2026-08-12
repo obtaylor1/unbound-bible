@@ -34,8 +34,12 @@ _OUTER_JSON_FENCE = re.compile(
     re.DOTALL,
 )
 _UNCERTAINTY_PATTERN = re.compile(
-    r'\b(?:the text does not say|evidence is insufficient|'
-    r'(?:is|are|remains?|appears?)\s+(?:uncertain|unknown|disputed))\b',
+    r'^\s*(?:the text does not say\b|evidence is insufficient\b|'
+    r'it cannot be determined\b|there is insufficient evidence\b|'
+    r'no known evidence\b|'
+    r'(?:it|this|the (?:answer|chronology|date|details?|identity|location|'
+    r'record|text|time|timing))\s+(?:is|are|remains?|appears?)\s+'
+    r'(?:uncertain|unknown|disputed)\b)',
     re.IGNORECASE,
 )
 

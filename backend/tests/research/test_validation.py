@@ -180,6 +180,36 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
     assert result.validation_warnings[-1].code == 'unsupported_claim_removed'
 
 
+@pytest.mark.parametrize(
+    ('statement', 'allowed'),
+    [
+        ('It cannot be determined when this occurred.', True),
+        ('There is insufficient evidence to identify the location.', True),
+        ('No known evidence establishes the date.', True),
+        ('The journey lasted forty years.', False),
+        ('Known evidence establishes the date.', False),
+        ('The evidence describes an insufficient harvest.', False),
+    ],
+)
+def test_validation_distinguishes_explicit_uncertainty_from_facts(
+    statement,
+    allowed,
+):
+    result = validate_provider_document(
+        document(summary={
+            'title': 'Summary',
+            'claims': [claim('candidate', [], statement=statement)],
+        }),
+        evidence('known'),
+    )
+
+    if allowed:
+        assert len(result.summary.claims) == 1
+        assert result.summary.claims[0].confidence == 'low'
+    else:
+        assert result.summary.claims == []
+
+
 def test_validation_filters_nested_references_and_unsupported_entries():
     grounded = claim('grounded', ['known'])
     partial = claim('partial', ['missing', 'known'], confidence='high')
