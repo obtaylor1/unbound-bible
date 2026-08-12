@@ -1,4 +1,0 @@
-#!/bin/sh
-
-NGINX_RESOLVER="${NGINX_RESOLVER:-$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf)}"
-export NGINX_RESOLVER="${NGINX_RESOLVER:-127.0.0.11}"
