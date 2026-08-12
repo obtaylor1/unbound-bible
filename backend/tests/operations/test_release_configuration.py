@@ -97,7 +97,9 @@ def test_frontend_image_builds_vite_and_serves_with_non_root_nginx():
     assert "nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0" in dockerfile
     assert "COPY --from=build" in dockerfile
     assert "location = /healthz" in nginx
-    assert "proxy_pass http://api:8000" in nginx
+    assert "ENV API_UPSTREAM=api:8000" in dockerfile
+    assert "COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template" in dockerfile
+    assert "proxy_pass http://${API_UPSTREAM}" in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
 
 
