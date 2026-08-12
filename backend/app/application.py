@@ -14,6 +14,7 @@ from app.ai import models as ai_models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
 from app.library.ingest import models as ingest_models  # noqa: F401
 from app.commentary import models as commentary_models  # noqa: F401
+from app.research import models as research_models  # noqa: F401
 from app.library.seed import seed_ethiopian_canon
 from app.library.router import compatibility_router
 from app.observability.logging import configure_logging
