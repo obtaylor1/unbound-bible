@@ -476,9 +476,9 @@ async def test_arbitrary_fact_with_valid_citation_is_not_grounded_and_audits_cit
     ).query(request())
 
     assert result.grounding_status == GroundingStatus.EVIDENCE_ONLY
-    assert result.summary.claims[0].statement == 'Cain was king in 4004 BC.'
+    assert result.summary.claims == []
     operation = session.added[0]
-    assert operation.source_ids == ['scripture:1']
+    assert operation.source_ids == []
     assert operation.validation_errors == ['claim_support_unverified']
 
 
@@ -563,3 +563,109 @@ async def test_provider_request_byte_limit_handles_multibyte_untrusted_data():
     assert sum(len(message.content.encode('utf-8')) for message in messages) \
         <= MAX_PROVIDER_REQUEST_BYTES
     assert json.loads(messages[1].content)
+
+
+@pytest.mark.asyncio
+async def test_mixed_claims_remove_unsupported_fact_and_keep_grounded_supported_fact():
+    session = RecordingSession()
+    content = provider_document(claims=[
+        {
+            'id': 'supported',
+            'statement': 'God blessed Noah and his sons.',
+            'classification': 'canonical-scripture',
+            'confidence': 'high',
+            'source_ids': ['scripture:1'],
+        },
+        {
+            'id': 'unsupported',
+            'statement': 'Cain was king in 4004 BC.',
+            'classification': 'historical',
+            'confidence': 'high',
+            'source_ids': ['scripture:1'],
+        },
+    ])
+
+    result = await ResearchService(
+        retriever=lambda *_: evidence(),
+        provider=RecordingProvider(content),
+        session=session,
+    ).query(request())
+
+    assert result.grounding_status == GroundingStatus.GROUNDED
+    assert [claim.id for claim in result.summary.claims] == ['supported']
+    assert session.added[0].source_ids == ['scripture:1']
+    assert session.added[0].validation_errors == ['claim_support_unverified']
+
+
+@pytest.mark.asyncio
+async def test_mixed_events_remove_unsupported_event_and_count_audit_warnings():
+    session = RecordingSession()
+    content = provider_document(
+        claims=[],
+        timeline=[
+            {
+                'title': 'Supported',
+                'description': 'God blessed Noah and his sons.',
+                'source_ids': ['scripture:1'],
+                'confidence': 'high',
+            },
+            {
+                'title': 'Unsupported one',
+                'description': 'Cain was king in 4004 BC.',
+                'source_ids': ['scripture:1'],
+                'confidence': 'high',
+            },
+            {
+                'title': 'Unsupported two',
+                'description': 'Noah ruled Atlantis.',
+                'source_ids': ['scripture:1'],
+                'confidence': 'high',
+            },
+        ],
+    )
+
+    result = await ResearchService(
+        retriever=lambda *_: evidence(),
+        provider=RecordingProvider(content),
+        session=session,
+    ).query(request())
+
+    assert result.grounding_status == GroundingStatus.GROUNDED
+    assert result.timeline and [event.title for event in result.timeline] == ['Supported']
+    assert session.added[0].validation_errors.count(
+        'timeline_support_unverified'
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_mixed_entities_remove_unsupported_people_and_places():
+    session = RecordingSession()
+    content = provider_document(
+        claims=[],
+        people=[
+            {'name': 'Noah', 'description': 'God blessed Noah and his sons.',
+             'source_ids': ['scripture:1']},
+            {'name': 'Cain', 'description': 'Cain was king in 4004 BC.',
+             'source_ids': ['scripture:1']},
+        ],
+        places=[
+            {'name': 'Blessing place',
+             'description': 'God blessed Noah and his sons.',
+             'source_ids': ['scripture:1']},
+            {'name': 'Atlantis', 'description': 'Noah ruled Atlantis.',
+             'source_ids': ['scripture:1']},
+        ],
+    )
+
+    result = await ResearchService(
+        retriever=lambda *_: evidence(),
+        provider=RecordingProvider(content),
+        session=session,
+    ).query(request())
+
+    assert result.grounding_status == GroundingStatus.GROUNDED
+    assert [person.name for person in result.people] == ['Noah']
+    assert [place.name for place in result.places] == ['Blessing place']
+    assert session.added[0].validation_errors.count(
+        'entity_support_unverified'
+    ) == 2

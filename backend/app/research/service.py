@@ -151,8 +151,9 @@ class ResearchService:
             )
             return response
 
-        citation_items = list(_citation_items(document))
         source_by_id = {source.id: source for source in sources}
+        document, support_errors = _sanitize_document(document, source_by_id)
+        citation_items = list(_citation_items(document))
         cited_source_ids = _retained_cited_source_ids(citation_items)
         has_support = any(
             not is_synthesis
@@ -187,8 +188,7 @@ class ResearchService:
             model=result.model,
         )
         errors = [warning.code for warning in document.validation_warnings]
-        if not has_support and citation_items:
-            errors.append('claim_support_unverified')
+        errors.extend(support_errors)
         self._audit(response, errors, source_ids=cited_source_ids)
         return response
 
@@ -384,6 +384,88 @@ def _provider_request_size(user_prompt: str) -> int:
     return len(_SYSTEM_INSTRUCTION.encode('utf-8')) + len(
         user_prompt.encode('utf-8')
     )
+
+
+def _supported_by_ids(
+    statement: str,
+    source_ids: Iterable[str],
+    source_by_id: dict[str, ResearchSource],
+) -> bool:
+    return is_extractive_support(
+        statement,
+        [source_by_id[source_id] for source_id in source_ids],
+    )
+
+
+def _sanitize_document(
+    document: ValidatedProviderDocument,
+    source_by_id: dict[str, ResearchSource],
+) -> tuple[ValidatedProviderDocument, list[str]]:
+    """Copy provider output with cited but textually unsupported facts removed."""
+
+    errors: list[str] = []
+
+    def sanitize_section(section: ResearchSection | None) -> ResearchSection | None:
+        if section is None:
+            return None
+        claims: list[ResearchClaim] = []
+        for claim in section.claims:
+            if (
+                claim.classification == ClaimClassification.AI_SYNTHESIS
+                or not claim.source_ids
+                or _supported_by_ids(
+                    claim.statement, claim.source_ids, source_by_id
+                )
+            ):
+                claims.append(claim)
+            else:
+                errors.append('claim_support_unverified')
+        return section.model_copy(update={'claims': claims})
+
+    timeline = []
+    for event in document.timeline or []:
+        if _supported_by_ids(event.description, event.source_ids, source_by_id):
+            timeline.append(event)
+        else:
+            errors.append('timeline_support_unverified')
+
+    people = []
+    for person in document.people:
+        if _supported_by_ids(
+            person.description or person.name,
+            person.source_ids,
+            source_by_id,
+        ):
+            people.append(person)
+        else:
+            errors.append('entity_support_unverified')
+
+    places = []
+    for place in document.places:
+        if _supported_by_ids(
+            place.description or place.name,
+            place.source_ids,
+            source_by_id,
+        ):
+            places.append(place)
+        else:
+            errors.append('entity_support_unverified')
+
+    return document.model_copy(update={
+        'summary': sanitize_section(document.summary),
+        'timeline': timeline if document.timeline is not None else None,
+        'canonical_account': sanitize_section(document.canonical_account),
+        'historical_context': sanitize_section(document.historical_context),
+        'unknowns': sanitize_section(document.unknowns),
+        'ancient_accounts': [
+            sanitize_section(section) for section in document.ancient_accounts
+        ],
+        'language_notes': [
+            sanitize_section(section) for section in document.language_notes
+        ],
+        'people': people,
+        'places': places,
+    }), errors
 
 
 def _citation_items(
