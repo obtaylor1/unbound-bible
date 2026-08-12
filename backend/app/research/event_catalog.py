@@ -241,7 +241,7 @@ def _passage_rows(
         FROM biblical_texts
         WHERE book IN ({', '.join(book_names)})
           AND ({' OR '.join(range_clauses)})
-          AND translation IN ({', '.join(translation_names)})
+          AND coalesce(translation, '') IN ({', '.join(translation_names)})
         ORDER BY book, chapter, verse, id
     ''')
     try:

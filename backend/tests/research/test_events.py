@@ -54,6 +54,12 @@ def event_session():
             VALUES
                 (151, 'Genesis', 2, 8, 'Duplicate KJV row', 'KJV')
         '''))
+        connection.execute(text('''
+            CREATE INDEX uq_biblical_texts_translation_book_chapter_verse
+            ON biblical_texts (
+                coalesce(translation, ''), book, chapter, verse
+            )
+        '''))
     with Session(engine) as session:
         yield session
 
@@ -245,9 +251,9 @@ def test_event_resolution_uses_one_bounded_biblical_query(
 ):
     statements = []
 
-    def record_statement(_conn, _cursor, statement, _parameters, _context, _many):
+    def record_statement(_conn, _cursor, statement, parameters, _context, _many):
         if 'biblical_texts' in statement:
-            statements.append(statement)
+            statements.append((statement, parameters))
 
     event.listen(
         event_session.get_bind(), 'before_cursor_execute', record_statement
@@ -260,12 +266,20 @@ def test_event_resolution_uses_one_bounded_biblical_query(
         )
 
     assert len(statements) == 1
-    normalized_sql = statements[0].lower()
+    statement, parameters = statements[0]
+    normalized_sql = statement.lower()
     assert 'lower(' not in normalized_sql
-    assert 'upper(' not in normalized_sql
     assert 'book in' in normalized_sql
     assert 'chapter =' in normalized_sql
     assert 'verse between' in normalized_sql
+    assert "coalesce(translation, '') in" in normalized_sql
+
+    plan = event_session.connection().exec_driver_sql(
+        f'EXPLAIN QUERY PLAN {statement}', parameters
+    ).all()
+    details = ' '.join(str(row[-1]) for row in plan)
+    assert 'SEARCH biblical_texts' in details
+    assert 'uq_biblical_texts_translation_book_chapter_verse' in details
 
 
 def test_between_is_inclusive_and_same_event_is_a_singleton(event_session):
