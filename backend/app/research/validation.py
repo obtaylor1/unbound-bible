@@ -27,8 +27,25 @@ from app.research.schemas import (
 MAX_PROVIDER_CONTENT_CHARS = 250_000
 MAX_RELATED_QUESTIONS = 5
 MAX_RELATED_QUESTION_CHARS = 1_000
+MAX_DOCUMENT_DEPTH = 12
+MAX_DOCUMENT_NODES = 5_000
+MAX_COLLECTION_ITEMS = 100
+MAX_VALIDATION_WARNINGS = 100
+_MAX_UNCERTAINTY_STATEMENT_CHARS = 500
 
 _SAFE_INVALID_MESSAGE = 'Provider returned invalid structured research data.'
+_ALLOWED_TOP_LEVEL_KEYS = frozenset({
+    'ancient_accounts',
+    'canonical_account',
+    'historical_context',
+    'language_notes',
+    'people',
+    'places',
+    'related_questions',
+    'summary',
+    'timeline',
+    'unknowns',
+})
 _OUTER_JSON_FENCE = re.compile(
     r'\A```json[ \t]*\r?\n(?P<body>.*)\r?\n```\Z',
     re.DOTALL,
@@ -39,13 +56,22 @@ _UNCERTAINTY_PATTERN = re.compile(
     r'no known evidence\b|'
     r'(?:it|this|the (?:answer|chronology|date|details?|identity|location|'
     r'record|text|time|timing))\s+(?:is|are|remains?|appears?)\s+'
-    r'(?:uncertain|unknown|disputed)\b)',
+    r'(?:uncertain|unknown|disputed)\b)'
+    r'(?:\s+[^\n\r.!?;]{0,400})?[.!?]?\s*$',
+    re.IGNORECASE,
+)
+_ASSERTIVE_CONTINUATION_PATTERN = re.compile(
+    r'\b(?:and|but|however|yet)\b|[:,]',
     re.IGNORECASE,
 )
 
 
 class ResearchValidationError(ValueError):
     """Raised when provider content cannot safely satisfy the research shape."""
+
+
+class _DuplicateKeyError(ValueError):
+    """Internal signal for ambiguous provider JSON objects."""
 
 
 class ValidationWarning(BaseModel):
@@ -91,16 +117,60 @@ def parse_provider_json(content: str) -> dict[str, Any]:
         candidate = match.group('body')
 
     try:
-        parsed = json.loads(candidate)
+        parsed = json.loads(candidate, object_pairs_hook=_unique_object)
     except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE) from exc
     if not isinstance(parsed, dict):
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+    _preflight_document(parsed)
     return parsed
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKeyError('duplicate provider JSON key')
+        result[key] = value
+    return result
+
+
+def _preflight_document(document: Mapping[str, Any]) -> None:
+    """Iteratively enforce structural limits before schema validation."""
+
+    if not isinstance(document, Mapping):
+        raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+    if set(document) - _ALLOWED_TOP_LEVEL_KEYS:
+        raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(document, 1)]
+    while stack:
+        value, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_DOCUMENT_NODES or depth > MAX_DOCUMENT_DEPTH:
+            raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+        if isinstance(value, Mapping):
+            if len(value) > MAX_COLLECTION_ITEMS:
+                raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+            stack.extend((item, depth + 1) for item in value.values())
+        elif isinstance(value, list):
+            if len(value) > MAX_COLLECTION_ITEMS:
+                raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
+            stack.extend((item, depth + 1) for item in value)
 
 
 def _warning(code: str, message: str) -> ValidationWarning:
     return ValidationWarning(code=code, message=message)
+
+
+def _append_warning(
+    warnings: list[ValidationWarning],
+    code: str,
+    message: str,
+) -> None:
+    if len(warnings) < MAX_VALIDATION_WARNINGS:
+        warnings.append(_warning(code, message))
 
 
 def _known_source_ids(evidence: Iterable[ResearchEvidence]) -> frozenset[str]:
@@ -120,7 +190,11 @@ def _valid_ids(source_ids: list[str], known_ids: frozenset[str]) -> list[str]:
 def _allows_uncited_claim(claim: ResearchClaim) -> bool:
     return (
         claim.classification == ClaimClassification.AI_SYNTHESIS
-        or _UNCERTAINTY_PATTERN.search(claim.statement) is not None
+        or (
+            len(claim.statement) <= _MAX_UNCERTAINTY_STATEMENT_CHARS
+            and _UNCERTAINTY_PATTERN.fullmatch(claim.statement) is not None
+            and _ASSERTIVE_CONTINUATION_PATTERN.search(claim.statement) is None
+        )
     )
 
 
@@ -132,19 +206,21 @@ def _validate_claim(
     try:
         parsed = ResearchClaim.model_validate(raw_claim)
     except ValidationError:
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_claim_removed',
             'A malformed research claim was removed.',
-        ))
+        )
         return None
 
     valid_ids = _valid_ids(parsed.source_ids, known_ids)
     has_invalid_ids = len(valid_ids) != len(parsed.source_ids)
     if not valid_ids and not _allows_uncited_claim(parsed):
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'unsupported_claim_removed',
             'An unsupported factual claim was removed.',
-        ))
+        )
         return None
 
     updates: dict[str, Any] = {}
@@ -152,10 +228,11 @@ def _validate_claim(
         updates['source_ids'] = valid_ids
     if has_invalid_ids or not valid_ids:
         updates['confidence'] = ResearchConfidence.LOW
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'claim_confidence_downgraded',
             'A claim with incomplete support was downgraded to low confidence.',
-        ))
+        )
     return parsed.model_copy(update=updates)
 
 
@@ -169,10 +246,11 @@ def _validate_section(
     if not isinstance(raw_section, Mapping):
         if required:
             raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_section_removed',
             'A malformed research section was removed.',
-        ))
+        )
         return None
 
     section_data = dict(raw_section)
@@ -180,20 +258,33 @@ def _validate_section(
     if not isinstance(raw_claims, list):
         if required:
             raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_section_removed',
             'A malformed research section was removed.',
-        ))
+        )
         return None
+    raw_narrative = section_data.pop('narrative', None)
+    if raw_narrative:
+        _append_warning(
+            warnings,
+            'unchecked_narrative_removed',
+            'Unchecked provider narrative was removed.',
+        )
     try:
-        section = ResearchSection.model_validate({**section_data, 'claims': []})
+        section = ResearchSection.model_validate({
+            **section_data,
+            'narrative': None,
+            'claims': [],
+        })
     except ValidationError as exc:
         if required:
             raise ResearchValidationError(_SAFE_INVALID_MESSAGE) from exc
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_section_removed',
             'A malformed research section was removed.',
-        ))
+        )
         return None
 
     claims = [
@@ -218,10 +309,11 @@ def _validate_section_list(
     if value is None:
         return []
     if not isinstance(value, list):
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_section_list_removed',
             'A malformed research section list was removed.',
-        ))
+        )
         return []
     return [
         section
@@ -240,10 +332,11 @@ def _validate_timeline(
     if value is None:
         return None
     if not isinstance(value, list):
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_timeline_removed',
             'A malformed timeline was removed.',
-        ))
+        )
         return None
 
     events: list[TimelineEvent] = []
@@ -251,19 +344,21 @@ def _validate_timeline(
         try:
             event = TimelineEvent.model_validate(raw_event)
         except ValidationError:
-            warnings.append(_warning(
+            _append_warning(
+                warnings,
                 'malformed_timeline_event_removed',
                 'A malformed timeline event was removed.',
-            ))
+            )
             continue
         has_unknown_id = any(
             source_id not in known_ids for source_id in event.source_ids
         )
         if has_unknown_id or not event.source_ids:
-            warnings.append(_warning(
+            _append_warning(
+                warnings,
                 'unsupported_timeline_event_removed',
                 'An unsupported timeline event was removed.',
-            ))
+            )
             continue
         events.append(event)
     return events
@@ -278,10 +373,11 @@ def _validate_references(
     if value is None:
         return []
     if not isinstance(value, list):
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_reference_list_removed',
             'A malformed people or places list was removed.',
-        ))
+        )
         return []
 
     references: list[PersonReference] | list[PlaceReference] = []
@@ -289,19 +385,21 @@ def _validate_references(
         try:
             reference = model.model_validate(raw_reference)
         except ValidationError:
-            warnings.append(_warning(
+            _append_warning(
+                warnings,
                 'malformed_reference_removed',
                 'A malformed person or place reference was removed.',
-            ))
+            )
             continue
         has_unknown_id = any(
             source_id not in known_ids for source_id in reference.source_ids
         )
         if has_unknown_id or not reference.source_ids:
-            warnings.append(_warning(
+            _append_warning(
+                warnings,
                 'unsupported_reference_removed',
                 'An unsupported person or place reference was removed.',
-            ))
+            )
             continue
         references.append(reference)
     return references
@@ -314,10 +412,11 @@ def _validate_related_questions(
     if value is None:
         return []
     if not isinstance(value, list):
-        warnings.append(_warning(
+        _append_warning(
+            warnings,
             'malformed_related_questions_removed',
             'Malformed related questions were removed.',
-        ))
+        )
         return []
 
     result: list[str] = []
@@ -349,6 +448,7 @@ def validate_provider_document(
     if not isinstance(document, Mapping):
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE)
 
+    _preflight_document(document)
     known_ids = _known_source_ids(evidence)
     warnings: list[ValidationWarning] = []
     summary = _validate_section(

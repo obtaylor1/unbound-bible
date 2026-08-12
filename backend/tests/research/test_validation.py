@@ -4,7 +4,10 @@ import pytest
 
 from app.research.retrieval import ResearchEvidence
 from app.research.validation import (
+    MAX_COLLECTION_ITEMS,
+    MAX_DOCUMENT_DEPTH,
     MAX_PROVIDER_CONTENT_CHARS,
+    MAX_VALIDATION_WARNINGS,
     ResearchValidationError,
     parse_provider_json,
     validate_provider_document,
@@ -85,22 +88,91 @@ def test_parse_provider_json_rejects_content_over_safe_bound():
         parse_provider_json('x' * (MAX_PROVIDER_CONTENT_CHARS + 1))
 
 
-def test_parse_provider_json_safely_rejects_deeply_nested_content(monkeypatch):
-    deeply_nested = '{"value":' + ('[' * 1_100) + '0' + (']' * 1_100) + '}'
-    assert len(deeply_nested) < MAX_PROVIDER_CONTENT_CHARS
-
-    def reject_excessive_depth(_content):
-        raise RecursionError('provider-controlled parser detail')
-
-    monkeypatch.setattr(
-        'app.research.validation.json.loads', reject_excessive_depth
+def test_parse_provider_json_safely_rejects_deeply_nested_content():
+    deeply_nested = (
+        '{"summary":'
+        + ('[' * (MAX_DOCUMENT_DEPTH + 1))
+        + '0'
+        + (']' * (MAX_DOCUMENT_DEPTH + 1))
+        + '}'
     )
+    assert len(deeply_nested) < MAX_PROVIDER_CONTENT_CHARS
 
     with pytest.raises(
         ResearchValidationError,
         match='Provider returned invalid structured research data',
     ):
         parse_provider_json(deeply_nested)
+
+
+@pytest.mark.parametrize(
+    'content',
+    [
+        '{"summary": {}, "summary": {}}',
+        '{"summary": {"title": "One", "title": "Two"}}',
+    ],
+)
+def test_parse_provider_json_rejects_duplicate_object_keys(content):
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        parse_provider_json(content)
+
+
+def test_validation_rejects_unknown_top_level_keys():
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        parse_provider_json('{"relatd_questions": []}')
+
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        validate_provider_document(
+            document(relatd_questions=['Misspelled key']),
+            evidence('known'),
+        )
+
+
+def test_validation_rejects_over_limit_claim_collection():
+    oversized_claims = [
+        claim(f'claim-{index}', ['known'])
+        for index in range(MAX_COLLECTION_ITEMS + 1)
+    ]
+
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        validate_provider_document(
+            document(summary={'title': 'Summary', 'claims': oversized_claims}),
+            evidence('known'),
+        )
+
+
+def test_validation_rejects_document_over_total_node_limit():
+    sections = [
+        {
+            'title': f'Section {section_index}',
+            'claims': [
+                claim(f'{section_index}-{claim_index}', ['known'])
+                for claim_index in range(MAX_COLLECTION_ITEMS)
+            ],
+        }
+        for section_index in range(MAX_COLLECTION_ITEMS)
+    ]
+
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        validate_provider_document(
+            document(ancient_accounts=sections),
+            evidence('known'),
+        )
 
 
 def test_validation_removes_factual_claims_without_a_known_source():
@@ -189,6 +261,10 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
         ('The journey lasted forty years.', False),
         ('Known evidence establishes the date.', False),
         ('The evidence describes an insufficient harvest.', False),
+        (
+            'It is uncertain when this occurred but it occurred in 4004 BC.',
+            False,
+        ),
     ],
 )
 def test_validation_distinguishes_explicit_uncertainty_from_facts(
@@ -208,6 +284,58 @@ def test_validation_distinguishes_explicit_uncertainty_from_facts(
         assert result.summary.claims[0].confidence == 'low'
     else:
         assert result.summary.claims == []
+
+
+def test_validation_rejects_uncertainty_prefixed_factual_compound_claim():
+    statement = (
+        'It is uncertain when this occurred. It occurred in 4004 BC.'
+    )
+    result = validate_provider_document(
+        document(summary={
+            'title': 'Summary',
+            'claims': [claim('compound', [], statement=statement)],
+        }),
+        evidence('known'),
+    )
+
+    assert result.summary.claims == []
+
+
+def test_validation_discards_unchecked_section_narrative():
+    provider_prose = 'An unsupported narrative presented as fact.'
+    result = validate_provider_document(
+        document(summary={
+            'title': 'Summary',
+            'narrative': provider_prose,
+            'claims': [claim('grounded', ['known'])],
+        }),
+        evidence('known'),
+    )
+
+    assert result.summary.narrative is None
+    assert result.validation_warnings[0].code == 'unchecked_narrative_removed'
+    assert provider_prose not in str(result.validation_warnings)
+
+
+def test_validation_bounds_warning_amplification():
+    unsupported_timeline = [
+        {
+            'title': f'Event {index}',
+            'description': 'Unsupported.',
+            'source_ids': ['missing'],
+        }
+        for index in range(MAX_COLLECTION_ITEMS)
+    ]
+    unsupported_people = [
+        {'name': f'Person {index}', 'source_ids': ['missing']}
+        for index in range(MAX_COLLECTION_ITEMS)
+    ]
+    result = validate_provider_document(
+        document(timeline=unsupported_timeline, people=unsupported_people),
+        evidence('known'),
+    )
+
+    assert len(result.validation_warnings) == MAX_VALIDATION_WARNINGS
 
 
 def test_validation_filters_nested_references_and_unsupported_entries():
