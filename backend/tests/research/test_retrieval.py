@@ -183,6 +183,37 @@ def test_unknown_general_reading_edition_fails_closed(research_session):
     ) == []
 
 
+def test_exact_ethiopian_trust_uses_structured_fields_not_tradition_prose(
+    research_session,
+):
+    insert_verses(research_session, [{
+        'id': 1,
+        'book': 'Genesis',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'structured trust creation',
+        'translation': 'GEEZ1980-RESEARCH',
+    }])
+    add_ethiopian_edition(
+        research_session,
+        edition='GEEZ1980-RESEARCH',
+        work_id='genesis',
+        relationship='exact_ethiopian',
+        edition_tradition='Descriptive wording may change',
+        source_language="Ge'ez",
+        source_tradition='Catalog description may also change',
+    )
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'structured trust',
+        [SourceScope.ETHIOPIAN_TRADITION],
+        ResearchDepth.QUICK,
+    )
+
+    assert [item.id for item in evidence] == ['scripture:1']
+
+
 def test_multiple_scopes_permit_relevant_records_without_unrelated_sources(research_session):
     insert_verses(research_session, [
         {'id': 1, 'book': 'Genesis', 'chapter': 1, 'verse': 1, 'text': 'shared covenant', 'translation': 'KJV'},
@@ -270,6 +301,91 @@ def test_explicit_reference_uses_exact_rows_then_applies_scope(research_session)
     (ResearchDepth.QUICK, 6),
     (ResearchDepth.STUDY, 12),
     (ResearchDepth.DEEP, 24),
+])
+def test_chapter_reference_is_limited_to_resolved_book_and_chapter(
+    research_session,
+    depth,
+    expected,
+):
+    insert_verses(research_session, [
+        {
+            'id': index,
+            'book': 'Genesis',
+            'chapter': 4,
+            'verse': index,
+            'text': f'chapter four line {index}',
+            'translation': 'KJV',
+        }
+        for index in range(1, 41)
+    ] + [
+        {
+            'id': 100 + index,
+            'book': 'Genesis',
+            'chapter': 3,
+            'verse': index,
+            'text': f'other chapter line {index}',
+            'translation': 'KJV',
+        }
+        for index in range(1, 5)
+    ] + [{
+        'id': 200,
+        'book': 'Song of Solomon',
+        'chapter': 4,
+        'verse': 1,
+        'text': 'other book same chapter',
+        'translation': 'KJV',
+    }])
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'Explain Genesis 4',
+        [SourceScope.BIBLICAL_CANON],
+        depth,
+    )
+
+    assert len(evidence) == expected
+    assert {item.reference.split(':')[0] for item in evidence} == {
+        'Genesis 4'
+    }
+    assert [item.id for item in evidence] == [
+        f'scripture:{index}' for index in range(1, expected + 1)
+    ]
+
+
+def test_chapter_reference_resolves_multiword_canonical_book(research_session):
+    insert_verses(research_session, [
+        {
+            'id': 1,
+            'book': 'Song of Solomon',
+            'chapter': 4,
+            'verse': 1,
+            'text': 'garden imagery',
+            'translation': 'KJV',
+        },
+        {
+            'id': 2,
+            'book': 'Song of Solomon',
+            'chapter': 3,
+            'verse': 1,
+            'text': 'other chapter',
+            'translation': 'KJV',
+        },
+    ])
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'Explain Song of Solomon 4',
+        [SourceScope.BIBLICAL_CANON],
+        ResearchDepth.QUICK,
+    )
+
+    assert [item.reference for item in evidence] == ['Song of Solomon 4:1']
+
+
+@pytest.mark.parametrize('depth, expected', [
+    (ResearchDepth.QUICK, 6),
+    (ResearchDepth.STUDY, 12),
+    (ResearchDepth.DEEP, 24),
     (ResearchDepth.SCHOLAR, 32),
 ])
 def test_depth_controls_result_limit(research_session, depth, expected):
@@ -293,6 +409,61 @@ def test_depth_controls_result_limit(research_session, depth, expected):
     assert [item.id for item in evidence] == [
         f'scripture:{index}' for index in range(1, expected + 1)
     ]
+
+
+@pytest.mark.parametrize(('translation', 'tradition'), [
+    ('ASV', 'Protestant'),
+    ('BBE', 'Protestant'),
+    ('DARBY', 'Protestant'),
+    ('DRA', 'Catholic'),
+    ('ERV', 'Protestant'),
+    ('KJV', 'Protestant'),
+    ('NLT', 'Protestant'),
+    ('WEB', 'Protestant'),
+    ('WEBBE', 'Protestant'),
+])
+def test_trusted_legacy_scripture_editions_are_classified(
+    research_session,
+    translation,
+    tradition,
+):
+    insert_verses(research_session, [{
+        'id': 1,
+        'book': 'Genesis',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'trusted creation testimony',
+        'translation': translation,
+    }])
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'creation testimony',
+        [SourceScope.BIBLICAL_CANON],
+        ResearchDepth.QUICK,
+    )
+
+    assert [(item.translation, item.tradition) for item in evidence] == [
+        (translation, tradition)
+    ]
+
+
+def test_non_scripture_legacy_code_is_not_classified_as_canonical(research_session):
+    insert_verses(research_session, [{
+        'id': 1,
+        'book': 'Genesis',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'creation account from Josephus',
+        'translation': 'JOSEPHUS',
+    }])
+
+    assert retrieve_research_evidence(
+        research_session,
+        'creation account',
+        [SourceScope.BIBLICAL_CANON],
+        ResearchDepth.QUICK,
+    ) == []
 
 
 def test_general_question_retrieval_is_bounded_deterministic_and_safe(research_session):

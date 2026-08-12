@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Iterable
 from urllib.parse import quote
 
@@ -39,8 +40,20 @@ _DEPTH_LIMITS = {
     ResearchDepth.SCHOLAR.value: 32,
 }
 _MAX_QUERY_TOKENS = 8
-_WESTERN_TRANSLATIONS = frozenset({
-    'ASV', 'ESV', 'KJV', 'NASB', 'NIV', 'NRSV', 'WEB',
+_TRUSTED_LEGACY_SCRIPTURE_EDITIONS = MappingProxyType({
+    'ASV': 'Protestant',
+    'BBE': 'Protestant',
+    'DARBY': 'Protestant',
+    'DRA': 'Catholic',
+    'ERV': 'Protestant',
+    'ESV': 'Protestant',
+    'KJV': 'Protestant',
+    'NASB': 'Protestant',
+    'NIV': 'Protestant',
+    'NLT': 'Protestant',
+    'NRSV': 'Ecumenical',
+    'WEB': 'Protestant',
+    'WEBBE': 'Protestant',
 })
 _WESTERN_CANON_WORKS = frozenset({
     'genesis', 'exodus', 'leviticus', 'numbers', 'deuteronomy',
@@ -65,11 +78,19 @@ _STOP_WORDS = frozenset({
 })
 _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:'[^\W_]+)?", re.UNICODE)
 _COMPOSITE_EDITION = 'EOTC-COMPOSITE-EN'
-_COMPOSITE_TRADITION = 'Composite English sources associated with ETHIO81 works'
 _WESTERN_BOOK_ALIASES = tuple(sorted(
     alias for alias, work_id in ALIASES.items()
     if work_id in _WESTERN_CANON_WORKS
 ))
+_CHAPTER_BOOK_PATTERN = re.compile(
+    r'(?<![\w])('
+    + '|'.join(
+        re.escape(alias)
+        for alias in sorted(ALIASES, key=lambda value: (-len(value), value))
+    )
+    + r')\s+(\d{1,3})(?!\s*:|\d)',
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -131,10 +152,9 @@ def _eligible_ethiopian_editions(session: Session) -> dict[str, set[str]]:
           AND (
               (edition.edition_code = :composite_edition
                AND edition.relationship = :general_reading
-               AND edition.source_tradition = :composite_tradition)
+              )
               OR
-              (edition.relationship = :exact_ethiopian
-               AND lower(edition.source_tradition) LIKE :eotc_pattern)
+              edition.relationship = :exact_ethiopian
           )
         ORDER BY ews.edition_code, ews.work_id
         LIMIT :metadata_limit
@@ -145,9 +165,7 @@ def _eligible_ethiopian_editions(session: Session) -> dict[str, set[str]]:
         'provisional': 'provisional',
         'composite_edition': _COMPOSITE_EDITION,
         'general_reading': 'general_reading',
-        'composite_tradition': _COMPOSITE_TRADITION,
         'exact_ethiopian': 'exact_ethiopian',
-        'eotc_pattern': '%ethiopian orthodox tewahedo%',
         'metadata_limit': 512,
     }
     try:
@@ -169,7 +187,7 @@ def _scope_eligibility_sql(
     params: dict[str, Any] = {}
     if SourceScope.BIBLICAL_CANON.value in scopes:
         translation_names = []
-        for index, translation in enumerate(sorted(_WESTERN_TRANSLATIONS)):
+        for index, translation in enumerate(sorted(_TRUSTED_LEGACY_SCRIPTURE_EDITIONS)):
             name = f'western_translation_{index}'
             params[name] = translation
             translation_names.append(f':{name}')
@@ -284,10 +302,9 @@ def _ethiopian_metadata(
           AND (
               (edition.edition_code = :composite_edition
                AND edition.relationship = :general_reading
-               AND edition.source_tradition = :composite_tradition)
+              )
               OR
-              (edition.relationship = :exact_ethiopian
-               AND lower(edition.source_tradition) LIKE :eotc_pattern)
+              edition.relationship = :exact_ethiopian
           )
         ORDER BY ews.id
         LIMIT :row_limit
@@ -300,9 +317,7 @@ def _ethiopian_metadata(
         'provisional': 'provisional',
         'composite_edition': _COMPOSITE_EDITION,
         'general_reading': 'general_reading',
-        'composite_tradition': _COMPOSITE_TRADITION,
         'exact_ethiopian': 'exact_ethiopian',
-        'eotc_pattern': '%ethiopian orthodox tewahedo%',
         'row_limit': 1,
     }
     try:
@@ -326,12 +341,12 @@ def _classify(
     normalized_translation = (translation or '').upper()
     if (
         SourceScope.BIBLICAL_CANON.value in scopes
-        and normalized_translation in _WESTERN_TRANSLATIONS
+        and normalized_translation in _TRUSTED_LEGACY_SCRIPTURE_EDITIONS
         and work_id in _WESTERN_CANON_WORKS
     ):
         return _Classification(
             source_type='canonical-scripture',
-            tradition='Protestant',
+            tradition=_TRUSTED_LEGACY_SCRIPTURE_EDITIONS[normalized_translation],
             title=normalized_translation,
         )
 
@@ -428,6 +443,61 @@ def _exact_rows(session: Session, question: str) -> list[dict[str, Any]] | None:
     return rows
 
 
+def _parse_chapter_reference(question: str) -> tuple[str, int] | None:
+    match = _CHAPTER_BOOK_PATTERN.search(question)
+    if match is None:
+        return None
+    work_id = alias_target(match.group(1))
+    if work_id is None:
+        return None
+    chapter = int(match.group(2))
+    if chapter < 1:
+        return None
+    return work_id, chapter
+
+
+def _chapter_rows(
+    session: Session,
+    question: str,
+    scopes: frozenset[str],
+    limit: int,
+) -> list[dict[str, Any]] | None:
+    parsed = _parse_chapter_reference(question)
+    if parsed is None:
+        return None
+    work_id, chapter = parsed
+    eligibility_sql, eligibility_params = _scope_eligibility_sql(session, scopes)
+    book_params: dict[str, str] = {}
+    book_names: list[str] = []
+    for index, alias in enumerate(sorted(
+        alias for alias, target in ALIASES.items() if target == work_id
+    )):
+        name = f'chapter_book_{index}'
+        book_params[name] = alias
+        book_names.append(f':{name}')
+    statement = text(f'''
+        SELECT id, book, chapter, verse, text, translation,
+               500.0 AS match_score
+        FROM biblical_texts
+        WHERE lower(trim(book)) IN ({', '.join(book_names)})
+          AND chapter = :chapter
+          AND ({eligibility_sql})
+        ORDER BY verse, upper(coalesce(translation, '')), id
+        LIMIT :candidate_limit
+    ''')
+    params = {
+        'chapter': chapter,
+        'candidate_limit': min(limit * 8, 256),
+        **book_params,
+        **eligibility_params,
+    }
+    try:
+        return [dict(row) for row in session.execute(statement, params).mappings()]
+    except SQLAlchemyError:
+        session.rollback()
+        return []
+
+
 def retrieve_research_evidence(
     session: Session,
     question: str,
@@ -438,9 +508,15 @@ def retrieve_research_evidence(
     limit = _depth_limit(depth)
     scopes = _enabled_scopes(source_scopes)
     exact_rows = _exact_rows(session, question)
-    rows = (
-        exact_rows
+    chapter_rows = (
+        None
         if exact_rows is not None
-        else _lexical_rows(session, question, limit, scopes)
+        else _chapter_rows(session, question, scopes, limit)
     )
+    if exact_rows is not None:
+        rows = exact_rows
+    elif chapter_rows is not None:
+        rows = chapter_rows
+    else:
+        rows = _lexical_rows(session, question, limit, scopes)
     return _to_evidence(session, rows, scopes, limit)
