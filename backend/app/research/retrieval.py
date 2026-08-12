@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.references import parse_reference
 from app.ai.retrieval import retrieve_exact_reference
-from app.library.canon import alias_target
+from app.library.canon import ALIASES, alias_target
 from app.research.schemas import ResearchDepth, SourceScope
 
 
@@ -64,6 +64,12 @@ _STOP_WORDS = frozenset({
     'where', 'which', 'who', 'why', 'with', 'would',
 })
 _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:'[^\W_]+)?", re.UNICODE)
+_COMPOSITE_EDITION = 'EOTC-COMPOSITE-EN'
+_COMPOSITE_TRADITION = 'Composite English sources associated with ETHIO81 works'
+_WESTERN_BOOK_ALIASES = tuple(sorted(
+    alias for alias, work_id in ALIASES.items()
+    if work_id in _WESTERN_CANON_WORKS
+))
 
 
 @dataclass(frozen=True)
@@ -111,14 +117,112 @@ def _escape_like(value: str) -> str:
     return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
 
 
-def _lexical_rows(session: Session, question: str, limit: int) -> list[dict[str, Any]]:
+def _eligible_ethiopian_editions(session: Session) -> dict[str, set[str]]:
+    if not _has_ethiopian_metadata(session):
+        return {}
+    statement = text('''
+        SELECT ews.edition_code, ews.work_id
+        FROM edition_work_sources AS ews
+        JOIN text_editions AS edition
+          ON edition.edition_code = ews.edition_code
+        WHERE ews.canon_scope = :canon_scope
+          AND ews.verification_status IN (:verified, :provisional)
+          AND edition.verification_status IN (:verified, :provisional)
+          AND (
+              (edition.edition_code = :composite_edition
+               AND edition.relationship = :general_reading
+               AND edition.source_tradition = :composite_tradition)
+              OR
+              (edition.relationship = :exact_ethiopian
+               AND lower(edition.source_tradition) LIKE :eotc_pattern)
+          )
+        ORDER BY ews.edition_code, ews.work_id
+        LIMIT :metadata_limit
+    ''')
+    params = {
+        'canon_scope': 'ethio81',
+        'verified': 'verified',
+        'provisional': 'provisional',
+        'composite_edition': _COMPOSITE_EDITION,
+        'general_reading': 'general_reading',
+        'composite_tradition': _COMPOSITE_TRADITION,
+        'exact_ethiopian': 'exact_ethiopian',
+        'eotc_pattern': '%ethiopian orthodox tewahedo%',
+        'metadata_limit': 512,
+    }
+    try:
+        rows = session.execute(statement, params).mappings()
+    except SQLAlchemyError:
+        session.rollback()
+        return {}
+    editions: dict[str, set[str]] = {}
+    for row in rows:
+        editions.setdefault(row['edition_code'], set()).add(row['work_id'])
+    return editions
+
+
+def _scope_eligibility_sql(
+    session: Session,
+    scopes: frozenset[str],
+) -> tuple[str, dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if SourceScope.BIBLICAL_CANON.value in scopes:
+        translation_names = []
+        for index, translation in enumerate(sorted(_WESTERN_TRANSLATIONS)):
+            name = f'western_translation_{index}'
+            params[name] = translation
+            translation_names.append(f':{name}')
+        book_names = []
+        for index, book in enumerate(_WESTERN_BOOK_ALIASES):
+            name = f'western_book_{index}'
+            params[name] = book
+            book_names.append(f':{name}')
+        clauses.append(
+            f"(upper(coalesce(translation, '')) IN ({', '.join(translation_names)}) "
+            f"AND lower(trim(book)) IN ({', '.join(book_names)}))"
+        )
+
+    if SourceScope.ETHIOPIAN_TRADITION.value in scopes:
+        for edition_index, (edition, work_ids) in enumerate(
+            sorted(_eligible_ethiopian_editions(session).items())
+        ):
+            edition_name = f'ethiopian_edition_{edition_index}'
+            params[edition_name] = edition
+            book_names = []
+            eligible_aliases = sorted(
+                alias for alias, work_id in ALIASES.items()
+                if work_id in work_ids
+            )
+            for book_index, book in enumerate(eligible_aliases):
+                name = f'ethiopian_book_{edition_index}_{book_index}'
+                params[name] = book
+                book_names.append(f':{name}')
+            if book_names:
+                clauses.append(
+                    f"(translation = :{edition_name} AND "
+                    f"lower(trim(book)) IN ({', '.join(book_names)}))"
+                )
+    return (' OR '.join(clauses) if clauses else '0 = 1'), params
+
+
+def _lexical_rows(
+    session: Session,
+    question: str,
+    limit: int,
+    scopes: frozenset[str],
+) -> list[dict[str, Any]]:
     tokens = _meaningful_tokens(question)
     if not tokens:
         return []
 
     match_fragments: list[str] = []
     score_fragments: list[str] = []
-    params: dict[str, Any] = {'candidate_limit': min(limit * 8, 256)}
+    eligibility_sql, eligibility_params = _scope_eligibility_sql(session, scopes)
+    params: dict[str, Any] = {
+        'candidate_limit': min(limit * 8, 256),
+        **eligibility_params,
+    }
     for index, token in enumerate(tokens):
         token_name = f'token_{index}'
         like_name = f'like_{index}'
@@ -140,7 +244,8 @@ def _lexical_rows(session: Session, question: str, limit: int) -> list[dict[str,
         SELECT id, book, chapter, verse, text, translation,
                ({' + '.join(score_fragments)}) AS match_score
         FROM biblical_texts
-        WHERE {' OR '.join(match_fragments)}
+        WHERE ({' OR '.join(match_fragments)})
+          AND ({eligibility_sql})
         ORDER BY match_score DESC, lower(book), chapter, verse,
                  upper(coalesce(translation, '')), id
         LIMIT :candidate_limit
@@ -176,8 +281,14 @@ def _ethiopian_metadata(
           AND ews.canon_scope = :canon_scope
           AND ews.verification_status IN (:verified, :provisional)
           AND edition.verification_status IN (:verified, :provisional)
-          AND edition.relationship = :relationship
-          AND lower(ews.source_tradition) LIKE :tradition_pattern
+          AND (
+              (edition.edition_code = :composite_edition
+               AND edition.relationship = :general_reading
+               AND edition.source_tradition = :composite_tradition)
+              OR
+              (edition.relationship = :exact_ethiopian
+               AND lower(edition.source_tradition) LIKE :eotc_pattern)
+          )
         ORDER BY ews.id
         LIMIT :row_limit
     ''')
@@ -187,8 +298,11 @@ def _ethiopian_metadata(
         'canon_scope': 'ethio81',
         'verified': 'verified',
         'provisional': 'provisional',
-        'relationship': 'exact_ethiopian',
-        'tradition_pattern': '%ethiopian%',
+        'composite_edition': _COMPOSITE_EDITION,
+        'general_reading': 'general_reading',
+        'composite_tradition': _COMPOSITE_TRADITION,
+        'exact_ethiopian': 'exact_ethiopian',
+        'eotc_pattern': '%ethiopian orthodox tewahedo%',
         'row_limit': 1,
     }
     try:
@@ -324,5 +438,9 @@ def retrieve_research_evidence(
     limit = _depth_limit(depth)
     scopes = _enabled_scopes(source_scopes)
     exact_rows = _exact_rows(session, question)
-    rows = exact_rows if exact_rows is not None else _lexical_rows(session, question, limit)
+    rows = (
+        exact_rows
+        if exact_rows is not None
+        else _lexical_rows(session, question, limit, scopes)
+    )
     return _to_evidence(session, rows, scopes, limit)

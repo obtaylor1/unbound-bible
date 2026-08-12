@@ -68,25 +68,36 @@ def add_ethiopian_edition(
     work_id='1-enoch',
     status='verified',
     canon_scope='ethio81',
+    edition_tradition='Composite English sources associated with ETHIO81 works',
+    relationship='general_reading',
+    source_language='Ethiopic and Greek',
+    source_tradition='Ethiopic Enoch',
 ):
     session.execute(text('''
         INSERT OR IGNORE INTO text_editions
             (edition_code, name, reading_language, source_language,
              source_tradition, relationship, verification_status, published_year)
         VALUES
-            (:edition, 'EOTC Composite English', 'English', 'Ge''ez',
-             'Ethiopian Orthodox Tewahedo', 'exact_ethiopian', :status, 2024)
-    '''), {'edition': edition, 'status': status})
+            (:edition, 'Ethiopian Orthodox Composite English', 'English', 'Mixed',
+             :edition_tradition, :relationship, :status, 2024)
+    '''), {
+        'edition': edition,
+        'edition_tradition': edition_tradition,
+        'relationship': relationship,
+        'status': status,
+    })
     session.execute(text('''
         INSERT INTO edition_work_sources
             (edition_code, work_id, source_label, source_language,
              source_tradition, published_year, verification_status, canon_scope)
         VALUES
-            (:edition, :work_id, 'Verified Ethiopian source', 'Ge''ez',
-             'Ethiopian Orthodox Tewahedo', 2024, :status, :canon_scope)
+            (:edition, :work_id, 'Verified Ethiopian source', :source_language,
+             :source_tradition, 2024, :status, :canon_scope)
     '''), {
         'edition': edition,
         'work_id': work_id,
+        'source_language': source_language,
+        'source_tradition': source_tradition,
         'status': status,
         'canon_scope': canon_scope,
     })
@@ -140,8 +151,30 @@ def test_ethiopian_scope_returns_only_eligible_ethiopian_records(research_sessio
     assert len(evidence) == 1
     assert evidence[0].id == 'scripture:2'
     assert evidence[0].source_type == 'ethiopian-canon'
-    assert evidence[0].tradition == 'Ethiopian Orthodox Tewahedo'
-    assert evidence[0].original_language == "Ge'ez"
+    assert evidence[0].tradition == 'Ethiopic Enoch'
+    assert evidence[0].original_language == 'Ethiopic and Greek'
+
+
+def test_unknown_general_reading_edition_fails_closed(research_session):
+    insert_verses(research_session, [{
+        'id': 1,
+        'book': '1 Enoch',
+        'chapter': 1,
+        'verse': 1,
+        'text': 'watchers testimony',
+        'translation': 'UNKNOWN-COMPOSITE',
+    }])
+    add_ethiopian_edition(
+        research_session,
+        edition='UNKNOWN-COMPOSITE',
+    )
+
+    assert retrieve_research_evidence(
+        research_session,
+        'watchers',
+        [SourceScope.ETHIOPIAN_TRADITION],
+        ResearchDepth.QUICK,
+    ) == []
 
 
 def test_multiple_scopes_permit_relevant_records_without_unrelated_sources(research_session):
@@ -171,7 +204,12 @@ def test_explicit_reference_uses_exact_rows_then_applies_scope(research_session)
         {'id': 2, 'book': 'Genesis', 'chapter': 1, 'verse': 1, 'text': 'Ethiopian exact text', 'translation': 'EOTC-COMPOSITE-EN'},
         {'id': 3, 'book': 'Genesis', 'chapter': 1, 'verse': 2, 'text': 'Outside exact range', 'translation': 'KJV'},
     ])
-    add_ethiopian_edition(research_session, work_id='genesis')
+    add_ethiopian_edition(
+        research_session,
+        work_id='genesis',
+        source_language='Hebrew',
+        source_tradition='Hebrew Masoretic tradition',
+    )
 
     western = retrieve_research_evidence(
         research_session, 'What does Genesis 1:1 say?',
@@ -238,6 +276,41 @@ def test_general_question_retrieval_is_bounded_deterministic_and_safe(research_s
     assert first == second
     assert len(first) <= 6
     assert research_session.scalar(text('SELECT COUNT(*) FROM biblical_texts')) == 3
+
+
+def test_scope_eligibility_is_applied_before_candidate_limit(research_session):
+    insert_verses(research_session, [
+        {
+            'id': index,
+            'book': 'Antiquities',
+            'chapter': 1,
+            'verse': index,
+            'text': 'covenant saturation',
+            'translation': 'UNKNOWN',
+        }
+        for index in range(1, 65)
+    ] + [
+        {
+            'id': 100 + index,
+            'book': 'Psalms',
+            'chapter': 1,
+            'verse': index + 1,
+            'text': f'covenant eligible {index}',
+            'translation': 'KJV',
+        }
+        for index in range(6)
+    ])
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'covenant',
+        [SourceScope.BIBLICAL_CANON],
+        ResearchDepth.QUICK,
+    )
+
+    assert [item.id for item in evidence] == [
+        f'scripture:{row_id}' for row_id in range(100, 106)
+    ]
 
 
 def test_missing_optional_metadata_fails_closed_for_nonwestern_scopes():
