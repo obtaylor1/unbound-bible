@@ -1,0 +1,44 @@
+name: Private staging
+
+on:
+  workflow_run:
+    workflows: ["Quality"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: private-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  STAGING_URL: https://staging.theunboundbible.com
+  RAILWAY_DEPLOY_TIMEOUT_SECONDS: 900
+
+jobs:
+  smoke:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - name: Wait for the Railway staging deployment and verify health
+        run: |
+          deadline=$((SECONDS + RAILWAY_DEPLOY_TIMEOUT_SECONDS))
+
+          until curl --fail-with-body --silent --show-error "${STAGING_URL}/healthz" \
+            && curl --fail-with-body --silent --show-error "${STAGING_URL}/api/v1/health" \
+            && curl --fail-with-body --silent --show-error "${STAGING_URL}/api/v1/health/providers"; do
+            if (( SECONDS >= deadline )); then
+              echo "Railway staging did not become healthy within ${RAILWAY_DEPLOY_TIMEOUT_SECONDS} seconds."
+              exit 1
+            fi
+            sleep 10
+          done

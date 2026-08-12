@@ -24,9 +24,9 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(
         title="Unbound Bible API",
         version="1.0.0",
-        docs_url="/api/docs" if settings.environment != "production" else None,
+        docs_url="/api/docs" if settings.environment not in {"staging", "production"} else None,
         redoc_url=None,
-        openapi_url="/api/openapi.json" if settings.environment != "production" else None,
+        openapi_url="/api/openapi.json" if settings.environment not in {"staging", "production"} else None,
     )
     engine = create_database_engine(settings)
     wire_application_state(application, settings, engine)

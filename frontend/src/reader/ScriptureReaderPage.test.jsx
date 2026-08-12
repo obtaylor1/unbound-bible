@@ -222,6 +222,38 @@ describe('ScriptureReaderPage', () => {
     expect(screen.queryByText('Invalid row source')).not.toBeInTheDocument()
   })
 
+  it('passes the selected content row edition to the translation overview', async () => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: {
+        code: ' eotc-composite-en ',
+        name: 'Ethiopian Orthodox Bible — Composite English Edition',
+      },
+      workSource: {
+        sourceLabel: 'World Messianic Bible',
+        verificationStatus: 'provisional',
+      },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    renderReader()
+
+    const trigger = await screen.findByRole('button', { name: 'About this translation' })
+    await user.click(trigger)
+    expect(screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })).toBeInTheDocument()
+  })
+
   it('shows known missing composite English coverage without fabricating a verse', async () => {
     getBookCatalog.mockResolvedValue([{
       id: 'tegsats',
@@ -867,6 +899,89 @@ describe('ScriptureReaderPage', () => {
     expect(screen.getAllByRole('link', { name: 'Skip to main content' })).toHaveLength(1)
     expect(screen.getAllByRole('main')).toHaveLength(1)
     expect(document.querySelector('.ancient-texts')).not.toBeInTheDocument()
+  })
+
+  it('keeps the modal dialog present above the still-mounted global navigation', async () => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: { code: 'EOTC-COMPOSITE-EN' },
+      workSource: { sourceLabel: 'World Messianic Bible' },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+
+    const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
+    await user.click(await screen.findByRole('button', { name: 'About this translation' }))
+    const dialog = screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })
+
+    expect(navigation).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(document.querySelector('.translation-overview__backdrop')).toContainElement(dialog)
+  })
+
+  it.each([
+    ['Ctrl+K', { ctrlKey: true }],
+    ['Cmd+K', { metaKey: true }],
+  ])('blocks %s global search while translation information is modal', async (_, modifier) => {
+    const user = userEvent.setup()
+    getBookCatalog.mockResolvedValue([{
+      id: 'genesis',
+      name: 'Genesis',
+      recommendedEdition: 'EOTC-COMPOSITE-EN',
+      unavailableReason: null,
+    }])
+    getChapter.mockResolvedValue([{
+      id: 8,
+      verse: 1,
+      translation: 'EOTC-COMPOSITE-EN',
+      text: 'Composite English text.',
+      edition: { code: 'EOTC-COMPOSITE-EN' },
+      workSource: { sourceLabel: 'World Messianic Bible' },
+    }])
+    window.location.hash = '#scriptures?book=Genesis&chapter=1&translation=EOTC-COMPOSITE-EN&canon=ETHIO81'
+    render(
+      <AuthContext.Provider value={{ user: null, status: 'anonymous' }}>
+        <App />
+      </AuthContext.Provider>,
+    )
+
+    const trigger = await screen.findByRole('button', { name: 'About this translation' })
+    await user.click(trigger)
+    const translationDialog = screen.getByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })
+    const close = within(translationDialog).getByRole('button', {
+      name: 'Close translation information',
+    })
+    expect(close).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'k', ...modifier })
+
+    expect(screen.queryByRole('dialog', { name: 'Search' })).not.toBeInTheDocument()
+    expect(translationDialog).toBeInTheDocument()
+    expect(close).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', {
+      name: 'About the Ethiopian Composite English edition',
+    })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
   it('preserves the selected verse when App opens the note destination', async () => {

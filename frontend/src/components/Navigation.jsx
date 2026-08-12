@@ -86,7 +86,11 @@ function Navigation({ currentPage, onPageChange }) {
 
   useEffect(() => {
     const shortcut = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setSearchOpen(true) }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        const activeModal = document.querySelector('[role="dialog"][aria-modal="true"]')
+        if (!activeModal) setSearchOpen(true)
+      }
     }
     document.addEventListener('keydown', shortcut)
     return () => document.removeEventListener('keydown', shortcut)

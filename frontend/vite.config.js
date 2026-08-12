@@ -36,5 +36,20 @@ export default defineConfig(({ mode }) => ({
         secure: false
       }
     }
+  },
+  preview: {
+    host: '127.0.0.1',
+    port: 4173,
+    headers: {
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    },
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_TARGET || 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   }
 }))

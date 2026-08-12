@@ -412,9 +412,9 @@ describe('TextualComparisonWorkspace', () => {
     expect(window.location.hash).toContain('canon=LIBRARY')
 
     window.history.back()
+    await waitFor(() => expect(window.location.hash).toBe(genesisHash), { timeout: 3000 })
     expect(await screen.findByText('In the beginning God created the heaven and the earth.')).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Book' })).toHaveValue('Genesis')
-    expect(window.location.hash).toBe(genesisHash)
     expect(requestedUrls.some((url) => url.includes('book=1%20Enoch&chapter=2'))).toBe(true)
   })
 

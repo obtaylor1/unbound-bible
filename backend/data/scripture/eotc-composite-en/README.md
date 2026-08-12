@@ -69,3 +69,13 @@ python -m pytest backend/tests/library/ingest/test_composite_english_bundle_adap
 ```
 
 The acceptance test regenerates twice into temporary directories, requires byte-identical artifacts, confirms the frozen inputs were unchanged, loads the strict Pydantic manifest, and parses all corrected rows through the production adapter.
+
+## Release-scope audit
+
+Run this command from `backend` after reviewing the bundle metadata:
+
+```bash
+python -m app.library.audit --bundle data/scripture/eotc-composite-en --markdown ../docs/operations/ethiopian-composite-release-audit.md
+```
+
+The audit cross-checks `manifest.json` with `data-quality-report.json`, freezes the reviewed scope and source-group counts, records provisional source records and KJV fallback works, and rejects any undeclared output gap. The generated report is an operational release record: it describes a mixed-source English compilation, not one uniform Ethiopian translation.
