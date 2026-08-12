@@ -258,11 +258,23 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
         ('It cannot be determined when this occurred.', True),
         ('There is insufficient evidence to identify the location.', True),
         ('No known evidence establishes the date.', True),
+        ('It is uncertain when and where this occurred.', True),
+        ('The text does not say when, where, or why this occurred.', True),
         ('The journey lasted forty years.', False),
         ('Known evidence establishes the date.', False),
         ('The evidence describes an insufficient harvest.', False),
         (
             'It is uncertain when this occurred but it occurred in 4004 BC.',
+            False,
+        ),
+        (
+            'It is uncertain when this occurred, however records place it '
+            'in 4004 BC.',
+            False,
+        ),
+        (
+            'It is uncertain when this occurred although it occurred in '
+            '4004 BC.',
             False,
         ),
     ],

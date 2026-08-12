@@ -61,7 +61,7 @@ _UNCERTAINTY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ASSERTIVE_CONTINUATION_PATTERN = re.compile(
-    r'\b(?:and|but|however|yet)\b|[:,]',
+    r'\b(?:although|but|however|yet)\b',
     re.IGNORECASE,
 )
 
