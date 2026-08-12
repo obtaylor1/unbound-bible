@@ -160,6 +160,7 @@ _TRUSTED_TRANSLATIONS = (
 _MAX_QUERY_LENGTH = 256
 _WHITESPACE = re.compile(r'\s+')
 _ERRORS = MappingProxyType({
+    'invalid_query': 'Event search query is too long.',
     'unknown_event': 'Unknown event ID.',
     'different_ordering_group': (
         'Events must belong to the same ordering group.'
@@ -172,13 +173,18 @@ _ERRORS = MappingProxyType({
 
 
 def _normalized(value: str) -> str:
-    bounded = value[:_MAX_QUERY_LENGTH]
-    normalized = unicodedata.normalize('NFKC', bounded)
+    normalized = unicodedata.normalize('NFKC', value)
     return _WHITESPACE.sub(' ', normalized).strip().casefold()
 
 
-def _matches(definition: EventDefinition, query: str) -> bool:
-    needle = _normalized(query)
+def _normalized_query(query: str) -> str:
+    normalized = _normalized(query)
+    if len(normalized) > _MAX_QUERY_LENGTH:
+        raise _error('invalid_query')
+    return normalized
+
+
+def _matches(definition: EventDefinition, needle: str) -> bool:
     if not needle:
         return True
     return any(
@@ -266,8 +272,9 @@ def _resolve_definition(
 def list_events(session: Session, query: str | None = None) -> list[EventRecord]:
     """Return reviewed events whose complete passages exist in trusted scripture."""
 
+    normalized_query = _normalized_query(query or '')
     definitions = sorted(
-        (item for item in EVENT_DEFINITIONS if _matches(item, query or '')),
+        (item for item in EVENT_DEFINITIONS if _matches(item, normalized_query)),
         key=lambda item: (item.ordering_group, item.ordinal, item.id),
     )
     return [

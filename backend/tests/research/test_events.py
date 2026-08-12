@@ -47,24 +47,60 @@ def event_session():
                 VALUES
                     (:id, :book, :chapter, :verse, :text, :translation)
             '''), rows)
+        connection.execute(text('''
+            INSERT INTO biblical_texts
+                (id, book, chapter, verse, text, translation)
+            VALUES
+                (151, 'Genesis', 2, 8, 'Duplicate KJV row', 'KJV')
+        '''))
     with Session(engine) as session:
         yield session
 
 
 def test_release_one_definitions_are_reviewed_and_immutable():
-    assert [
-        (item.id, item.book, item.chapter, item.verse_start, item.verse_end)
-        for item in EVENT_DEFINITIONS
-    ] == [
-        ('eden', 'Genesis', 2, 8, 25),
-        ('eden-expulsion', 'Genesis', 3, 22, 24),
-        ('cain-born', 'Genesis', 4, 1, 1),
-        ('abel-born', 'Genesis', 4, 2, 2),
-        ('offerings', 'Genesis', 4, 3, 5),
-        ('abel-killed', 'Genesis', 4, 8, 8),
-    ]
-    assert all(item.aliases and item.people is not None and item.places is not None
-               for item in EVENT_DEFINITIONS)
+    assert EVENT_DEFINITIONS == (
+        event_catalog.EventDefinition(
+            'eden', 'Life in the Garden of Eden',
+            'The LORD God places the man in the garden, gives the command '
+            'concerning the tree, and brings the woman to him.',
+            ('Eden', 'Garden life', 'Garden of Eden'),
+            'Genesis', 2, 8, 25, ('adam', 'eve'), ('garden-of-eden',),
+            'eden-sequence', 1,
+        ),
+        event_catalog.EventDefinition(
+            'eden-expulsion', 'Expulsion from Eden',
+            'The man and woman are sent out from the garden, and cherubim '
+            'guard the way to the tree of life.',
+            ('Eden expulsion', 'Expelled from Eden', 'Garden expulsion'),
+            'Genesis', 3, 22, 24, ('adam', 'eve'), ('garden-of-eden',),
+            'eden-sequence', 2,
+        ),
+        event_catalog.EventDefinition(
+            'cain-born', 'Cain is born', 'Eve bears Cain.',
+            ("Cain's birth", 'Birth of Cain'), 'Genesis', 4, 1, 1,
+            ('adam', 'eve', 'cain'), (), 'eden-sequence', 3,
+        ),
+        event_catalog.EventDefinition(
+            'abel-born', 'Abel is born',
+            "Eve also bears Cain's brother Abel, who keeps sheep.",
+            ("Abel's birth", 'Birth of Abel'), 'Genesis', 4, 2, 2,
+            ('eve', 'cain', 'abel'), (), 'eden-sequence', 4,
+        ),
+        event_catalog.EventDefinition(
+            'offerings', "Cain and Abel's offerings",
+            'Cain and Abel bring offerings; the LORD regards Abel and his '
+            'offering, but not Cain and his offering.',
+            ('Offerings', 'Cain and Abel bring offerings'),
+            'Genesis', 4, 3, 5, ('cain', 'abel'), (), 'eden-sequence', 5,
+        ),
+        event_catalog.EventDefinition(
+            'abel-killed', 'Cain kills Abel',
+            'Cain rises against Abel in the field and kills him.',
+            ("Abel's death", 'Abel killed', 'Cain murders Abel'),
+            'Genesis', 4, 8, 8, ('cain', 'abel'), ('field',),
+            'eden-sequence', 6,
+        ),
+    )
     with pytest.raises(FrozenInstanceError):
         EVENT_DEFINITIONS[0].title = 'Changed'
 
@@ -84,7 +120,14 @@ def test_list_events_is_source_backed_ordered_and_prefers_one_kjv_translation(
     assert all(event.source_ids for event in events)
     assert all(source_id.startswith('scripture:')
                for event in events for source_id in event.source_ids)
-    assert len(events[0].source_ids) == 18
+    assert [(event.reference, event.source_ids) for event in events] == [
+        ('Genesis 2:8-25', tuple(f'scripture:{row_id}' for row_id in range(83, 101))),
+        ('Genesis 3:22-24', ('scripture:122', 'scripture:123', 'scripture:124')),
+        ('Genesis 4:1', ('scripture:125',)),
+        ('Genesis 4:2', ('scripture:126',)),
+        ('Genesis 4:3-5', ('scripture:127', 'scripture:128', 'scripture:129')),
+        ('Genesis 4:8', ('scripture:132',)),
+    ]
 
 
 @pytest.mark.parametrize('query', [None, '', '   '])
@@ -109,9 +152,28 @@ def test_search_handles_apostrophes_bounds_input_and_does_not_change_data(
     assert [event.id for event in list_events(event_session, "Cain's birth")] == [
         'cain-born'
     ]
-    attack = "x' OR 1=1 --" + ('z' * 10_000)
+    attack = "x' OR 1=1 --"
     assert list_events(event_session, attack) == []
-    assert event_session.scalar(text('SELECT COUNT(*) FROM biblical_texts')) == 150
+    assert event_session.scalar(text('SELECT COUNT(*) FROM biblical_texts')) == 151
+
+
+def test_search_strips_before_bounding_and_whitespace_only_is_empty(event_session):
+    assert [event.id for event in list_events(event_session, (' ' * 500) + 'Eden')] == [
+        'eden', 'eden-expulsion'
+    ]
+    assert len(list_events(event_session, '\u3000\t\n ')) == 6
+
+
+@pytest.mark.parametrize('query', [
+    'x' * 257,
+    '\ufb03' * 256,
+])
+def test_search_rejects_overlong_normalized_queries_safely(event_session, query):
+    with pytest.raises(EventCatalogError) as raised:
+        list_events(event_session, query)
+
+    assert raised.value.code == 'invalid_query'
+    assert str(raised.value) == 'Event search query is too long.'
 
 
 def test_between_is_inclusive_and_same_event_is_a_singleton(event_session):
