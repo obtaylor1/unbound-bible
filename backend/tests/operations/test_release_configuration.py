@@ -151,35 +151,8 @@ def test_quality_workflow_runs_every_release_gate_on_prs_and_main():
         assert pinned_action in workflow_text
 
 
-def test_staging_workflow_requires_successful_main_quality_and_smoke_checks_railway():
-    workflow_text = _read(".github/workflows/staging.yml")
-    workflow = yaml.safe_load(workflow_text)
-
-    assert "workflow_run:" in workflow_text
-    assert 'workflows: ["Quality"]' in workflow_text
-    assert "types: [completed]" in workflow_text
-    assert "branches: [main]" in workflow_text
-    assert "github.event.workflow_run.conclusion == 'success'" in workflow_text
-    assert "github.event.workflow_run.event == 'push'" in workflow_text
-    assert "github.event.workflow_run.head_branch == 'main'" in workflow_text
-    assert "github.event.workflow_run.head_repository.full_name == github.repository" in workflow_text
-    assert "workflow_dispatch:" not in workflow_text
-    assert "environment: staging" in workflow_text
-    assert "https://staging.theunboundbible.com" in workflow_text
-    assert "/healthz" in workflow_text
-    assert "/api/v1/health" in workflow_text
-    assert "/api/v1/health/providers" in workflow_text
-    assert "RAILWAY_DEPLOY_TIMEOUT_SECONDS" in workflow_text
-    assert "STAGING_DEPLOY_HOOK_URL" not in workflow_text
-    assert "docker build" not in workflow_text
-    assert "docker push" not in workflow_text
-    assert "eval " not in workflow_text
-    assert "sh -c" not in workflow_text
-    assert "bash -c" not in workflow_text
-    assert "cancel-in-progress: false" in workflow_text
-    assert "group: private-staging" in workflow_text
-    assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["jobs"]["smoke"]["permissions"] == {"contents": "read"}
+def test_railway_deployment_does_not_have_a_circular_post_deploy_workflow():
+    assert not (ROOT / ".github/workflows/staging.yml").exists()
 
 
 def test_docker_build_context_is_an_allowlist_that_excludes_secrets_and_artifacts():
@@ -216,8 +189,8 @@ def test_runbook_documents_configuration_health_deploy_and_rollback():
         "`/api/v1/health/providers`",
         "`/healthz`",
         "commit SHA",
-        "successful Quality workflow",
-        "one staging release at a time",
+        "successful Quality checks",
+        "circular wait",
         "Railway",
         "Wait for CI",
         "staging.theunboundbible.com",

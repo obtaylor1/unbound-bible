@@ -54,9 +54,9 @@ From the repository root, validate configuration with `docker compose --env-file
 
 ## Continuous delivery to private staging
 
-The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. The Railway API and web services are connected to the `main` branch with **Wait for CI** enabled, so Railway deploys the exact commit SHA only after GitHub reports successful Quality checks. Pull requests, forks, and similarly named branches do not deploy.
+The Quality workflow runs backend tests, frontend unit tests, lint, production build, and Playwright before release review. The Railway API and web services are connected to the `main` branch with **Wait for CI** enabled, so Railway deploys the exact commit SHA only after GitHub reports successful Quality checks. Pull requests, forks, and similarly named branches do not deploy. Do not add a post-deployment GitHub workflow to this repository while **Wait for CI** is enabled: Railway treats it as another required action, which creates a circular wait between the deployment and its own health check.
 
-Configure a protected GitHub environment named `staging` for the post-deployment smoke check. After a successful Quality workflow produced by a push to `main` in this repository, the staging workflow waits up to 15 minutes for Railway and verifies `https://staging.theunboundbible.com/healthz`, `/api/v1/health`, and `/api/v1/health/providers`. It requires no deployment hook or long-lived provider secret. Concurrency is serialized so only one staging release at a time performs the smoke check; later releases queue rather than canceling a check in progress.
+Railway health checks verify `/api/v1/health` for the API service and `/healthz` for the web service before a deployment becomes active. After Railway reports both services online, verify `https://staging.theunboundbible.com/healthz`, `/api/v1/health`, and `/api/v1/health/providers` from outside Railway. This deployment path requires no deploy hook or long-lived provider secret.
 
 After deployment, record the commit SHA, confirm all three health endpoints, run the release-readiness browser journey against the private URL, and compare release-critical row counts. Do not open access when any check fails.
 
