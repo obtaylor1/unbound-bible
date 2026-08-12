@@ -120,6 +120,25 @@ def test_parse_provider_json_rejects_duplicate_object_keys(content):
         parse_provider_json(content)
 
 
+@pytest.mark.parametrize(
+    'content',
+    [
+        'NaN',
+        'Infinity',
+        '-Infinity',
+        '{"summary": {"value": NaN}}',
+        '{"summary": {"value": Infinity}}',
+        '{"summary": {"value": -Infinity}}',
+    ],
+)
+def test_parse_provider_json_rejects_non_json_numeric_constants(content):
+    with pytest.raises(
+        ResearchValidationError,
+        match='Provider returned invalid structured research data',
+    ):
+        parse_provider_json(content)
+
+
 def test_validation_rejects_unknown_top_level_keys():
     with pytest.raises(
         ResearchValidationError,
@@ -185,13 +204,12 @@ def test_validation_removes_factual_claims_without_a_known_source():
     )
 
     assert result.summary.claims == []
-    assert [warning.code for warning in result.validation_warnings] == [
-        'unsupported_claim_removed',
-        'unsupported_claim_removed',
-    ]
-    assert all(
-        warning.message == 'An unsupported factual claim was removed.'
-        for warning in result.validation_warnings
+    assert len(result.validation_warnings) == 1
+    assert result.validation_warnings[0].code == 'unsupported_claim_removed'
+    assert result.validation_warnings[0].count == 2
+    assert (
+        result.validation_warnings[0].message
+        == 'An unsupported factual claim was removed.'
     )
 
 
@@ -255,23 +273,25 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
 @pytest.mark.parametrize(
     ('statement', 'allowed'),
     [
-        ('It cannot be determined when this occurred.', True),
-        ('There is insufficient evidence to identify the location.', True),
+        ('It cannot be determined when this occurred.', False),
+        ('There is insufficient evidence to identify the location.', False),
+        ('There is insufficient evidence to determine the location.', True),
         ('No known evidence establishes the date.', True),
         ('It is uncertain when and where this occurred.', True),
         ('The text does not say when, where, or why this occurred.', True),
         ('It is unknown whether this occurred.', True),
         ('Scripture does not state where this occurred.', True),
-        ('The surviving texts do not identify who did this.', True),
+        ('The surviving texts do not identify who was involved.', True),
         ('The evidence does not establish when this occurred.', True),
-        ('There is limited evidence to identify the location.', True),
-        ('This is disputed.', True),
+        ('There is limited evidence to identify the location.', False),
+        ('This is disputed.', False),
         ('The date is unknown.', True),
         ('The authorship remains disputed.', True),
         ('The meaning is uncertain.', True),
         ('The journey lasted forty years.', False),
         ('Known evidence establishes the date.', False),
         ('The evidence describes an insufficient harvest.', False),
+        ('The surviving texts do not identify who did this.', False),
         (
             'It is uncertain when this occurred but it occurred in 4004 BC.',
             False,
@@ -308,6 +328,18 @@ def test_validation_removes_generic_uncited_factual_claim_from_unknowns():
             False,
         ),
         ('The location is disputed. It is Eden.', False),
+        (
+            'It is uncertain when this occurred while records say 4004 BC.',
+            False,
+        ),
+        (
+            'The text does not say when this occurred because records were lost.',
+            False,
+        ),
+        (
+            'No known evidence establishes the date despite a traditional claim.',
+            False,
+        ),
     ],
 )
 def test_validation_distinguishes_explicit_uncertainty_from_facts(
@@ -378,7 +410,12 @@ def test_validation_bounds_warning_amplification():
         evidence('known'),
     )
 
-    assert len(result.validation_warnings) == MAX_VALIDATION_WARNINGS
+    warnings_by_code = {
+        warning.code: warning for warning in result.validation_warnings
+    }
+    assert len(result.validation_warnings) <= MAX_VALIDATION_WARNINGS
+    assert warnings_by_code['unsupported_timeline_event_removed'].count == 100
+    assert warnings_by_code['unsupported_reference_removed'].count == 100
 
 
 def test_validation_filters_nested_references_and_unsupported_entries():

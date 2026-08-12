@@ -50,41 +50,36 @@ _OUTER_JSON_FENCE = re.compile(
     r'\A```json[ \t]*\r?\n(?P<body>.*)\r?\n```\Z',
     re.DOTALL,
 )
-_WH_WORD = r'(?:whether|when|where|why|how|who|what)'
-_WH_ENUMERATION = (
-    rf'{_WH_WORD}(?:(?: and| or) {_WH_WORD}|'
-    rf'(?:, {_WH_WORD})+, or {_WH_WORD})?'
+_RESEARCH_LABEL = (
+    r'(?:date|chronology|identity|location|authorship|meaning|timing|duration)'
 )
-_SAFE_UNCERTAINTY_WORD = (
-    r"(?!although\b|but\b|however\b|yet\b)"
-    r"[^\W_]+(?:[-'][^\W_]+)*"
+_RESEARCH_LABEL_OBJECT = rf'the {_RESEARCH_LABEL}'
+_EVENT_UNCERTAINTY_DETAIL = (
+    r'(?:whether this occurred|when this occurred|where this occurred|'
+    r'why this occurred|how this occurred|who was involved|what happened|'
+    r'when and where this occurred|when, where, or why this occurred)'
 )
-_SAFE_UNCERTAINTY_TAIL = (
-    rf'{_SAFE_UNCERTAINTY_WORD}'
-    rf'(?: {_SAFE_UNCERTAINTY_WORD}){{0,30}}'
+_SOURCE_UNCERTAINTY_DETAIL = (
+    r'(?:when this occurred|where this occurred|why this occurred|'
+    r'how this occurred|who was involved|what happened|'
+    r'when and where this occurred|when, where, or why this occurred|'
+    rf'{_RESEARCH_LABEL_OBJECT})'
 )
-_TERMINAL_PUNCTUATION = r'[.?]'
 _UNCERTAINTY_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        rf'It is (?:unknown|uncertain|disputed) {_WH_ENUMERATION} '
-        rf'{_SAFE_UNCERTAINTY_TAIL}{_TERMINAL_PUNCTUATION}',
+        rf'It is (?:unknown|uncertain|disputed) '
+        rf'{_EVENT_UNCERTAINTY_DETAIL}\.',
         rf'(?:The text|Scripture|The surviving texts|The evidence) '
         rf'(?:does not|do not) '
         rf'(?:say|state|identify|establish|tell us|determine) '
-        rf'{_WH_ENUMERATION} {_SAFE_UNCERTAINTY_TAIL}'
-        rf'{_TERMINAL_PUNCTUATION}',
-        rf'(?:There is|There are) (?:insufficient|no|limited) evidence'
-        rf'(?: to {_SAFE_UNCERTAINTY_TAIL})?{_TERMINAL_PUNCTUATION}',
-        rf'No known evidence(?: {_SAFE_UNCERTAINTY_TAIL})?'
-        rf'{_TERMINAL_PUNCTUATION}',
-        rf'This is (?:unknown|uncertain|disputed){_TERMINAL_PUNCTUATION}',
-        r'The (?:date|chronology|identity|location|authorship|meaning|timing|'
-        r'duration) (?:is|remains) (?:unknown|uncertain|disputed)\.',
-        rf'It cannot be determined {_WH_ENUMERATION} '
-        rf'{_SAFE_UNCERTAINTY_TAIL}{_TERMINAL_PUNCTUATION}',
-        rf'Evidence is insufficient(?: to {_SAFE_UNCERTAINTY_TAIL})?'
-        rf'{_TERMINAL_PUNCTUATION}',
+        rf'{_SOURCE_UNCERTAINTY_DETAIL}\.',
+        rf'There is insufficient evidence to determine '
+        rf'{_RESEARCH_LABEL_OBJECT}\.',
+        rf'No known evidence (?:identifies|establishes|determines) '
+        rf'{_RESEARCH_LABEL_OBJECT}\.',
+        rf'The {_RESEARCH_LABEL} '
+        rf'(?:is|remains) (?:unknown|uncertain|disputed)\.',
     )
 )
 
@@ -104,6 +99,7 @@ class ValidationWarning(BaseModel):
 
     code: str
     message: str
+    count: int = Field(default=1, ge=1, le=MAX_DOCUMENT_NODES)
 
 
 class ValidatedProviderDocument(BaseModel):
@@ -140,7 +136,11 @@ def parse_provider_json(content: str) -> dict[str, Any]:
         candidate = match.group('body')
 
     try:
-        parsed = json.loads(candidate, object_pairs_hook=_unique_object)
+        parsed = json.loads(
+            candidate,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
     except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise ResearchValidationError(_SAFE_INVALID_MESSAGE) from exc
     if not isinstance(parsed, dict):
@@ -156,6 +156,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise _DuplicateKeyError('duplicate provider JSON key')
         result[key] = value
     return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError('non-JSON numeric constant')
 
 
 def _preflight_document(document: Mapping[str, Any]) -> None:
@@ -192,6 +196,12 @@ def _append_warning(
     code: str,
     message: str,
 ) -> None:
+    for index, warning in enumerate(warnings):
+        if warning.code == code:
+            warnings[index] = warning.model_copy(
+                update={'count': warning.count + 1}
+            )
+            return
     if len(warnings) < MAX_VALIDATION_WARNINGS:
         warnings.append(_warning(code, message))
 
