@@ -79,6 +79,8 @@ _UNCERTAINTY_PATTERNS = tuple(
         rf'No known evidence(?: {_SAFE_UNCERTAINTY_TAIL})?'
         rf'{_TERMINAL_PUNCTUATION}',
         rf'This is (?:unknown|uncertain|disputed){_TERMINAL_PUNCTUATION}',
+        r'The (?:date|chronology|identity|location|authorship|meaning|timing|'
+        r'duration) (?:is|remains) (?:unknown|uncertain|disputed)\.',
         rf'It cannot be determined {_WH_ENUMERATION} '
         rf'{_SAFE_UNCERTAINTY_TAIL}{_TERMINAL_PUNCTUATION}',
         rf'Evidence is insufficient(?: to {_SAFE_UNCERTAINTY_TAIL})?'
