@@ -46,20 +46,24 @@ const researchResponse = {
 }
 
 async function mockResearchRoutes(page, { delayedQuery = false } = {}) {
+  const calls = { query: 0 }
   await page.route('**/api/v1/research/events**', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(eventsResponse),
   }))
   await page.route('**/api/v1/research/query', async (route) => {
+    calls.query += 1
     if (delayedQuery) await new Promise((resolve) => setTimeout(resolve, 5_000))
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(researchResponse) })
   })
+  return calls
 }
 
 async function openResearch(page) {
-  await mockResearchRoutes(page)
+  const calls = await mockResearchRoutes(page)
   await page.goto('/#aistudy')
   await expect(page.getByRole('heading', { level: 1, name: /Scripture Research AI/ })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Scripture research composer' })).toBeVisible()
+  return calls
 }
 
 for (const viewport of [
@@ -68,18 +72,49 @@ for (const viewport of [
 ]) {
   test(`${viewport.name} research workspace is readable, accessible, and overflow-free`, async ({ page }) => {
     await page.setViewportSize(viewport)
-    await openResearch(page)
+    const calls = await openResearch(page)
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+
+    await page.getByRole('button', { name: 'Eden to Abel' }).click()
+    await expect.poll(() => calls.query).toBe(1)
+    const workspace = page.locator('.research-workspace')
+    await expect(workspace).toBeVisible()
+    await expect(workspace.getByRole('heading', { name: researchResponse.query })).toBeVisible()
+    await expect(workspace.getByText('Grounded', { exact: true })).toBeVisible()
+
     const dimensions = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,
       content: document.documentElement.scrollWidth,
     }))
     expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport)
 
-    const smallestControl = await page.locator('.scripture-research-page button:visible').evaluateAll((buttons) => (
-      Math.min(...buttons.map((button) => button.getBoundingClientRect().height))
-    ))
-    expect(smallestControl).toBeGreaterThanOrEqual(44)
+    for (const control of [
+      page.getByRole('button', { name: /Ask/ }),
+      page.getByRole('button', { name: 'What Happened Between?' }),
+      workspace.getByRole('button', { name: 'Cite Genesis 3:22–24' }).first(),
+    ]) {
+      expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    }
+
+    if (viewport.name === 'mobile') {
+      const [mainBox, inspectorBox] = await Promise.all([
+        page.locator('.research-workspace__main').boundingBox(),
+        page.locator('.research-inspector').boundingBox(),
+      ])
+      expect(mainBox).not.toBeNull()
+      expect(inspectorBox).not.toBeNull()
+      expect(inspectorBox.y).toBeGreaterThanOrEqual(mainBox.y + mainBox.height)
+      await expect(page.locator('.research-trail')).toBeVisible()
+    }
+
+    const citationTrigger = workspace.getByRole('button', { name: 'Cite Genesis 3:22–24' }).first()
+    await citationTrigger.click()
+    const citationDialog = page.getByRole('dialog', { name: 'Genesis' })
+    await expect(citationDialog).toBeVisible()
+    await citationDialog.getByRole('button', { name: 'Close citation' }).click()
+    await expect(citationDialog).toBeHidden()
+    await expect(citationTrigger).toBeFocused()
+
     const pageSurface = await page.locator('.scripture-research-page').evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
       maxWidth: getComputedStyle(element).maxWidth,
@@ -94,7 +129,7 @@ for (const viewport of [
 
 test('reduced motion loading state has no continuously animated element', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await mockResearchRoutes(page, { delayedQuery: true })
+  const calls = await mockResearchRoutes(page, { delayedQuery: true })
   await page.goto('/#aistudy')
   await page.getByLabel('Research question').fill('What happened between Eden and Abel?')
   await page.getByRole('button', { name: /Ask/ }).click()
@@ -107,4 +142,6 @@ test('reduced motion loading state has no continuously animated element', async 
     })
   ))
   expect(continuouslyAnimated).toBe(false)
+  await expect.poll(() => calls.query).toBe(1)
+  await expect(page.locator('.research-workspace')).toBeVisible({ timeout: 10_000 })
 })
