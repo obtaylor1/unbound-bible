@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, event, inspect, select
+from alembic.script import ScriptDirectory
+from sqlalchemy import delete, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.application import create_application
@@ -639,3 +640,62 @@ def test_research_trail_migration_upgrade_downgrade_upgrade_cycle(
     command.upgrade(config, 'head')
     assert 'research_nodes' in inspect(application_engine).get_table_names()
     application_engine.dispose()
+
+
+def test_research_control_mode_migration_replaces_and_restores_constraint(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv('DATABASE_URL', raising=False)
+    database_url = f"sqlite:///{tmp_path / 'research-control-values.db'}"
+    config = _alembic_config(database_url)
+    scripts = ScriptDirectory.from_config(config)
+    assert [head.revision for head in scripts.get_revisions('heads')] == [
+        '0012_research_control_values'
+    ]
+
+    command.upgrade(config, '0011_research_trail')
+    from sqlalchemy import create_engine
+
+    engine = create_engine(database_url)
+
+    def insert_mode(mode: str, node_id: str) -> None:
+        with engine.begin() as connection:
+            connection.execute(text('''
+                INSERT INTO research_nodes (
+                    id, owner_id, question, mode, source_scopes, depth,
+                    response_snapshot
+                ) VALUES (
+                    :id, :owner_id, 'Question?', :mode, '["biblical-canon"]',
+                    'deep-research', '{}'
+                )
+            '''), {
+                'id': node_id,
+                'owner_id': '00000000000000000000000000000001',
+                'mode': mode,
+            })
+
+    insert_mode('timeline', '00000000000000000000000000000010')
+    with pytest.raises(IntegrityError):
+        insert_mode('explain-a-book', '00000000000000000000000000000011')
+
+    command.upgrade(config, '0012_research_control_values')
+    with engine.connect() as connection:
+        assert connection.execute(text('''
+            SELECT mode FROM research_nodes
+            WHERE id = '00000000000000000000000000000010'
+        ''')).scalar_one() == 'what-happened-between'
+    insert_mode('explain-a-book', '00000000000000000000000000000012')
+    with pytest.raises(IntegrityError):
+        insert_mode('timeline', '00000000000000000000000000000013')
+
+    command.downgrade(config, '0011_research_trail')
+    with engine.connect() as connection:
+        assert connection.execute(text('''
+            SELECT mode FROM research_nodes
+            WHERE id = '00000000000000000000000000000012'
+        ''')).scalar_one() == 'research-question'
+    insert_mode('timeline', '00000000000000000000000000000014')
+    with pytest.raises(IntegrityError):
+        insert_mode('explain-a-book', '00000000000000000000000000000015')
+    engine.dispose()

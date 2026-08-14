@@ -11,12 +11,12 @@ const DEPTH_DESCRIPTIONS = {
 }
 
 const EXAMPLES = [
-  ['Eden to Abel', 'What happened between Eden and Abel?'],
-  ['Explain Enoch', 'Explain Enoch and its place in biblical tradition'],
-  ['Malachi to Matthew', 'What happened between Malachi and Matthew?'],
-  ['Genesis 6 and Enoch', 'Compare the Genesis 6 account with 1 Enoch'],
-  ['Cush', 'Research Cush across Scripture and ancient sources'],
-  ["Ge'ez", "What can the Ge'ez language reveal about biblical texts?"],
+  { label: 'Eden to Abel', question: 'What happened between Eden and Abel?', mode: 'what-happened-between' },
+  { label: 'Explain Enoch', question: 'Explain Enoch and its place in biblical tradition', mode: 'explain-a-book' },
+  { label: 'Malachi to Matthew', question: 'What happened between Malachi and Matthew?', mode: 'what-happened-between' },
+  { label: 'Genesis 6 and Enoch', question: 'Compare the Genesis 6 account with 1 Enoch', mode: 'compare-accounts' },
+  { label: 'Cush', question: 'Research Cush across Scripture and ancient sources', mode: 'people-and-places' },
+  { label: "Ge'ez", question: "What can the Ge'ez language reveal about biblical texts?", mode: 'original-languages' },
 ]
 
 export default function ResearchComposer({
@@ -157,8 +157,21 @@ export default function ResearchComposer({
       )}
 
       <div className="research-composer__examples" aria-label="Research examples">
-        {EXAMPLES.map(([label, exampleQuestion]) => (
-          <button type="button" key={label} onClick={() => onExample?.(exampleQuestion)}>{label}</button>
+        {EXAMPLES.map((example) => (
+          <button
+            type="button"
+            key={example.label}
+            onClick={() => onExample?.(example.question, {
+              mode: example.mode ?? mode,
+              settings: {
+                ...settings,
+                sourceScopes: [...sourceScopes],
+                modeParameters: { ...(settings.modeParameters ?? {}) },
+              },
+            })}
+          >
+            {example.label}
+          </button>
         ))}
       </div>
     </section>

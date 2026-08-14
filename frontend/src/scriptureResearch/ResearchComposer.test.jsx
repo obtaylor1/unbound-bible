@@ -97,6 +97,8 @@ describe('ResearchComposer', () => {
     expect(onSubmit).not.toHaveBeenCalled()
     rerender(<ControlledComposer onSubmit={onSubmit} loading />)
     expect(screen.getByRole('button', { name: 'Ask' })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Research question' }), { key: 'Enter' })
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 
   it('offers the six compact examples without auto-running them', async () => {
@@ -108,7 +110,28 @@ describe('ResearchComposer', () => {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
     await user.click(screen.getByRole('button', { name: 'Explain Enoch' }))
-    expect(onExample).toHaveBeenCalledWith('Explain Enoch and its place in biblical tradition')
+    expect(onExample).toHaveBeenCalledWith(
+      'Explain Enoch and its place in biblical tradition',
+      {
+        mode: 'explain-a-book',
+        settings: {
+          sourceScopes: ['biblical-canon'],
+          depth: 'deep-research',
+          modeParameters: {},
+        },
+      },
+    )
+    const firstContext = onExample.mock.calls[0][1]
+    expect(firstContext.settings).not.toBe(DEFAULT_RESEARCH_SETTINGS)
+    expect(firstContext.settings.sourceScopes).not.toBe(DEFAULT_RESEARCH_SETTINGS.sourceScopes)
+    firstContext.settings.sourceScopes.push('commentary')
+    await user.click(screen.getByRole('button', { name: 'Cush' }))
+    expect(onExample.mock.calls[1][1]).toEqual({
+      mode: 'people-and-places',
+      settings: {
+        sourceScopes: ['biblical-canon'], depth: 'deep-research', modeParameters: {},
+      },
+    })
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
