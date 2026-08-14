@@ -113,25 +113,22 @@ describe('ResearchComposer', () => {
     expect(onExample).toHaveBeenCalledWith(
       'Explain Enoch and its place in biblical tradition',
       {
-        mode: 'explain-a-book',
-        settings: {
-          sourceScopes: ['biblical-canon'],
-          depth: 'deep-research',
-          modeParameters: {},
-        },
+        sourceScopes: ['biblical-canon'],
+        depth: 'deep-research',
+        modeParameters: {},
       },
+      'explain-a-book',
     )
-    const firstContext = onExample.mock.calls[0][1]
-    expect(firstContext.settings).not.toBe(DEFAULT_RESEARCH_SETTINGS)
-    expect(firstContext.settings.sourceScopes).not.toBe(DEFAULT_RESEARCH_SETTINGS.sourceScopes)
-    firstContext.settings.sourceScopes.push('commentary')
+    const firstSettings = onExample.mock.calls[0][1]
+    expect(firstSettings).not.toBe(DEFAULT_RESEARCH_SETTINGS)
+    expect(firstSettings.sourceScopes).not.toBe(DEFAULT_RESEARCH_SETTINGS.sourceScopes)
+    firstSettings.sourceScopes.push('commentary')
     await user.click(screen.getByRole('button', { name: 'Cush' }))
-    expect(onExample.mock.calls[1][1]).toEqual({
-      mode: 'people-and-places',
-      settings: {
-        sourceScopes: ['biblical-canon'], depth: 'deep-research', modeParameters: {},
-      },
-    })
+    expect(onExample.mock.calls[1]).toEqual([
+      'Research Cush across Scripture and ancient sources',
+      { sourceScopes: ['biblical-canon'], depth: 'deep-research', modeParameters: {} },
+      'people-and-places',
+    ])
     expect(onSubmit).not.toHaveBeenCalled()
   })
 

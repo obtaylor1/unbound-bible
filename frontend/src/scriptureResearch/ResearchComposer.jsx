@@ -161,14 +161,15 @@ export default function ResearchComposer({
           <button
             type="button"
             key={example.label}
-            onClick={() => onExample?.(example.question, {
-              mode: example.mode ?? mode,
-              settings: {
+            onClick={() => onExample?.(
+              example.question,
+              {
                 ...settings,
                 sourceScopes: [...sourceScopes],
                 modeParameters: { ...(settings.modeParameters ?? {}) },
               },
-            })}
+              example.mode ?? mode,
+            )}
           >
             {example.label}
           </button>
