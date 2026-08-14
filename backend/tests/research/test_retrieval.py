@@ -546,3 +546,16 @@ def test_missing_optional_metadata_fails_closed_for_nonwestern_scopes():
         )] == ['scripture:1']
 
     engine.dispose()
+
+
+@pytest.mark.parametrize('scope', [
+    SourceScope.APOCRYPHA,
+    SourceScope.FIRST_ENOCH,
+    SourceScope.JUBILEES,
+    SourceScope.ANCIENT_SOURCES,
+    SourceScope.COMMENTARY,
+])
+def test_unimplemented_source_scopes_fail_closed(research_session, scope):
+    assert retrieve_research_evidence(
+        research_session, 'creation', [scope], ResearchDepth.QUICK
+    ) == []

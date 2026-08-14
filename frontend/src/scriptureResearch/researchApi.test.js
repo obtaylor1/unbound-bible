@@ -103,11 +103,11 @@ describe('research model', () => {
     expect(SOURCE_SCOPES).toEqual([
       { value: 'biblical-canon', label: 'Biblical Canon' },
       { value: 'ethiopian-tradition', label: 'Ethiopian Tradition' },
-      { value: 'ancient-accounts', label: 'Ancient Accounts' },
-      { value: 'historical-sources', label: 'Historical Sources' },
-      { value: 'commentaries', label: 'Commentaries' },
-      { value: 'language-resources', label: 'Language Resources' },
-      { value: 'user-library', label: 'User Library' },
+      { value: 'apocrypha', label: 'Apocrypha' },
+      { value: '1-enoch', label: '1 Enoch' },
+      { value: 'jubilees', label: 'Jubilees' },
+      { value: 'ancient-sources', label: 'Ancient Sources' },
+      { value: 'commentary', label: 'Commentary' },
       { value: 'all-sources', label: 'All Sources' },
     ])
     expect(RESEARCH_DEPTHS).toEqual([
@@ -118,12 +118,11 @@ describe('research model', () => {
     ])
     expect(RESEARCH_MODES).toEqual([
       { value: 'what-happened-between', label: 'What Happened Between?' },
-      { value: 'research-question', label: 'Research Question' },
-      { value: 'topic-research', label: 'Topic Research' },
-      { value: 'person-study', label: 'Person Study' },
-      { value: 'place-study', label: 'Place Study' },
-      { value: 'timeline', label: 'Timeline' },
+      { value: 'explain-a-book', label: 'Explain a Book' },
+      { value: 'compare-accounts', label: 'Compare Accounts' },
       { value: 'people-and-places', label: 'People & Places' },
+      { value: 'original-languages', label: 'Original Languages' },
+      { value: 'genealogy', label: 'Genealogy' },
     ])
     expect(DEFAULT_RESEARCH_SETTINGS).toEqual({
       sourceScopes: ['biblical-canon'], depth: 'deep-research', modeParameters: {},
@@ -164,7 +163,7 @@ describe('research requests', () => {
       question: 'Compare it',
       sessionId: '9b913a39-d88c-413c-ac5e-f23372161289',
       parentNodeId: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
-      mode: 'timeline', sourceScopes: ['historical-sources'], depth: 'study',
+      mode: 'compare-accounts', sourceScopes: ['ancient-sources'], depth: 'study',
       modeParameters: { from: 'Eden' }, ignored: undefined,
     }
     const snapshot = structuredClone(input)
@@ -173,7 +172,7 @@ describe('research requests', () => {
       question: 'Compare it',
       session_id: '9b913a39-d88c-413c-ac5e-f23372161289',
       parent_node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
-      mode: 'timeline', source_scopes: ['historical-sources'], depth: 'study',
+      mode: 'compare-accounts', source_scopes: ['ancient-sources'], depth: 'study',
       mode_parameters: { from: 'Eden' },
     })
     expect(input).toEqual(snapshot)
@@ -186,8 +185,8 @@ describe('research requests', () => {
     expect(api.get).toHaveBeenCalledWith('/research/events?q=Cain%27s%20birth%20%26%20Eden', { signal })
 
     api.get.mockResolvedValue({
-      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'research-question', created_at: '2026-08-14T00:00:00Z', updated_at: null }],
-      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'timeline', created_at: null, updated_at: null },
+      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'explain-a-book', created_at: '2026-08-14T00:00:00Z', updated_at: null }],
+      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'compare-accounts', created_at: null, updated_at: null },
       children: [],
       children_truncated: false,
     })
@@ -388,9 +387,9 @@ describe('response normalization', () => {
 
   it('rejects malformed UUIDs throughout research trail snapshots', () => {
     const trail = {
-      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'research-question', created_at: null, updated_at: null }],
-      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'timeline', created_at: null, updated_at: null },
-      children: [{ id: 'c8d77469-b3ca-40ad-a15b-9c228cd00898', parent_node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', question: 'Next question', mode: 'timeline', created_at: null, updated_at: null }],
+      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'explain-a-book', created_at: null, updated_at: null }],
+      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'compare-accounts', created_at: null, updated_at: null },
+      children: [{ id: 'c8d77469-b3ca-40ad-a15b-9c228cd00898', parent_node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', question: 'Next question', mode: 'genealogy', created_at: null, updated_at: null }],
       children_truncated: false,
     }
     const badActive = structuredClone(trail)

@@ -12,11 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class SourceScope(StrEnum):
     BIBLICAL_CANON = 'biblical-canon'
     ETHIOPIAN_TRADITION = 'ethiopian-tradition'
-    ANCIENT_ACCOUNTS = 'ancient-accounts'
-    HISTORICAL_SOURCES = 'historical-sources'
-    COMMENTARIES = 'commentaries'
-    LANGUAGE_RESOURCES = 'language-resources'
-    USER_LIBRARY = 'user-library'
+    APOCRYPHA = 'apocrypha'
+    FIRST_ENOCH = '1-enoch'
+    JUBILEES = 'jubilees'
+    ANCIENT_SOURCES = 'ancient-sources'
+    COMMENTARY = 'commentary'
     ALL_SOURCES = 'all-sources'
 
 
@@ -29,12 +29,11 @@ class ResearchDepth(StrEnum):
 
 class ResearchMode(StrEnum):
     BETWEEN = 'what-happened-between'
-    QUESTION = 'research-question'
-    TOPIC = 'topic-research'
-    PERSON = 'person-study'
-    PLACE = 'place-study'
-    TIMELINE = 'timeline'
+    EXPLAIN_A_BOOK = 'explain-a-book'
+    COMPARE_ACCOUNTS = 'compare-accounts'
     PEOPLE_AND_PLACES = 'people-and-places'
+    ORIGINAL_LANGUAGES = 'original-languages'
+    GENEALOGY = 'genealogy'
 
 
 class ClaimClassification(StrEnum):

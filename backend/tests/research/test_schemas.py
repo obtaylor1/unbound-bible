@@ -135,11 +135,27 @@ def test_research_response_rejects_unknown_source_ids(referencing_field):
 
 
 def test_planned_enum_values_serialize_as_api_strings():
-    assert SourceScope.ETHIOPIAN_TRADITION.value == 'ethiopian-tradition'
+    assert [scope.value for scope in SourceScope] == [
+        'biblical-canon',
+        'ethiopian-tradition',
+        'apocrypha',
+        '1-enoch',
+        'jubilees',
+        'ancient-sources',
+        'commentary',
+        'all-sources',
+    ]
     assert [depth.value for depth in ResearchDepth] == [
         'quick', 'study', 'deep-research', 'scholar'
     ]
-    assert ResearchMode.BETWEEN.value == 'what-happened-between'
+    assert [mode.value for mode in ResearchMode] == [
+        'what-happened-between',
+        'explain-a-book',
+        'compare-accounts',
+        'people-and-places',
+        'original-languages',
+        'genealogy',
+    ]
     assert set(classification.value for classification in ClaimClassification) == {
         'canonical-scripture',
         'ethiopian-canon',

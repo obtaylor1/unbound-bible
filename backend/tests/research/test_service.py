@@ -79,7 +79,7 @@ def request(**overrides):
             SourceScope.ETHIOPIAN_TRADITION,
         ],
         'depth': ResearchDepth.STUDY,
-        'mode': ResearchMode.TIMELINE,
+        'mode': ResearchMode.GENEALOGY,
         'mode_parameters': {'from': 'flood', 'to': 'babel'},
     }
     values.update(overrides)
@@ -288,7 +288,7 @@ async def test_prompt_is_compact_strict_and_contains_request_settings_but_no_ai_
     assert 'biblical-canon' in user_message
     assert 'ethiopian-tradition' in user_message
     assert 'study' in user_message
-    assert 'timeline' in user_message
+    assert 'genealogy' in user_message
     assert 'God blessed Noah and his sons.' in user_message
     assert 'ResearchEvidence(' not in user_message
     assert 'prior answer' not in user_message.lower()

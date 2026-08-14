@@ -45,7 +45,7 @@ def _request(
         session_id=session_id,
         parent_node_id=parent_node_id,
         mode='what-happened-between',
-        source_scopes=['biblical-canon', 'historical-sources'],
+        source_scopes=['biblical-canon', 'ancient-sources'],
         depth='deep-research',
     )
 
@@ -54,7 +54,7 @@ def _snapshot(question: str) -> dict[str, object]:
     return {
         'query': question,
         'settings': {
-            'source_scopes': ['biblical-canon', 'historical-sources'],
+            'source_scopes': ['biblical-canon', 'ancient-sources'],
             'depth': 'deep-research',
             'mode_parameters': {'from': 'Eden', 'to': 'Abel'},
         },
@@ -174,7 +174,7 @@ def test_authenticated_owner_creates_root_and_same_study_child_with_json_roundtr
 
         assert stored_root is not None
         assert stored_root.response_snapshot == original_snapshot
-        assert stored_root.source_scopes == ['biblical-canon', 'historical-sources']
+        assert stored_root.source_scopes == ['biblical-canon', 'ancient-sources']
         assert stored_root.mode == 'what-happened-between'
         assert stored_root.depth == 'deep-research'
         assert stored_child is not None
@@ -498,7 +498,7 @@ def test_trail_snapshot_limits_children_in_database_and_reports_truncation(
                 owner_id=owner.id,
                 parent_id=root.id,
                 question=f'Child {index:03}',
-                mode='research-question',
+                mode='explain-a-book',
                 source_scopes=['biblical-canon'],
                 depth='quick',
                 response_snapshot=_snapshot(f'Child {index:03}'),
@@ -549,7 +549,7 @@ def test_trail_snapshot_rejects_overlong_ancestry_with_bounded_queries(test_sett
                 owner_id=owner.id,
                 parent_id=node_ids[index - 1] if index else None,
                 question=f'Node {index}',
-                mode='research-question',
+                mode='explain-a-book',
                 source_scopes=['biblical-canon'],
                 depth='quick',
                 response_snapshot=_snapshot(f'Node {index}'),

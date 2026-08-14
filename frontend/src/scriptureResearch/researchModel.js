@@ -8,11 +8,11 @@ function deepFreeze(value) {
 export const SOURCE_SCOPES = deepFreeze([
   { value: 'biblical-canon', label: 'Biblical Canon' },
   { value: 'ethiopian-tradition', label: 'Ethiopian Tradition' },
-  { value: 'ancient-accounts', label: 'Ancient Accounts' },
-  { value: 'historical-sources', label: 'Historical Sources' },
-  { value: 'commentaries', label: 'Commentaries' },
-  { value: 'language-resources', label: 'Language Resources' },
-  { value: 'user-library', label: 'User Library' },
+  { value: 'apocrypha', label: 'Apocrypha' },
+  { value: '1-enoch', label: '1 Enoch' },
+  { value: 'jubilees', label: 'Jubilees' },
+  { value: 'ancient-sources', label: 'Ancient Sources' },
+  { value: 'commentary', label: 'Commentary' },
   { value: 'all-sources', label: 'All Sources' },
 ])
 
@@ -25,12 +25,11 @@ export const RESEARCH_DEPTHS = deepFreeze([
 
 export const RESEARCH_MODES = deepFreeze([
   { value: 'what-happened-between', label: 'What Happened Between?' },
-  { value: 'research-question', label: 'Research Question' },
-  { value: 'topic-research', label: 'Topic Research' },
-  { value: 'person-study', label: 'Person Study' },
-  { value: 'place-study', label: 'Place Study' },
-  { value: 'timeline', label: 'Timeline' },
+  { value: 'explain-a-book', label: 'Explain a Book' },
+  { value: 'compare-accounts', label: 'Compare Accounts' },
   { value: 'people-and-places', label: 'People & Places' },
+  { value: 'original-languages', label: 'Original Languages' },
+  { value: 'genealogy', label: 'Genealogy' },
 ])
 
 export const DEFAULT_RESEARCH_MODE = 'what-happened-between'
