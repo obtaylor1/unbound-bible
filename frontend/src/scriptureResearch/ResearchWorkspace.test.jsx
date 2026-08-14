@@ -59,6 +59,12 @@ beforeAll(() => {
 })
 
 describe('ResearchWorkspace', () => {
+  it('does not create a nested main landmark and labels its result region', () => {
+    render(<main><ResearchWorkspace response={edenResponse()} /></main>)
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getByRole('region', { name: 'What happened between Eden and Abel?' })).toBeInTheDocument()
+  })
+
   it('renders grounded claim sections and omits unsupported ornamental sections and narratives', () => {
     const { container } = render(<ResearchWorkspace response={edenResponse()} />)
     expect(screen.getByRole('heading', { name: 'Summary' })).toBeInTheDocument()
@@ -97,6 +103,39 @@ describe('ResearchWorkspace', () => {
     expect(onClose).toHaveBeenCalledOnce()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(citations[0]).toHaveFocus()
+  })
+
+  it('provides a visible trapped-focus dialog fallback when showModal is unavailable', async () => {
+    const nativeShowModal = HTMLDialogElement.prototype.showModal
+    const nativeClose = HTMLDialogElement.prototype.close
+    HTMLDialogElement.prototype.showModal = undefined
+    HTMLDialogElement.prototype.close = undefined
+    try {
+      const user = userEvent.setup()
+      const onClose = vi.fn()
+      render(<ResearchWorkspace response={edenResponse()} onCitationClose={onClose} />)
+      const trigger = screen.getAllByRole('button', { name: /Cite Genesis 3:23–4:2/i })[0]
+      await user.click(trigger)
+      const dialog = screen.getByRole('dialog', { name: 'Genesis' })
+      expect(dialog.tagName).toBe('DIV')
+      expect(dialog).toHaveAttribute('aria-modal', 'true')
+      const close = within(dialog).getByRole('button', { name: 'Close citation' })
+      const open = within(dialog).getByRole('button', { name: 'Open Full Text' })
+      expect(close).toHaveFocus()
+
+      fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+      expect(open).toHaveFocus()
+      fireEvent.keyDown(open, { key: 'Tab' })
+      expect(close).toHaveFocus()
+
+      fireEvent.keyDown(dialog, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledOnce()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(trigger).toHaveFocus()
+    } finally {
+      HTMLDialogElement.prototype.showModal = nativeShowModal
+      HTMLDialogElement.prototype.close = nativeClose
+    }
   })
 
   it('only renders citation controls backed by returned source records', () => {

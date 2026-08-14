@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import CitationDrawer from './CitationDrawer'
 import ResearchInspector from './ResearchInspector'
 import ResearchTimeline from './ResearchTimeline'
@@ -63,6 +63,7 @@ export default function ResearchWorkspace({
 }) {
   const [selectedSource, setSelectedSource] = useState(null)
   const citationTriggerRef = useRef(null)
+  const workspaceTitleId = useId()
   const sourceLookup = useMemo(() => new Map(response.sources.map((source) => [source.id, source])), [response.sources])
 
   const openCitation = (source, trigger) => {
@@ -78,13 +79,13 @@ export default function ResearchWorkspace({
   return (
     <div className="research-workspace">
       <header className="research-workspace__header">
-        <p className="research-workspace__query">{response.query}</p>
+        <h2 id={workspaceTitleId} className="research-workspace__query">{response.query}</h2>
         <p className={`research-workspace__status research-workspace__status--${response.groundingStatus}`}>
           {statusLabel(response.groundingStatus)}
         </p>
         <p className="research-workspace__provenance">Provenance: {response.provider} · {response.model}</p>
       </header>
-      <main className="research-workspace__main">
+      <section className="research-workspace__main" aria-labelledby={workspaceTitleId}>
         <ClaimSection section={response.summary} fallbackTitle="Summary" sourceLookup={sourceLookup} onCitation={openCitation} always />
         <ResearchTimeline events={response.timeline} sourceLookup={sourceLookup} onCitation={openCitation} onEventResearch={onEventResearch} />
         <ClaimSection section={response.canonicalAccount} fallbackTitle="Canonical Account" sourceLookup={sourceLookup} onCitation={openCitation} />
@@ -113,7 +114,7 @@ export default function ResearchWorkspace({
             </>}
           </div>
         )}
-      </main>
+      </section>
       <ResearchInspector
         sources={response.sources} people={response.people} places={response.places}
         continueResearch={continueResearch} bookExplainer={bookExplainer}
