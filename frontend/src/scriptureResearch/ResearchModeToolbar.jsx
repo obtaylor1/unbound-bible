@@ -2,7 +2,7 @@ import { RESEARCH_MODES } from './researchModel'
 
 export default function ResearchModeToolbar({ mode, onModeChange }) {
   return (
-    <div className="research-mode-toolbar" role="toolbar" aria-label="Research mode">
+    <div className="research-mode-toolbar" role="group" aria-label="Research modes">
       {RESEARCH_MODES.map((option) => (
         <button
           className="research-mode-toolbar__button"

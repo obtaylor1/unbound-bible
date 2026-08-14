@@ -352,14 +352,23 @@ export function normalizeResearchTrail(value) {
 
 function normalizeResearchEvent(value, path) {
   object(value, path)
+  const id = text(value.id, `${path}.id`, { max: 500 })
+  const title = text(value.title, `${path}.title`, { max: 1_000 })
+  const orderingGroup = text(field(value, 'ordering_group', 'orderingGroup'), `${path}.ordering_group`, { max: 500 })
+  if (!orderingGroup.trim()) throw new TypeError(`${path}.ordering_group must not be blank`)
+  if (!Number.isSafeInteger(value.ordinal) || value.ordinal <= 0) {
+    throw new TypeError(`${path}.ordinal must be a positive integer`)
+  }
   return {
-    id: text(value.id, `${path}.id`, { max: 500 }),
-    title: text(value.title, `${path}.title`, { max: 1_000 }),
+    id,
+    title,
     description: text(value.description, `${path}.description`),
     reference: text(value.reference, `${path}.reference`, { max: 2_000 }),
     sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`, { max: MAX_SOURCES }),
     people: stringArray(value.people, `${path}.people`, { itemMax: 1_000 }),
     places: stringArray(value.places, `${path}.places`, { itemMax: 1_000 }),
+    orderingGroup,
+    ordinal: value.ordinal,
   }
 }
 

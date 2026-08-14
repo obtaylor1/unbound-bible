@@ -126,9 +126,11 @@ def test_events_returns_only_resolved_safe_fields_and_maps_errors(
         event = response.json()['events'][0]
         assert set(event) == {
             'id', 'title', 'description', 'reference', 'source_ids', 'people',
-            'places',
+            'places', 'ordering_group', 'ordinal',
         }
         assert event['source_ids'] == ['scripture:1']
+        assert event['ordering_group'] == 'eden-sequence'
+        assert event['ordinal'] == 3
         assert client.get(
             '/api/v1/research/events', params={'q': 'x' * 257}
         ).status_code == 422

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -659,42 +660,110 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
 
     engine = create_engine(database_url)
 
-    def insert_mode(mode: str, node_id: str) -> None:
+    def insert_mode(
+        mode: str,
+        node_id: str,
+        source_scopes: list[str] | None = None,
+        response_snapshot: dict[str, object] | None = None,
+    ) -> None:
+        scopes = source_scopes or ['biblical-canon']
+        snapshot = response_snapshot or {}
         with engine.begin() as connection:
             connection.execute(text('''
                 INSERT INTO research_nodes (
                     id, owner_id, question, mode, source_scopes, depth,
                     response_snapshot
                 ) VALUES (
-                    :id, :owner_id, 'Question?', :mode, '["biblical-canon"]',
-                    'deep-research', '{}'
+                    :id, :owner_id, 'Question?', :mode, :source_scopes,
+                    'deep-research', :response_snapshot
                 )
             '''), {
                 'id': node_id,
                 'owner_id': '00000000000000000000000000000001',
                 'mode': mode,
+                'source_scopes': json.dumps(scopes),
+                'response_snapshot': json.dumps(snapshot),
             })
 
-    insert_mode('timeline', '00000000000000000000000000000010')
+    every_legacy_scope = [
+        'biblical-canon', 'ethiopian-tradition', 'ancient-accounts',
+        'historical-sources', 'commentaries', 'language-resources',
+        'user-library', 'all-sources', 'ancient-accounts',
+    ]
+    insert_mode(
+        'timeline',
+        '00000000000000000000000000000010',
+        every_legacy_scope,
+        {
+            'settings': {'source_scopes': every_legacy_scope},
+            'summary': {'narrative': 'Do not rewrite ancient-accounts prose.'},
+        },
+    )
+    insert_mode(
+        'research-question',
+        '00000000000000000000000000000016',
+        [
+            'biblical-canon', 'ancient-accounts', 'historical-sources',
+            'commentaries', 'language-resources', 'user-library',
+            'ethiopian-tradition', 'ancient-accounts',
+        ],
+        {'settings': {'source_scopes': ['ancient-accounts', 'commentaries']}},
+    )
     with pytest.raises(IntegrityError):
         insert_mode('explain-a-book', '00000000000000000000000000000011')
 
     command.upgrade(config, '0012_research_control_values')
     with engine.connect() as connection:
-        assert connection.execute(text('''
-            SELECT mode FROM research_nodes
+        upgraded = connection.execute(text('''
+            SELECT mode, source_scopes, response_snapshot FROM research_nodes
             WHERE id = '00000000000000000000000000000010'
-        ''')).scalar_one() == 'what-happened-between'
-    insert_mode('explain-a-book', '00000000000000000000000000000012')
+        ''')).mappings().one()
+        assert upgraded['mode'] == 'what-happened-between'
+        assert json.loads(upgraded['source_scopes']) == ['all-sources']
+        upgraded_snapshot = json.loads(upgraded['response_snapshot'])
+        assert upgraded_snapshot['settings']['source_scopes'] == ['all-sources']
+        assert upgraded_snapshot['summary']['narrative'] == (
+            'Do not rewrite ancient-accounts prose.'
+        )
+        mapped = connection.execute(text('''
+            SELECT source_scopes, response_snapshot FROM research_nodes
+            WHERE id = '00000000000000000000000000000016'
+        ''')).mappings().one()
+        assert json.loads(mapped['source_scopes']) == [
+            'biblical-canon', 'ancient-sources', 'commentary',
+            'ethiopian-tradition',
+        ]
+        assert json.loads(mapped['response_snapshot'])['settings']['source_scopes'] == [
+            'ancient-sources', 'commentary',
+        ]
+    new_scopes = [
+        'apocrypha', '1-enoch', 'jubilees', 'ancient-sources', 'commentary',
+        'biblical-canon', 'ancient-sources',
+    ]
+    insert_mode(
+        'explain-a-book',
+        '00000000000000000000000000000012',
+        new_scopes,
+        {'settings': {'source_scopes': new_scopes}, 'unrelated': ['commentary']},
+    )
     with pytest.raises(IntegrityError):
         insert_mode('timeline', '00000000000000000000000000000013')
 
     command.downgrade(config, '0011_research_trail')
     with engine.connect() as connection:
-        assert connection.execute(text('''
-            SELECT mode FROM research_nodes
+        downgraded = connection.execute(text('''
+            SELECT mode, source_scopes, response_snapshot FROM research_nodes
             WHERE id = '00000000000000000000000000000012'
-        ''')).scalar_one() == 'research-question'
+        ''')).mappings().one()
+        assert downgraded['mode'] == 'research-question'
+        assert json.loads(downgraded['source_scopes']) == [
+            'ancient-accounts', 'commentaries', 'biblical-canon',
+        ]
+        downgraded_snapshot = json.loads(downgraded['response_snapshot'])
+        assert downgraded_snapshot['settings']['source_scopes'] == [
+            'ancient-accounts', 'commentaries', 'biblical-canon',
+        ]
+        assert downgraded_snapshot['unrelated'] == ['commentary']
     insert_mode('timeline', '00000000000000000000000000000014')
     with pytest.raises(IntegrityError):
         insert_mode('explain-a-book', '00000000000000000000000000000015')

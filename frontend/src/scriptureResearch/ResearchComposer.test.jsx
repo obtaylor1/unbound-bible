@@ -35,9 +35,9 @@ function ControlledComposer({
 }
 
 const events = [
-  { id: 'eden', title: 'Life in Eden' },
-  { id: 'expulsion', title: 'Expulsion from Eden' },
-  { id: 'abel', title: 'Abel is born' },
+  { id: 'eden', title: 'Life in Eden', orderingGroup: 'eden-sequence', ordinal: 1 },
+  { id: 'expulsion', title: 'Expulsion from Eden', orderingGroup: 'eden-sequence', ordinal: 2 },
+  { id: 'abel', title: 'Abel is born', orderingGroup: 'eden-sequence', ordinal: 3 },
 ]
 
 describe('ResearchComposer', () => {
@@ -156,13 +156,20 @@ describe('ResearchComposer', () => {
 })
 
 describe('ResearchModeToolbar', () => {
-  it('uses exactly six non-navigating toolbar buttons and only reports selection', async () => {
+  it('uses exactly six natively tabbable group buttons and only reports selection', async () => {
     const user = userEvent.setup()
     const onModeChange = vi.fn()
     const { container } = render(<ResearchModeToolbar mode="what-happened-between" onModeChange={onModeChange} />)
-    expect(screen.getByRole('toolbar', { name: 'Research mode' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Research modes' })).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button')).toHaveLength(6)
-    expect(screen.getByRole('button', { name: 'What Happened Between?' })).toHaveAttribute('aria-pressed', 'true')
+    const first = screen.getByRole('button', { name: 'What Happened Between?' })
+    const second = screen.getByRole('button', { name: 'Explain a Book' })
+    expect(first).toHaveAttribute('aria-pressed', 'true')
+    await user.tab()
+    expect(first).toHaveFocus()
+    await user.tab()
+    expect(second).toHaveFocus()
     await user.click(screen.getByRole('button', { name: 'Explain a Book' }))
     expect(onModeChange).toHaveBeenCalledWith('explain-a-book')
     expect(container.querySelector('a')).toBeNull()
@@ -208,6 +215,27 @@ describe('BetweenEventsComposer', () => {
       question: 'What happened between Life in Eden and Abel is born?',
       modeParameters: { from_event_id: 'eden', to_event_id: 'abel' },
     })
+  })
+
+  it('rejects cross-group and incomplete event ranges', async () => {
+    const user = userEvent.setup()
+    const crossGroup = [
+      events[0],
+      { id: 'other', title: 'Other sequence', orderingGroup: 'other-sequence', ordinal: 2 },
+    ]
+    const searchEvents = vi.fn().mockResolvedValue({ events: crossGroup })
+    const { rerender } = render(<BetweenEventsComposer question="" onSubmit={vi.fn()} searchEvents={searchEvents} />)
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'From' }), 'eden')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'other')
+    expect(screen.getByRole('button', { name: 'Build Timeline' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/same event sequence/i)
+
+    const gapSearch = vi.fn().mockResolvedValue({ events: [events[0], events[2]] })
+    rerender(<BetweenEventsComposer question="" onSubmit={vi.fn()} searchEvents={gapSearch} />)
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'From' }), 'eden')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'abel')
+    expect(screen.getByRole('button', { name: 'Build Timeline' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/complete verified interval/i)
   })
 
   it('reports empty and failed catalogs', async () => {

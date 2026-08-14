@@ -164,6 +164,8 @@ def _event_payload(event: EventRecord) -> dict[str, Any]:
         'source_ids': list(event.source_ids),
         'people': list(event.people),
         'places': list(event.places),
+        'ordering_group': event.ordering_group,
+        'ordinal': event.ordinal,
     }
 
 

@@ -51,17 +51,32 @@ export default function BetweenEventsComposer({
   const fromIndex = events.findIndex((event) => event.id === fromId)
   const toIndex = events.findIndex((event) => event.id === toId)
   const bothSelected = fromIndex >= 0 && toIndex >= 0
-  const sameEvent = bothSelected && fromIndex === toIndex
-  const reversed = bothSelected && fromIndex > toIndex
-  const valid = bothSelected && fromIndex < toIndex
+  const from = bothSelected ? events[fromIndex] : null
+  const to = bothSelected ? events[toIndex] : null
+  const sameEvent = bothSelected && from.id === to.id
+  const sameGroup = bothSelected && from.orderingGroup === to.orderingGroup
+  const reversed = bothSelected && sameGroup && from.ordinal > to.ordinal
+  const availableOrdinals = new Set(
+    sameGroup
+      ? events.filter((event) => event.orderingGroup === from.orderingGroup).map((event) => event.ordinal)
+      : [],
+  )
+  const intervalLength = bothSelected && sameGroup ? to.ordinal - from.ordinal + 1 : 0
+  const completeInterval = bothSelected && sameGroup && !reversed
+    && intervalLength <= events.length
+    && Array.from(
+      { length: intervalLength },
+      (_value, index) => from.ordinal + index,
+    ).every((ordinal) => availableOrdinals.has(ordinal))
+  const valid = bothSelected && !sameEvent && sameGroup && !reversed && completeInterval
   let validationMessage = ''
   if (sameEvent) validationMessage = 'Choose two different events.'
-  if (reversed) validationMessage = 'The From event must come before the To event.'
+  else if (bothSelected && !sameGroup) validationMessage = 'Choose events from the same event sequence.'
+  else if (reversed) validationMessage = 'The From event must come before the To event.'
+  else if (bothSelected && !completeInterval) validationMessage = 'The complete verified interval is not available.'
 
   const buildTimeline = () => {
     if (!valid || submitting) return
-    const from = events[fromIndex]
-    const to = events[toIndex]
     onSubmit({
       question: question.trim() || `What happened between ${from.title} and ${to.title}?`,
       modeParameters: { from_event_id: from.id, to_event_id: to.id },

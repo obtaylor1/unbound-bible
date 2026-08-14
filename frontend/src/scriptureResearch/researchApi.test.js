@@ -211,6 +211,8 @@ describe('research requests', () => {
         source_ids: ['genesis-2'],
         people: ['adam', 'eve'],
         places: ['garden-of-eden'],
+        ordering_group: 'eden-sequence',
+        ordinal: 1,
       }],
     })
 
@@ -224,6 +226,8 @@ describe('research requests', () => {
       sourceIds: ['genesis-2'],
       people: ['adam', 'eve'],
       places: ['garden-of-eden'],
+      orderingGroup: 'eden-sequence',
+      ordinal: 1,
     }] })
     expect(Object.isFrozen(result)).toBe(true)
     expect(Object.isFrozen(result.events[0].sourceIds)).toBe(true)
@@ -235,14 +239,17 @@ describe('research requests', () => {
     expect(() => normalizeResearchEvents({
       events: [{
         id: 'eden', title: 'Eden', description: 'Description', reference: 'Genesis 2',
-        source_ids: ['same', 'same'], people: [], places: [],
+        source_ids: ['same', 'same'], people: [], places: [], ordering_group: 'eden-sequence', ordinal: 1,
       }],
     })).toThrow(/duplicate source ID/i)
     const event = {
       id: 'eden', title: 'Eden', description: 'Description', reference: 'Genesis 2',
-      source_ids: ['genesis-2'], people: [], places: [],
+      source_ids: ['genesis-2'], people: [], places: [], ordering_group: 'eden-sequence', ordinal: 1,
     }
     expect(() => normalizeResearchEvents({ events: [event, { ...event }] })).toThrow(/duplicate event ID/i)
+    expect(() => normalizeResearchEvents({ events: [{ ...event, ordering_group: '   ' }] })).toThrow(/ordering_group/i)
+    expect(() => normalizeResearchEvents({ events: [{ ...event, ordinal: 0 }] })).toThrow(/ordinal/i)
+    expect(() => normalizeResearchEvents({ events: [{ ...event, ordinal: 1.5 }] })).toThrow(/ordinal/i)
   })
 
   it.each([
