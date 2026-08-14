@@ -4,7 +4,12 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.research.retrieval import ResearchEvidence, retrieve_research_evidence
+from app.research import retrieval as research_retrieval
+from app.research.event_catalog import EventRecord, resolve_between_events
+from app.research.retrieval import (
+    ResearchEvidence,
+    retrieve_research_evidence,
+)
 from app.research.schemas import ResearchDepth, SourceScope
 
 
@@ -104,6 +109,30 @@ def add_ethiopian_edition(
     session.commit()
 
 
+def insert_eden_to_abel_verses(session):
+    passages = (
+        (2, range(8, 26)),
+        (3, range(22, 25)),
+        (4, range(1, 6)),
+        (4, range(8, 9)),
+    )
+    rows = []
+    row_id = 1
+    for chapter, verses in passages:
+        for verse in verses:
+            rows.append({
+                'id': row_id,
+                'book': 'Genesis',
+                'chapter': chapter,
+                'verse': verse,
+                'text': f'KJV Genesis {chapter}:{verse}',
+                'translation': 'KJV',
+            })
+            row_id += 1
+    insert_verses(session, rows)
+    return rows
+
+
 def test_research_evidence_is_immutable():
     evidence = ResearchEvidence(
         id='scripture:1',
@@ -116,6 +145,102 @@ def test_research_evidence_is_immutable():
 
     with pytest.raises(FrozenInstanceError):
         evidence.score = 1.0
+
+
+def test_event_range_retrieval_uses_exact_catalog_ids_in_reviewed_order(
+    research_session,
+):
+    rows = insert_eden_to_abel_verses(research_session)
+    insert_verses(research_session, [
+        {
+            'id': 100,
+            'book': 'Luke',
+            'chapter': 3,
+            'verse': 38,
+            'text': 'Adam lexical distraction',
+            'translation': 'KJV',
+        },
+        {
+            'id': 101,
+            'book': '1 Chronicles',
+            'chapter': 1,
+            'verse': 1,
+            'text': 'Adam lexical distraction',
+            'translation': 'KJV',
+        },
+        {
+            'id': 102,
+            'book': '1 Enoch',
+            'chapter': 1,
+            'verse': 1,
+            'text': 'unrelated ancient source',
+            'translation': 'EOTC-COMPOSITE-EN',
+        },
+    ])
+    add_ethiopian_edition(research_session)
+    events = resolve_between_events(research_session, 'eden', 'abel-killed')
+
+    evidence = research_retrieval.retrieve_event_range_evidence(
+        research_session,
+        events,
+        [
+            SourceScope.BIBLICAL_CANON,
+            SourceScope.ETHIOPIAN_TRADITION,
+            SourceScope.ANCIENT_SOURCES,
+        ],
+    )
+
+    assert [item.id for item in evidence] == [
+        f"scripture:{row['id']}" for row in rows
+    ]
+    assert len(evidence) == 27
+    assert {item.source_type for item in evidence} == {'canonical-scripture'}
+    assert all(item.translation == 'KJV' for item in evidence)
+
+
+def test_event_range_retrieval_keeps_32_and_fails_closed_outside_scope(
+    research_session,
+):
+    insert_verses(research_session, [
+        {
+            'id': row_id,
+            'book': 'Genesis',
+            'chapter': 10,
+            'verse': row_id,
+            'text': f'catalog row {row_id}',
+            'translation': 'KJV',
+        }
+        for row_id in range(1, 41)
+    ])
+    event = EventRecord(
+        id='bounded-fixture',
+        title='Bounded fixture',
+        description='A synthetic resolved range for the hard-limit contract.',
+        aliases=(),
+        book='Genesis',
+        chapter=10,
+        verse_start=1,
+        verse_end=40,
+        reference='Genesis 10:1-40',
+        people=(),
+        places=(),
+        ordering_group='bounded-fixture',
+        ordinal=1,
+        source_ids=tuple(f'scripture:{row_id}' for row_id in range(1, 41)),
+        translation='KJV',
+    )
+
+    canonical = research_retrieval.retrieve_event_range_evidence(
+        research_session, [event], [SourceScope.BIBLICAL_CANON]
+    )
+    out_of_scope = research_retrieval.retrieve_event_range_evidence(
+        research_session, [event], [SourceScope.ANCIENT_SOURCES]
+    )
+
+    assert [item.id for item in canonical] == [
+        f'scripture:{row_id}' for row_id in range(1, 33)
+    ]
+    assert out_of_scope == []
 
 
 def test_biblical_canon_excludes_ethiopian_ancient_and_commentary_rows(research_session):

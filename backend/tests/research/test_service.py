@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.ai.contracts import ChatResult, ProviderError
+from app.research.event_catalog import EventCatalogError, EventRecord
 from app.research.retrieval import ResearchEvidence
 from app.research.schemas import (
     ClaimClassification,
@@ -104,6 +105,32 @@ def evidence():
     ]
 
 
+def between_event():
+    return EventRecord(
+        id='eden', title='Life in Eden', description='Life in Eden.', aliases=(),
+        book='Genesis', chapter=2, verse_start=8, verse_end=25,
+        reference='Genesis 2:8-25', people=('adam', 'eve'),
+        places=('garden-of-eden',), ordering_group='eden-sequence', ordinal=1,
+        source_ids=tuple(f'scripture:{index}' for index in range(1, 28)),
+        translation='KJV',
+    )
+
+
+def between_evidence():
+    return [
+        ResearchEvidence(
+            id=f'scripture:{index}',
+            title=f'KJV — Genesis 2:{index}',
+            reference=f'Genesis 2:{index}',
+            text=f'Verified event verse {index}.',
+            source_type='canonical-scripture',
+            tradition='Protestant',
+            translation='KJV',
+        )
+        for index in range(1, 28)
+    ]
+
+
 def provider_document(*, claims=None, **overrides):
     value = {
         'summary': {
@@ -149,6 +176,111 @@ async def test_no_evidence_returns_insufficient_without_calling_provider_and_aud
     ).hexdigest()
     assert operation.validation_errors == ['no_verified_evidence']
     assert operation.source_ids == []
+
+
+@pytest.mark.asyncio
+async def test_between_event_mode_uses_validated_interval_not_lexical_retrieval():
+    generic_calls = []
+    resolver_calls = []
+    event_retriever_calls = []
+    session = RecordingSession()
+    provider = FailingProvider()
+
+    def generic_retriever(*args):
+        generic_calls.append(args)
+        return []
+
+    def event_resolver(*args):
+        resolver_calls.append(args)
+        return [between_event()]
+
+    def event_retriever(*args):
+        event_retriever_calls.append(args)
+        return between_evidence()
+
+    result = await ResearchService(
+        retriever=generic_retriever,
+        provider=provider,
+        session=session,
+        event_resolver=event_resolver,
+        event_retriever=event_retriever,
+    ).query(request(
+        mode=ResearchMode.BETWEEN,
+        mode_parameters={
+            'from_event_id': 'eden',
+            'to_event_id': 'abel-killed',
+        },
+        source_scopes=[SourceScope.BIBLICAL_CANON],
+        depth=ResearchDepth.DEEP,
+    ))
+
+    assert generic_calls == []
+    assert resolver_calls == [(session, 'eden', 'abel-killed')]
+    assert event_retriever_calls == [(
+        session, [between_event()], [SourceScope.BIBLICAL_CANON]
+    )]
+    assert len(result.sources) == 27
+    assert [source.id for source in result.sources] == [
+        f'scripture:{index}' for index in range(1, 28)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('parameters', [
+    {},
+    {'from_event_id': 'eden'},
+    {'to_event_id': 'abel-killed'},
+])
+async def test_between_event_mode_missing_range_fails_honestly(parameters):
+    provider = RecordingProvider(provider_document())
+    generic_calls = []
+    resolver_calls = []
+
+    result = await ResearchService(
+        retriever=lambda *args: generic_calls.append(args),
+        provider=provider,
+        event_resolver=lambda *args: resolver_calls.append(args),
+        event_retriever=lambda *_: between_evidence(),
+    ).query(request(
+        mode=ResearchMode.BETWEEN,
+        mode_parameters=parameters,
+    ))
+
+    assert result.grounding_status == GroundingStatus.INSUFFICIENT
+    assert result.sources == []
+    assert generic_calls == []
+    assert resolver_calls == []
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_between_event_mode_invalid_range_fails_honestly():
+    provider = RecordingProvider(provider_document())
+    generic_calls = []
+
+    def invalid_range(*_args):
+        raise EventCatalogError(
+            'invalid_event_order',
+            'The start event must not follow the end event.',
+        )
+
+    result = await ResearchService(
+        retriever=lambda *args: generic_calls.append(args),
+        provider=provider,
+        event_resolver=invalid_range,
+        event_retriever=lambda *_: between_evidence(),
+    ).query(request(
+        mode=ResearchMode.BETWEEN,
+        mode_parameters={
+            'from_event_id': 'abel-killed',
+            'to_event_id': 'eden',
+        },
+    ))
+
+    assert result.grounding_status == GroundingStatus.INSUFFICIENT
+    assert result.sources == []
+    assert generic_calls == []
+    assert provider.calls == []
 
 
 @pytest.mark.asyncio

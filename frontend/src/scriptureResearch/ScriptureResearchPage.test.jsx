@@ -86,6 +86,10 @@ describe('ScriptureResearchPage', () => {
       expect.objectContaining({
         question: 'What happened between Eden and Abel?',
         sourceScopes: ['biblical-canon'], depth: 'deep-research', mode: 'what-happened-between',
+        modeParameters: {
+          from_event_id: 'eden',
+          to_event_id: 'abel-killed',
+        },
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ))

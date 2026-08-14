@@ -40,6 +40,58 @@ def _seed_genesis(app) -> None:
         '''))
 
 
+def _seed_eden_to_abel(app) -> list[int]:
+    rows = []
+    row_id = 1
+    for chapter, verses in (
+        (2, range(8, 26)),
+        (3, range(22, 25)),
+        (4, range(1, 6)),
+        (4, range(8, 9)),
+    ):
+        for verse in verses:
+            rows.append({
+                'id': row_id,
+                'book': 'Genesis',
+                'chapter': chapter,
+                'verse': verse,
+                'text': f'KJV Genesis {chapter}:{verse}',
+                'translation': 'KJV',
+            })
+            row_id += 1
+    rows.extend([
+        {
+            'id': 100,
+            'book': 'Luke',
+            'chapter': 3,
+            'verse': 38,
+            'text': 'Adam lexical distraction',
+            'translation': 'KJV',
+        },
+        {
+            'id': 101,
+            'book': '1 Chronicles',
+            'chapter': 1,
+            'verse': 1,
+            'text': 'Adam lexical distraction',
+            'translation': 'KJV',
+        },
+    ])
+    with app.state.database_engine.begin() as connection:
+        connection.execute(text('''
+            CREATE TABLE biblical_texts (
+                id INTEGER PRIMARY KEY, book TEXT, chapter INTEGER,
+                verse INTEGER, text TEXT, translation TEXT
+            )
+        '''))
+        connection.execute(text('''
+            INSERT INTO biblical_texts
+                (id, book, chapter, verse, text, translation)
+            VALUES (:id, :book, :chapter, :verse, :text, :translation)
+        '''), rows)
+    return [row['id'] for row in rows if row['id'] < 100]
+
+
 def test_query_endpoint_is_mounted_returns_defaults_and_commits_audit(test_settings):
     app = create_application(test_settings)
     with TestClient(app) as client:
@@ -60,6 +112,79 @@ def test_query_endpoint_is_mounted_returns_defaults_and_commits_audit(test_setti
     with app.state.session_factory() as session:
         assert session.scalar(select(AIOperation)) is not None
         assert session.scalar(select(ResearchNode)) is None
+
+
+def test_between_event_query_returns_only_complete_verified_interval(
+    test_settings, monkeypatch,
+):
+    class OfflineProvider:
+        name = 'offline'
+
+        async def complete(self, _messages):
+            raise ProviderError('private provider detail')
+
+    monkeypatch.setattr(
+        'app.research.router.create_chat_provider', lambda *_args: OfflineProvider()
+    )
+    app = create_application(test_settings)
+    expected_ids = _seed_eden_to_abel(app)
+    with TestClient(app) as client:
+        response = client.post('/api/v1/research/query', json={
+            'question': 'What happened between Eden and Abel?',
+            'mode': 'what-happened-between',
+            'source_scopes': ['biblical-canon', 'ancient-sources'],
+            'depth': 'deep-research',
+            'mode_parameters': {
+                'from_event_id': 'eden',
+                'to_event_id': 'abel-killed',
+            },
+        })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['grounding_status'] == 'evidence-only'
+    assert [source['id'] for source in data['sources']] == [
+        f'scripture:{row_id}' for row_id in expected_ids
+    ]
+    assert len(data['sources']) == 27
+    assert {source['source_type'] for source in data['sources']} == {
+        'canonical-scripture'
+    }
+    assert all(source['reference'].startswith('Genesis ') for source in data['sources'])
+
+
+def test_between_event_query_rejects_invalid_or_missing_ranges_honestly(
+    test_settings,
+):
+    app = create_application(test_settings)
+    _seed_eden_to_abel(app)
+    with TestClient(app) as client:
+        reversed_response = client.post('/api/v1/research/query', json={
+            'question': 'What happened between Abel and Eden?',
+            'mode': 'what-happened-between',
+            'mode_parameters': {
+                'from_event_id': 'abel-killed',
+                'to_event_id': 'eden',
+            },
+        })
+        missing_response = client.post('/api/v1/research/query', json={
+            'question': 'What happened between these events?',
+            'mode': 'what-happened-between',
+            'mode_parameters': {},
+        })
+        unknown_response = client.post('/api/v1/research/query', json={
+            'question': 'What happened between unknown events?',
+            'mode': 'what-happened-between',
+            'mode_parameters': {
+                'from_event_id': 'not-in-the-reviewed-catalog',
+                'to_event_id': 'abel-killed',
+            },
+        })
+
+    for response in (reversed_response, missing_response, unknown_response):
+        assert response.status_code == 200
+        assert response.json()['grounding_status'] == 'insufficient'
+        assert response.json()['sources'] == []
 
 
 def test_authenticated_query_creates_owned_root_child_and_trail(test_settings):

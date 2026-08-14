@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.ai.references import parse_reference
 from app.ai.retrieval import retrieve_exact_reference
 from app.library.canon import ALIASES, alias_target
+from app.research.event_catalog import EventRecord
 from app.research.schemas import ResearchDepth, SourceScope
 
 
@@ -39,6 +40,7 @@ _DEPTH_LIMITS = {
     ResearchDepth.DEEP.value: 24,
     ResearchDepth.SCHOLAR.value: 32,
 }
+_MAX_EVENT_EVIDENCE = 32
 _MAX_QUERY_TOKENS = 8
 _TRUSTED_LEGACY_SCRIPTURE_EDITIONS = MappingProxyType({
     'ASV': 'Protestant',
@@ -496,6 +498,67 @@ def _chapter_rows(
     except SQLAlchemyError:
         session.rollback()
         return []
+
+
+def retrieve_event_range_evidence(
+    session: Session,
+    events: Iterable[EventRecord],
+    source_scopes: Iterable[SourceScope | str],
+) -> list[ResearchEvidence]:
+    """Load only catalog-resolved scripture IDs, preserving reviewed order."""
+
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for event in events:
+        for source_id in event.source_ids:
+            prefix, separator, raw_id = source_id.partition(':')
+            if prefix != 'scripture' or separator != ':' or not raw_id.isdigit():
+                continue
+            biblical_text_id = int(raw_id)
+            if biblical_text_id in seen:
+                continue
+            seen.add(biblical_text_id)
+            ordered_ids.append(biblical_text_id)
+            if len(ordered_ids) == _MAX_EVENT_EVIDENCE:
+                break
+        if len(ordered_ids) == _MAX_EVENT_EVIDENCE:
+            break
+    if not ordered_ids:
+        return []
+
+    params: dict[str, Any] = {}
+    placeholders: list[str] = []
+    for index, biblical_text_id in enumerate(ordered_ids):
+        name = f'event_source_{index}'
+        params[name] = biblical_text_id
+        placeholders.append(f':{name}')
+    statement = text(f'''
+        SELECT id, book, chapter, verse, text, translation
+        FROM biblical_texts
+        WHERE id IN ({', '.join(placeholders)})
+    ''')
+    try:
+        rows_by_id = {
+            int(row['id']): dict(row)
+            for row in session.execute(statement, params).mappings()
+        }
+    except SQLAlchemyError:
+        session.rollback()
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for index, biblical_text_id in enumerate(ordered_ids):
+        row = rows_by_id.get(biblical_text_id)
+        if row is None:
+            continue
+        row['match_score'] = float(_MAX_EVENT_EVIDENCE - index)
+        rows.append(row)
+    return _to_evidence(
+        session,
+        rows,
+        _enabled_scopes(source_scopes),
+        _MAX_EVENT_EVIDENCE,
+    )
 
 
 def retrieve_research_evidence(

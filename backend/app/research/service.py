@@ -13,12 +13,14 @@ from typing import Any
 
 from app.ai.contracts import ChatMessage, ChatProvider, ProviderError
 from app.ai.models import AIOperation
-from app.research.retrieval import ResearchEvidence
+from app.research.event_catalog import EventCatalogError, resolve_between_events
+from app.research.retrieval import ResearchEvidence, retrieve_event_range_evidence
 from app.research.schemas import (
     ClaimClassification,
     GroundingStatus,
     ResearchClaim,
     ResearchConfidence,
+    ResearchMode,
     ResearchQueryRequest,
     ResearchResponse,
     ResearchSection,
@@ -85,19 +87,51 @@ class ResearchService:
         provider: ChatProvider,
         session: Any | None = None,
         user: Any | None = None,
+        event_resolver: Callable[..., Any] | None = None,
+        event_retriever: Callable[..., Iterable[ResearchEvidence]] | None = None,
     ) -> None:
         self._retriever = retriever
         self._provider = provider
         self._session = session
         self._user = user
+        self._event_resolver = event_resolver or resolve_between_events
+        self._event_retriever = event_retriever or retrieve_event_range_evidence
 
     async def query(self, request: ResearchQueryRequest) -> ResearchResponse:
-        candidates = islice(self._retriever(
-            self._session,
-            _retrieval_query(request),
-            request.source_scopes,
-            request.depth,
-        ), _MAX_EVIDENCE_RECORDS)
+        retrieval_error: str | None = None
+        uses_event_range = (
+            request.mode == ResearchMode.BETWEEN
+            and (
+                'mode' in request.model_fields_set
+                or 'from_event_id' in request.mode_parameters
+                or 'to_event_id' in request.mode_parameters
+            )
+        )
+        if uses_event_range:
+            from_id = request.mode_parameters.get('from_event_id')
+            to_id = request.mode_parameters.get('to_event_id')
+            if from_id is None or to_id is None:
+                candidates = iter(())
+                retrieval_error = 'missing_event_range'
+            else:
+                try:
+                    events = self._event_resolver(self._session, from_id, to_id)
+                except EventCatalogError as error:
+                    candidates = iter(())
+                    retrieval_error = error.code
+                else:
+                    candidates = islice(self._event_retriever(
+                        self._session,
+                        events,
+                        request.source_scopes,
+                    ), _MAX_EVIDENCE_RECORDS)
+        else:
+            candidates = islice(self._retriever(
+                self._session,
+                _retrieval_query(request),
+                request.source_scopes,
+                request.depth,
+            ), _MAX_EVIDENCE_RECORDS)
         evidence, user_prompt = _bounded_prompt(request, candidates)
         sources = [_to_source(item) for item in evidence]
 
@@ -117,7 +151,7 @@ class ResearchService:
                     'evidence-backed answer.'
                 ),
             )
-            self._audit(response, ['no_verified_evidence'])
+            self._audit(response, [retrieval_error or 'no_verified_evidence'])
             return response
 
         try:

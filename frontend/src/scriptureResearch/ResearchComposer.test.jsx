@@ -145,6 +145,27 @@ describe('ResearchComposer', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('loads the Eden to Abel example with exact verified event IDs', async () => {
+    const user = userEvent.setup()
+    const onExample = vi.fn()
+    render(<ControlledComposer onExample={onExample} />)
+
+    await user.click(screen.getByRole('button', { name: 'Eden to Abel' }))
+
+    expect(onExample).toHaveBeenCalledWith(
+      'What happened between Eden and Abel?',
+      {
+        sourceScopes: ['biblical-canon'],
+        depth: 'deep-research',
+        modeParameters: {
+          from_event_id: 'eden',
+          to_event_id: 'abel-killed',
+        },
+      },
+      'what-happened-between',
+    )
+  })
+
   it('contains no nested form and exposes a real, capability-gated voice action', async () => {
     const user = userEvent.setup()
     const voice = vi.fn()

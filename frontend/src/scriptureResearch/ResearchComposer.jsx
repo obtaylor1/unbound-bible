@@ -11,7 +11,12 @@ const DEPTH_DESCRIPTIONS = {
 }
 
 const EXAMPLES = [
-  { label: 'Eden to Abel', question: 'What happened between Eden and Abel?', mode: 'what-happened-between' },
+  {
+    label: 'Eden to Abel',
+    question: 'What happened between Eden and Abel?',
+    mode: 'what-happened-between',
+    modeParameters: { from_event_id: 'eden', to_event_id: 'abel-killed' },
+  },
   { label: 'Explain Enoch', question: 'Explain Enoch and its place in biblical tradition', mode: 'explain-a-book' },
   { label: 'Malachi to Matthew', question: 'What happened between Malachi and Matthew?', mode: 'what-happened-between' },
   { label: 'Genesis 6 and Enoch', question: 'Compare the Genesis 6 account with 1 Enoch', mode: 'compare-accounts' },
@@ -170,7 +175,10 @@ export default function ResearchComposer({
               {
                 ...settings,
                 sourceScopes: [...sourceScopes],
-                modeParameters: { ...(settings.modeParameters ?? {}) },
+                modeParameters: {
+                  ...(settings.modeParameters ?? {}),
+                  ...(example.modeParameters ?? {}),
+                },
               },
               example.mode ?? mode,
             )}
