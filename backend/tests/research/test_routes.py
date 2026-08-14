@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.ai.contracts import ProviderError
 from app.ai.models import AIOperation
 from app.application import create_application
+from app.auth.dependencies import get_session
 from app.research.models import ResearchNode
 from app.research.retrieval import ResearchEvidence
 from app.research.service import ResearchServiceError
@@ -199,6 +200,62 @@ def test_node_failure_rolls_back_pending_audit(test_settings, monkeypatch):
 
     assert response.status_code == 503
     assert 'insert unavailable' not in response.text
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(AIOperation)) == 0
+        assert session.scalar(select(func.count()).select_from(ResearchNode)) == 0
+
+
+def test_rollback_failure_preserves_safe_503_and_does_not_persist_pending_work(
+    test_settings, monkeypatch,
+):
+    secret = 'database password from rollback driver'
+    sessions = []
+
+    class RollbackFailingSession:
+        def __init__(self, inner):
+            self.inner = inner
+            self.rollback_calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self.inner.rollback()
+            raise RuntimeError(secret)
+
+    def fail_node(*_args, **_kwargs):
+        raise SQLAlchemyError('insert unavailable')
+
+    app = create_application(test_settings)
+
+    def broken_session():
+        with app.state.session_factory() as session:
+            proxy = RollbackFailingSession(session)
+            sessions.append(proxy)
+            yield proxy
+
+    app.dependency_overrides[get_session] = broken_session
+    monkeypatch.setattr(
+        'app.research.router.retrieve_research_evidence', lambda *_args: []
+    )
+    monkeypatch.setattr('app.research.router.create_research_node', fail_node)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        owner = _register(client, 'owner@example.com', 'owner')
+        response = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={'question': 'Will rollback stay safe?'},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        'detail': {
+            'code': 'research_unavailable',
+            'message': 'Research is temporarily unavailable.',
+        }
+    }
+    assert secret not in response.text
+    assert sessions[-1].rollback_calls == 1
     with app.state.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(AIOperation)) == 0
         assert session.scalar(select(func.count()).select_from(ResearchNode)) == 0

@@ -40,7 +40,13 @@ def _problem(status_code: int, code: str, message: str) -> HTTPException:
 def _rollback(session: Session) -> None:
     """Restore the request transaction before returning a safe HTTP error."""
 
-    session.rollback()
+    try:
+        session.rollback()
+    except Exception:
+        # The mapped HTTP error remains authoritative even when the failed
+        # transaction can no longer be rolled back. The request-scoped session
+        # is discarded by its dependency context and must not be reused.
+        pass
 
 
 def _trail_error(error: ResearchTrailError) -> HTTPException:
