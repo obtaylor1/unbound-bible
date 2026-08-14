@@ -415,9 +415,10 @@ def test_validate_passes_composite_declared_omissions_to_quality_gate(
     from app.library.ingest.types import NormalizedVerse
     from app.library.ingest.validate import ValidationResult
 
-    manifest_path = Path(
-        'backend/data/scripture/eotc-composite-en/manifest.json'
-    ).resolve()
+    manifest_path = (
+        Path(__file__).resolve().parents[3]
+        / 'data/scripture/eotc-composite-en/manifest.json'
+    )
     monkeypatch.setitem(cli.ADAPTERS, 'composite_english_bundle', lambda *_: (
         NormalizedVerse(
             'genesis', 'Genesis', 1, 1, 'In the beginning.',
