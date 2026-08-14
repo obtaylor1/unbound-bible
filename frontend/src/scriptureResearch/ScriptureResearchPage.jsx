@@ -441,6 +441,22 @@ export default function ScriptureResearchPage({ onPageChange }) {
           ...normalizedRequest,
           parentNodeId: authoritativeParentId,
         }
+        lastRequestRef.current = effectiveRequest
+        setAuthenticatedSession((current) => ({
+          nodes: [
+            ...current.nodes.filter((node) => ![
+              parentRevalidation.localNodeId,
+              authoritativeParentId,
+            ].includes(node.id)),
+            {
+              id: authoritativeParentId,
+              parentNodeId: null,
+              response: authoritativeParent,
+            },
+          ].slice(-64),
+          activeNodeId: authoritativeParentId,
+          settings: cloneSettings(authoritativeParent.settings),
+        }))
         requestPhase = 'child-research'
       }
 

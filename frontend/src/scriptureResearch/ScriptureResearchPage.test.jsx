@@ -510,6 +510,50 @@ describe('ScriptureResearchPage', () => {
     expect(within(trail).getByRole('button', { name: 'What happened to Cain after Abel’s death?' })).toBeInTheDocument()
   })
 
+  it('reuses the authoritative parent when a revalidated child request is retried', async () => {
+    const parent = response({ query: 'Who was Cain?', trailNode: null })
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: {
+        nodes: [{ id: parent.id, parentNodeId: null, response: parent }],
+        activeNodeId: parent.id,
+        settings: parent.settings,
+      },
+    }))
+    let auth = { status: 'anonymous', user: null }
+    useAuth.mockImplementation(() => auth)
+    runResearch
+      .mockResolvedValueOnce(response({
+        query: 'Who was Cain?',
+        trailNode: { id: IDS.node, parentNodeId: null, question: 'Who was Cain?', label: null },
+      }))
+      .mockRejectedValueOnce(new Error('Child request unavailable'))
+      .mockResolvedValueOnce(response({
+        id: IDS.followup,
+        query: 'What happened to Cain after Abel’s death?',
+        trailNode: { id: IDS.followup, parentNodeId: IDS.node, question: 'What happened to Cain after Abel’s death?', label: null },
+      }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    auth = { status: 'authenticated', user: { id: 'user-1' } }
+    rerender(<ScriptureResearchPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'What happened to Cain after Abel’s death?' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Child request unavailable')
+    expect(screen.getByLabelText('Research question')).toHaveValue('What happened to Cain after Abel’s death?')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry research' }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(3))
+    expect(runResearch.mock.calls.filter(([request]) => request.question === 'Who was Cain?')).toHaveLength(1)
+    expect(runResearch.mock.calls[2][0]).toMatchObject({
+      question: 'What happened to Cain after Abel’s death?',
+      parentNodeId: IDS.node,
+    })
+    expect(runResearch.mock.calls[2][0]).not.toHaveProperty('conversationContext')
+    const trail = await screen.findByRole('navigation', { name: 'Research trail' })
+    expect(within(trail).getByRole('button', { name: 'Who was Cain?' })).toBeInTheDocument()
+    expect(within(trail).getByRole('button', { name: 'What happened to Cain after Abel’s death?' })).toBeInTheDocument()
+  })
+
   it.each(['insufficient', 'evidence-only', 'failure'])(
     'keeps the follow-up visible and retryable when parent revalidation ends with %s',
     async (outcome) => {
