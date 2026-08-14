@@ -51,7 +51,7 @@ export const shareIdFromPath = (path = '') => /^\/share\/([A-Za-z0-9_-]+)\/?$/.e
 
 const PAGE_TITLES = {
   home: 'The Unbound Bible',
-  chat: 'Ask the Bible',
+  chat: 'Scripture Research AI',
   sermon: 'Sermon Analysis',
   apocrypha: 'Scripture Reader',
   textual: 'Compare Scripture',
