@@ -15,6 +15,7 @@ import {
   loadGuestResearchSession,
   normalizeResearchEvents,
   normalizeResearchResponse,
+  normalizeResearchTrail,
   ResearchClientError,
   runResearch,
   saveGuestResearchSession,
@@ -84,7 +85,7 @@ function validEdenResponse() {
       question: 'What happened between Eden and Abel?',
       label: 'Eden to Abel',
     },
-    sources: [source],
+    sources: [{ ...source }],
     related_questions: ['What happened next?'],
     grounding_status: 'grounded',
     provider: 'test-provider',
@@ -185,8 +186,8 @@ describe('research requests', () => {
     expect(api.get).toHaveBeenCalledWith('/research/events?q=Cain%27s%20birth%20%26%20Eden', { signal })
 
     api.get.mockResolvedValue({
-      ancestry: [{ id: 'root', parent_node_id: null, question: 'Root question', mode: 'research-question', created_at: '2026-08-14T00:00:00Z', updated_at: null }],
-      active: { id: 'child', parent_node_id: 'root', question: 'Child question', mode: 'timeline', created_at: null, updated_at: null },
+      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'research-question', created_at: '2026-08-14T00:00:00Z', updated_at: null }],
+      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'timeline', created_at: null, updated_at: null },
       children: [],
       children_truncated: false,
     })
@@ -194,7 +195,7 @@ describe('research requests', () => {
     expect(api.get).toHaveBeenLastCalledWith('/research/trail/07449bd5-e672-4504-ab7d-45a1e6615cb1', { signal })
     expect(trail).toMatchObject({
       ancestry: [{ parentNodeId: null, createdAt: '2026-08-14T00:00:00Z' }],
-      active: { id: 'child', parentNodeId: 'root' },
+      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parentNodeId: '9b913a39-d88c-413c-ac5e-f23372161289' },
       children: [],
       childrenTruncated: false,
     })
@@ -288,6 +289,17 @@ describe('research requests', () => {
     expect(() => toApiRequest({ question: 'Valid?', sessionId: 'not-a-uuid' })).toThrow(ResearchClientError)
   })
 
+  it('preserves prototype-sensitive mode parameters as serialized own properties', () => {
+    const modeParameters = JSON.parse('{"__proto__":"kept","constructor":"also kept","prototype":"still kept"}')
+    const request = toApiRequest({ question: 'Valid?', modeParameters })
+
+    expect(Object.hasOwn(request.mode_parameters, '__proto__')).toBe(true)
+    expect(Object.hasOwn(request.mode_parameters, 'constructor')).toBe(true)
+    expect(Object.hasOwn(request.mode_parameters, 'prototype')).toBe(true)
+    expect(request.mode_parameters.__proto__).toBe('kept')
+    expect(JSON.stringify(request)).toContain('"__proto__":"kept"')
+  })
+
   it('rejects invalid event queries and trail IDs before calling the API', () => {
     expect(() => searchResearchEvents(123)).toThrow(/query.*string/i)
     expect(() => searchResearchEvents('x'.repeat(4_097))).toThrow(/query.*4,?096/i)
@@ -364,6 +376,36 @@ describe('response normalization', () => {
     expect(() => normalizeResearchResponse(invalidGrounding)).toThrow(/grounding status/i)
   })
 
+  it.each([
+    ['response ID', (value) => { value.id = 'not-a-uuid' }],
+    ['trail node ID', (value) => { value.trail_node.id = 'not-a-uuid' }],
+    ['trail parent node ID', (value) => { value.trail_node.parent_node_id = 'not-a-uuid' }],
+  ])('rejects a malformed server-issued %s', (_name, mutate) => {
+    const value = validEdenResponse()
+    mutate(value)
+    expect(() => normalizeResearchResponse(value)).toThrow(/UUID/i)
+  })
+
+  it('rejects malformed UUIDs throughout research trail snapshots', () => {
+    const trail = {
+      ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'research-question', created_at: null, updated_at: null }],
+      active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'timeline', created_at: null, updated_at: null },
+      children: [{ id: 'c8d77469-b3ca-40ad-a15b-9c228cd00898', parent_node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', question: 'Next question', mode: 'timeline', created_at: null, updated_at: null }],
+      children_truncated: false,
+    }
+    const badActive = structuredClone(trail)
+    badActive.active.id = 'child'
+    expect(() => normalizeResearchTrail(badActive)).toThrow(/active.id.*UUID/i)
+
+    const badAncestryParent = structuredClone(trail)
+    badAncestryParent.ancestry[0].parent_node_id = 'root'
+    expect(() => normalizeResearchTrail(badAncestryParent)).toThrow(/ancestry.*parent_node_id.*UUID/i)
+
+    const badChild = structuredClone(trail)
+    badChild.children[0].id = 'next'
+    expect(() => normalizeResearchTrail(badChild)).toThrow(/children.*id.*UUID/i)
+  })
+
   it('rejects absurd collection and string sizes', () => {
     const tooManySources = validEdenResponse()
     tooManySources.sources = Array.from({ length: 33 }, (_, index) => ({ ...source, id: `source-${index}` }))
@@ -427,6 +469,35 @@ describe('guest research storage', () => {
       ...createEmptyResearchSession(),
       nodes: [{ id: 'guest-1', parentNodeId: null, response: oversizedResponse }],
     })).toBe(false)
+    expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
+  })
+
+  it.each([
+    ['duplicate node IDs', [
+      { id: 'guest-a', parentNodeId: null, response: validEdenResponse() },
+      { id: 'guest-a', parentNodeId: null, response: validEdenResponse() },
+    ]],
+    ['a self parent', [
+      { id: 'guest-a', parentNodeId: 'guest-a', response: validEdenResponse() },
+    ]],
+    ['a missing parent', [
+      { id: 'guest-a', parentNodeId: 'missing', response: validEdenResponse() },
+    ]],
+    ['a two-node cycle', [
+      { id: 'guest-a', parentNodeId: 'guest-b', response: validEdenResponse() },
+      { id: 'guest-b', parentNodeId: 'guest-a', response: validEdenResponse() },
+    ]],
+  ])('rejects guest topology with %s on save and load', (_name, nodes) => {
+    const session = {
+      nodes,
+      activeNodeId: null,
+      settings: { sourceScopes: ['biblical-canon'], depth: 'study', modeParameters: {} },
+    }
+    expect(saveGuestResearchSession(session)).toBe(false)
+    expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
+
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({ version: 1, session }))
+    expect(loadGuestResearchSession()).toEqual(EMPTY_RESEARCH_SESSION)
     expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
   })
 

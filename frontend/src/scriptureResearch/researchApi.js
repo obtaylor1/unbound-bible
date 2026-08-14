@@ -68,6 +68,16 @@ function optionalText(value, path, max = 50_000) {
   return text(value, path, { max, optional: true })
 }
 
+function uuid(value, path) {
+  const result = text(value, path, { max: 36 })
+  if (!UUID_PATTERN.test(result)) throw new TypeError(`${path} must be a UUID`)
+  return result
+}
+
+function nullableUuid(value, path) {
+  return value === null ? null : uuid(value, path)
+}
+
 function choice(value, path, allowed) {
   if (!allowed.has(value)) throw new TypeError(`${path} has an unsupported value`)
   return value
@@ -98,7 +108,7 @@ function normalizeModeParameters(value, path = 'settings.mode_parameters') {
   object(value, path)
   const entries = Object.entries(value)
   if (entries.length > 8) throw new RangeError(`${path} must contain at most 8 items`)
-  const normalized = {}
+  const normalized = new Map()
   entries.forEach(([rawKey, rawItem]) => {
     if (typeof rawKey !== 'string' || typeof rawItem !== 'string') {
       throw new TypeError(`${path} keys and values must be strings`)
@@ -107,10 +117,10 @@ function normalizeModeParameters(value, path = 'settings.mode_parameters') {
     const item = rawItem.trim()
     text(key, `${path} key`, { max: 64 })
     text(item, `${path}.${key}`, { max: 256 })
-    if (Object.hasOwn(normalized, key)) throw new TypeError(`${path} keys must be unique after normalization`)
-    normalized[key] = item
+    if (normalized.has(key)) throw new TypeError(`${path} keys must be unique after normalization`)
+    normalized.set(key, item)
   })
-  return normalized
+  return Object.fromEntries(normalized)
 }
 
 function normalizeSourceScopes(value, path = 'settings.source_scopes') {
@@ -210,8 +220,8 @@ function normalizeTrailNode(value, path = 'trail_node') {
   object(value, path)
   const parentNodeId = field(value, 'parent_node_id', 'parentNodeId')
   return {
-    id: text(value.id, `${path}.id`, { max: 500 }),
-    parentNodeId: parentNodeId === null ? null : text(parentNodeId, `${path}.parent_node_id`, { max: 500 }),
+    id: uuid(value.id, `${path}.id`),
+    parentNodeId: nullableUuid(parentNodeId, `${path}.parent_node_id`),
     question: text(value.question, `${path}.question`, { min: 2, max: 10_000 }),
     label: optionalText(value.label, `${path}.label`, 1_000),
   }
@@ -244,7 +254,7 @@ export function normalizeResearchResponse(value) {
   object(value, 'research response')
   const timeline = value.timeline
   const response = {
-    id: text(value.id, 'id', { max: 500 }),
+    id: uuid(value.id, 'id'),
     query: text(value.query, 'query', { min: 2, max: 10_000 }),
     mode: choice(value.mode, 'mode', MODE_VALUES),
     settings: normalizeSettings(value.settings),
@@ -274,10 +284,11 @@ function definedEntries(entries) {
 
 function optionalUuid(value, fieldName) {
   if (value === null || value === undefined) return undefined
-  if (typeof value !== 'string' || !value.trim() || !UUID_PATTERN.test(value)) {
+  try {
+    return uuid(value, fieldName)
+  } catch {
     throw new ResearchClientError(`${fieldName} must be a UUID string`, fieldName)
   }
-  return value
 }
 
 export function toApiRequest(input) {
@@ -318,8 +329,8 @@ function normalizeTrailSummary(value, path) {
   object(value, path)
   const parentNodeId = field(value, 'parent_node_id', 'parentNodeId')
   return {
-    id: text(value.id, `${path}.id`, { max: 500 }),
-    parentNodeId: parentNodeId === null ? null : text(parentNodeId, `${path}.parent_node_id`, { max: 500 }),
+    id: uuid(value.id, `${path}.id`),
+    parentNodeId: nullableUuid(parentNodeId, `${path}.parent_node_id`),
     question: text(value.question, `${path}.question`, { min: 2, max: 10_000 }),
     mode: choice(value.mode, `${path}.mode`, MODE_VALUES),
     createdAt: optionalText(field(value, 'created_at', 'createdAt'), `${path}.created_at`, 100),
@@ -397,14 +408,42 @@ function normalizedGuestNode(value, index) {
   }
 }
 
+function validateGuestTopology(nodes, activeNodeId) {
+  const nodesById = new Map()
+  nodes.forEach((node) => {
+    if (nodesById.has(node.id)) throw new TypeError(`duplicate guest node ID: ${node.id}`)
+    nodesById.set(node.id, node)
+  })
+
+  nodes.forEach((node) => {
+    if (node.parentNodeId === node.id) throw new TypeError(`guest node ${node.id} cannot parent itself`)
+    if (node.parentNodeId !== null && !nodesById.has(node.parentNodeId)) {
+      throw new TypeError(`guest node ${node.id} references a missing parent`)
+    }
+  })
+
+  nodes.forEach((start) => {
+    const path = new Set()
+    let current = start
+    for (let steps = 0; current !== null && steps <= nodes.length; steps += 1) {
+      if (path.has(current.id)) throw new TypeError('guest research trail contains a cycle')
+      path.add(current.id)
+      current = current.parentNodeId === null ? null : nodesById.get(current.parentNodeId)
+    }
+    if (current !== null) throw new TypeError('guest research trail exceeds its node bound')
+  })
+
+  if (activeNodeId !== null && !nodesById.has(activeNodeId)) {
+    throw new TypeError('activeNodeId must reference a stored node')
+  }
+}
+
 function normalizedGuestSession(value) {
   object(value, 'guest session')
   const nodes = array(value.nodes, 'nodes', { max: 64 }).map(normalizedGuestNode)
   const activeNodeId = value.activeNodeId ?? null
   if (activeNodeId !== null) text(activeNodeId, 'activeNodeId', { max: 500 })
-  if (activeNodeId !== null && !nodes.some(({ id }) => id === activeNodeId)) {
-    throw new TypeError('activeNodeId must reference a stored node')
-  }
+  validateGuestTopology(nodes, activeNodeId)
   return {
     nodes,
     activeNodeId,
