@@ -118,7 +118,10 @@ def _mapped_scopes(value: object, replacements: dict[str, str]) -> list[str] | N
     return result
 
 
-def _migrate_source_scopes(replacements: dict[str, str]) -> None:
+def _migrate_stored_values(
+    scope_replacements: dict[str, str],
+    mode_replacements: dict[str, str],
+) -> None:
     connection = op.get_bind()
     rows = list(connection.execute(sa.text(
         'SELECT id, source_scopes, response_snapshot FROM research_nodes'
@@ -133,7 +136,7 @@ def _migrate_source_scopes(replacements: dict[str, str]) -> None:
     ''').bindparams(sa.bindparam('response_snapshot', type_=sa.JSON()))
 
     for row in rows:
-        mapped = _mapped_scopes(row['source_scopes'], replacements)
+        mapped = _mapped_scopes(row['source_scopes'], scope_replacements)
         if mapped is not None:
             connection.execute(
                 update_scopes,
@@ -143,24 +146,36 @@ def _migrate_source_scopes(replacements: dict[str, str]) -> None:
         snapshot = _decoded_json(row['response_snapshot'])
         if not isinstance(snapshot, dict):
             continue
+        snapshot_changed = False
+        snapshot_mode = snapshot.get('mode')
+        if isinstance(snapshot_mode, str):
+            mapped_mode = mode_replacements.get(snapshot_mode, snapshot_mode)
+            if mapped_mode != snapshot_mode:
+                snapshot['mode'] = mapped_mode
+                snapshot_changed = True
+
         settings = snapshot.get('settings')
-        if not isinstance(settings, dict):
-            continue
-        snapshot_scopes = _mapped_scopes(settings.get('source_scopes'), replacements)
-        if snapshot_scopes is None:
-            continue
-        settings['source_scopes'] = snapshot_scopes
-        connection.execute(update_snapshot, {
-            'id': row['id'],
-            'response_snapshot': snapshot,
-        })
+        if isinstance(settings, dict):
+            snapshot_scopes = _mapped_scopes(
+                settings.get('source_scopes'),
+                scope_replacements,
+            )
+            if snapshot_scopes is not None:
+                settings['source_scopes'] = snapshot_scopes
+                snapshot_changed = True
+
+        if snapshot_changed:
+            connection.execute(update_snapshot, {
+                'id': row['id'],
+                'response_snapshot': snapshot,
+            })
 
 
 def upgrade() -> None:
-    _migrate_source_scopes(_UPGRADE_SCOPE_MAP)
+    _migrate_stored_values(_UPGRADE_SCOPE_MAP, _UPGRADE_MODE_MAP)
     _replace_mode_constraint(_APPROVED_MODES, _UPGRADE_MODE_MAP)
 
 
 def downgrade() -> None:
-    _migrate_source_scopes(_DOWNGRADE_SCOPE_MAP)
+    _migrate_stored_values(_DOWNGRADE_SCOPE_MAP, _DOWNGRADE_MODE_MAP)
     _replace_mode_constraint(_PRIOR_MODES, _DOWNGRADE_MODE_MAP)

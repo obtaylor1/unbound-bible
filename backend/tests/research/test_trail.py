@@ -695,6 +695,7 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
         '00000000000000000000000000000010',
         every_legacy_scope,
         {
+            'mode': 'timeline',
             'settings': {'source_scopes': every_legacy_scope},
             'summary': {'narrative': 'Do not rewrite ancient-accounts prose.'},
         },
@@ -707,7 +708,10 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
             'commentaries', 'language-resources', 'user-library',
             'ethiopian-tradition', 'ancient-accounts',
         ],
-        {'settings': {'source_scopes': ['ancient-accounts', 'commentaries']}},
+        {
+            'mode': 'research-question',
+            'settings': {'source_scopes': ['ancient-accounts', 'commentaries']},
+        },
     )
     with pytest.raises(IntegrityError):
         insert_mode('explain-a-book', '00000000000000000000000000000011')
@@ -721,6 +725,7 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
         assert upgraded['mode'] == 'what-happened-between'
         assert json.loads(upgraded['source_scopes']) == ['all-sources']
         upgraded_snapshot = json.loads(upgraded['response_snapshot'])
+        assert upgraded_snapshot['mode'] == 'what-happened-between'
         assert upgraded_snapshot['settings']['source_scopes'] == ['all-sources']
         assert upgraded_snapshot['summary']['narrative'] == (
             'Do not rewrite ancient-accounts prose.'
@@ -744,7 +749,11 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
         'explain-a-book',
         '00000000000000000000000000000012',
         new_scopes,
-        {'settings': {'source_scopes': new_scopes}, 'unrelated': ['commentary']},
+        {
+            'mode': 'explain-a-book',
+            'settings': {'source_scopes': new_scopes},
+            'unrelated': ['commentary'],
+        },
     )
     with pytest.raises(IntegrityError):
         insert_mode('timeline', '00000000000000000000000000000013')
@@ -760,6 +769,7 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
             'ancient-accounts', 'commentaries', 'biblical-canon',
         ]
         downgraded_snapshot = json.loads(downgraded['response_snapshot'])
+        assert downgraded_snapshot['mode'] == 'research-question'
         assert downgraded_snapshot['settings']['source_scopes'] == [
             'ancient-accounts', 'commentaries', 'biblical-canon',
         ]
