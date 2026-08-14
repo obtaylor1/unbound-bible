@@ -13,7 +13,9 @@ import {
   getResearchTrail,
   GUEST_RESEARCH_STORAGE_KEY,
   loadGuestResearchSession,
+  normalizeResearchEvents,
   normalizeResearchResponse,
+  ResearchClientError,
   runResearch,
   saveGuestResearchSession,
   searchResearchEvents,
@@ -158,14 +160,18 @@ describe('research requests', () => {
 
   it('converts custom camel-case fields and omits undefined values without mutation', () => {
     const input = {
-      question: 'Compare it', sessionId: 'session', parentNodeId: 'parent',
+      question: 'Compare it',
+      sessionId: '9b913a39-d88c-413c-ac5e-f23372161289',
+      parentNodeId: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
       mode: 'timeline', sourceScopes: ['historical-sources'], depth: 'study',
       modeParameters: { from: 'Eden' }, ignored: undefined,
     }
     const snapshot = structuredClone(input)
 
     expect(toApiRequest(input)).toEqual({
-      question: 'Compare it', session_id: 'session', parent_node_id: 'parent',
+      question: 'Compare it',
+      session_id: '9b913a39-d88c-413c-ac5e-f23372161289',
+      parent_node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
       mode: 'timeline', source_scopes: ['historical-sources'], depth: 'study',
       mode_parameters: { from: 'Eden' },
     })
@@ -184,8 +190,8 @@ describe('research requests', () => {
       children: [],
       children_truncated: false,
     })
-    const trail = await getResearchTrail('node/with space', { signal })
-    expect(api.get).toHaveBeenLastCalledWith('/research/trail/node%2Fwith%20space', { signal })
+    const trail = await getResearchTrail('07449bd5-e672-4504-ab7d-45a1e6615cb1', { signal })
+    expect(api.get).toHaveBeenLastCalledWith('/research/trail/07449bd5-e672-4504-ab7d-45a1e6615cb1', { signal })
     expect(trail).toMatchObject({
       ancestry: [{ parentNodeId: null, createdAt: '2026-08-14T00:00:00Z' }],
       active: { id: 'child', parentNodeId: 'root' },
@@ -193,6 +199,100 @@ describe('research requests', () => {
       childrenTruncated: false,
     })
     expect(Object.isFrozen(trail.active)).toBe(true)
+  })
+
+  it('normalizes and freezes reviewed event results', async () => {
+    api.get.mockResolvedValue({
+      events: [{
+        id: 'eden',
+        title: 'Life in the Garden of Eden',
+        description: 'The man and woman live in Eden.',
+        reference: 'Genesis 2:8–25',
+        source_ids: ['genesis-2'],
+        people: ['adam', 'eve'],
+        places: ['garden-of-eden'],
+      }],
+    })
+
+    const result = await searchResearchEvents('Eden')
+
+    expect(result).toEqual({ events: [{
+      id: 'eden',
+      title: 'Life in the Garden of Eden',
+      description: 'The man and woman live in Eden.',
+      reference: 'Genesis 2:8–25',
+      sourceIds: ['genesis-2'],
+      people: ['adam', 'eve'],
+      places: ['garden-of-eden'],
+    }] })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.events[0].sourceIds)).toBe(true)
+  })
+
+  it('rejects malformed, oversized, and duplicate event data', () => {
+    expect(() => normalizeResearchEvents({ events: [{ id: 'eden' }] })).toThrow(/title/i)
+    expect(() => normalizeResearchEvents({ events: Array.from({ length: 65 }, () => ({})) })).toThrow(/events.*64/i)
+    expect(() => normalizeResearchEvents({
+      events: [{
+        id: 'eden', title: 'Eden', description: 'Description', reference: 'Genesis 2',
+        source_ids: ['same', 'same'], people: [], places: [],
+      }],
+    })).toThrow(/duplicate source ID/i)
+    const event = {
+      id: 'eden', title: 'Eden', description: 'Description', reference: 'Genesis 2',
+      source_ids: ['genesis-2'], people: [], places: [],
+    }
+    expect(() => normalizeResearchEvents({ events: [event, { ...event }] })).toThrow(/duplicate event ID/i)
+  })
+
+  it.each([
+    ['non-object input', null],
+    ['short question', { question: 'x' }],
+    ['bad session ID', { question: 'Valid?', sessionId: 'session' }],
+    ['bad parent ID', { question: 'Valid?', parentNodeId: 12 }],
+    ['bad mode', { question: 'Valid?', mode: 'web-search' }],
+    ['bad source scope', { question: 'Valid?', sourceScopes: ['the-web'] }],
+    ['bad depth', { question: 'Valid?', depth: 'unbounded' }],
+    ['bad mode parameter', { question: 'Valid?', modeParameters: { from: 12 } }],
+  ])('rejects %s before calling the API', (_name, input) => {
+    expect(() => runResearch(input)).toThrow()
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('normalizes UUID identifiers and trimmed mode parameters without mutating input', () => {
+    const input = {
+      question: '  Compare it  ',
+      sessionId: '9b913a39-d88c-413c-ac5e-f23372161289',
+      parentNodeId: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
+      modeParameters: { ' from ': ' Eden ' },
+    }
+    const snapshot = structuredClone(input)
+
+    expect(toApiRequest(input)).toMatchObject({
+      question: '  Compare it  ',
+      session_id: input.sessionId,
+      parent_node_id: input.parentNodeId,
+      mode_parameters: { from: 'Eden' },
+    })
+    expect(input).toEqual(snapshot)
+  })
+
+  it('omits null identifiers and uses the typed client boundary error', () => {
+    expect(toApiRequest({ question: 'Valid?', sessionId: null, parentNodeId: undefined })).toEqual({
+      question: 'Valid?',
+      mode: 'what-happened-between',
+      source_scopes: ['biblical-canon'],
+      depth: 'deep-research',
+      mode_parameters: {},
+    })
+    expect(() => toApiRequest({ question: 'Valid?', sessionId: 'not-a-uuid' })).toThrow(ResearchClientError)
+  })
+
+  it('rejects invalid event queries and trail IDs before calling the API', () => {
+    expect(() => searchResearchEvents(123)).toThrow(/query.*string/i)
+    expect(() => searchResearchEvents('x'.repeat(4_097))).toThrow(/query.*4,?096/i)
+    expect(() => getResearchTrail('not-a-uuid')).toThrow(/nodeId.*UUID/i)
+    expect(api.get).not.toHaveBeenCalled()
   })
 })
 
@@ -233,6 +333,17 @@ describe('response normalization', () => {
     const value = validEdenResponse()
     mutate(value)
     expect(() => normalizeResearchResponse(value)).toThrow(/unknown source ID/i)
+  })
+
+  it.each([
+    ['claim', (value) => { value.summary.claims[0].source_ids = [source.id, source.id] }],
+    ['timeline event', (value) => { value.timeline[0].source_ids = [source.id, source.id] }],
+    ['person', (value) => { value.people[0].source_ids = [source.id, source.id] }],
+    ['place', (value) => { value.places[0].source_ids = [source.id, source.id] }],
+  ])('rejects duplicate source IDs in a %s', (_name, mutate) => {
+    const value = validEdenResponse()
+    mutate(value)
+    expect(() => normalizeResearchResponse(value)).toThrow(/duplicate source ID/i)
   })
 
   it('rejects duplicate sources, missing required fields, malformed arrays, and invalid grounding', () => {

@@ -15,6 +15,9 @@ const MAX_GUEST_STORAGE_CHARS = 500_000
 const MAX_COLLECTION_ITEMS = 100
 const MAX_SOURCES = 32
 const MAX_RELATED_QUESTIONS = 5
+const MAX_EVENTS = 64
+const MAX_EVENT_QUERY_CHARS = 4_096
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const SOURCE_SCOPE_VALUES = new Set(SOURCE_SCOPES.map(({ value }) => value))
 const DEPTH_VALUES = new Set(RESEARCH_DEPTHS.map(({ value }) => value))
@@ -30,6 +33,15 @@ const SOURCE_TYPE_VALUES = new Set([
   'historical-source', 'early-christian-writing', 'jewish-tradition',
   'church-tradition', 'commentary', 'scholarship', 'ai-synthesis',
 ])
+
+export class ResearchClientError extends TypeError {
+  constructor(message, field, cause) {
+    super(message, cause ? { cause } : undefined)
+    this.name = 'ResearchClientError'
+    this.code = 'invalid_research_request'
+    this.field = field
+  }
+}
 
 function object(value, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -71,14 +83,34 @@ function stringArray(value, path, { max = MAX_COLLECTION_ITEMS, itemMax = 500 } 
   return array(value, path, { max }).map((item, index) => text(item, `${path}[${index}]`, { max: itemMax }))
 }
 
+function normalizeSourceIds(value, path, { max = MAX_COLLECTION_ITEMS } = {}) {
+  const result = stringArray(value, path, { max })
+  const seen = new Set()
+  result.forEach((id) => {
+    if (!id.trim()) throw new TypeError(`${path} contains a blank source ID`)
+    if (seen.has(id)) throw new TypeError(`duplicate source ID: ${id}`)
+    seen.add(id)
+  })
+  return result
+}
+
 function normalizeModeParameters(value, path = 'settings.mode_parameters') {
   object(value, path)
   const entries = Object.entries(value)
   if (entries.length > 8) throw new RangeError(`${path} must contain at most 8 items`)
-  return Object.fromEntries(entries.map(([key, item]) => [
-    text(key, `${path} key`, { max: 64 }),
-    text(item, `${path}.${key}`, { max: 256 }),
-  ]))
+  const normalized = {}
+  entries.forEach(([rawKey, rawItem]) => {
+    if (typeof rawKey !== 'string' || typeof rawItem !== 'string') {
+      throw new TypeError(`${path} keys and values must be strings`)
+    }
+    const key = rawKey.trim()
+    const item = rawItem.trim()
+    text(key, `${path} key`, { max: 64 })
+    text(item, `${path}.${key}`, { max: 256 })
+    if (Object.hasOwn(normalized, key)) throw new TypeError(`${path} keys must be unique after normalization`)
+    normalized[key] = item
+  })
+  return normalized
 }
 
 function normalizeSourceScopes(value, path = 'settings.source_scopes') {
@@ -107,7 +139,7 @@ function normalizeClaim(value, path) {
     statement: text(value.statement, `${path}.statement`),
     classification: choice(value.classification, `${path}.classification`, CLASSIFICATION_VALUES),
     confidence: choice(value.confidence, `${path}.confidence`, CONFIDENCE_VALUES),
-    sourceIds: stringArray(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
+    sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
   }
 }
 
@@ -130,7 +162,7 @@ function normalizeTimelineEvent(value, path) {
     title: text(value.title, `${path}.title`, { max: 1_000 }),
     description: text(value.description, `${path}.description`),
     dateLabel: optionalText(field(value, 'date_label', 'dateLabel'), `${path}.date_label`),
-    sourceIds: stringArray(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
+    sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
     confidence: choice(value.confidence, `${path}.confidence`, CONFIDENCE_VALUES),
   }
 }
@@ -141,7 +173,7 @@ function normalizePerson(value, path) {
     name: text(value.name, `${path}.name`, { max: 1_000 }),
     description: optionalText(value.description, `${path}.description`),
     role: optionalText(value.role, `${path}.role`, 1_000),
-    sourceIds: stringArray(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
+    sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
   }
 }
 
@@ -151,7 +183,7 @@ function normalizePlace(value, path) {
     name: text(value.name, `${path}.name`, { max: 1_000 }),
     description: optionalText(value.description, `${path}.description`),
     location: optionalText(value.location, `${path}.location`, 2_000),
-    sourceIds: stringArray(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
+    sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`),
   }
 }
 
@@ -240,23 +272,36 @@ function definedEntries(entries) {
   return Object.fromEntries(entries.filter(([, value]) => value !== undefined))
 }
 
-export function toApiRequest(input) {
-  object(input, 'research input')
-  const question = text(input.question, 'question', { min: 2, max: 10_000 })
-  const mode = choice(input.mode ?? DEFAULT_RESEARCH_MODE, 'mode', MODE_VALUES)
-  const sourceScopes = normalizeSourceScopes(input.sourceScopes ?? DEFAULT_RESEARCH_SETTINGS.sourceScopes, 'sourceScopes')
-  const depth = choice(input.depth ?? DEFAULT_RESEARCH_SETTINGS.depth, 'depth', DEPTH_VALUES)
-  const modeParameters = normalizeModeParameters(input.modeParameters ?? DEFAULT_RESEARCH_SETTINGS.modeParameters, 'modeParameters')
+function optionalUuid(value, fieldName) {
+  if (value === null || value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim() || !UUID_PATTERN.test(value)) {
+    throw new ResearchClientError(`${fieldName} must be a UUID string`, fieldName)
+  }
+  return value
+}
 
-  return definedEntries([
-    ['question', question],
-    ['session_id', input.sessionId],
-    ['parent_node_id', input.parentNodeId],
-    ['mode', mode],
-    ['source_scopes', [...sourceScopes]],
-    ['depth', depth],
-    ['mode_parameters', { ...modeParameters }],
-  ])
+export function toApiRequest(input) {
+  try {
+    object(input, 'research input')
+    const question = text(input.question, 'question', { min: 2, max: 10_000 })
+    const mode = choice(input.mode ?? DEFAULT_RESEARCH_MODE, 'mode', MODE_VALUES)
+    const sourceScopes = normalizeSourceScopes(input.sourceScopes ?? DEFAULT_RESEARCH_SETTINGS.sourceScopes, 'sourceScopes')
+    const depth = choice(input.depth ?? DEFAULT_RESEARCH_SETTINGS.depth, 'depth', DEPTH_VALUES)
+    const modeParameters = normalizeModeParameters(input.modeParameters ?? DEFAULT_RESEARCH_SETTINGS.modeParameters, 'modeParameters')
+
+    return definedEntries([
+      ['question', question],
+      ['session_id', optionalUuid(input.sessionId, 'sessionId')],
+      ['parent_node_id', optionalUuid(input.parentNodeId, 'parentNodeId')],
+      ['mode', mode],
+      ['source_scopes', [...sourceScopes]],
+      ['depth', depth],
+      ['mode_parameters', { ...modeParameters }],
+    ])
+  } catch (error) {
+    if (error instanceof ResearchClientError) throw error
+    throw new ResearchClientError(error.message, undefined, error)
+  }
 }
 
 export function runResearch(input, { signal } = {}) {
@@ -294,12 +339,43 @@ export function normalizeResearchTrail(value) {
   })
 }
 
+function normalizeResearchEvent(value, path) {
+  object(value, path)
+  return {
+    id: text(value.id, `${path}.id`, { max: 500 }),
+    title: text(value.title, `${path}.title`, { max: 1_000 }),
+    description: text(value.description, `${path}.description`),
+    reference: text(value.reference, `${path}.reference`, { max: 2_000 }),
+    sourceIds: normalizeSourceIds(field(value, 'source_ids', 'sourceIds'), `${path}.source_ids`, { max: MAX_SOURCES }),
+    people: stringArray(value.people, `${path}.people`, { itemMax: 1_000 }),
+    places: stringArray(value.places, `${path}.places`, { itemMax: 1_000 }),
+  }
+}
+
+export function normalizeResearchEvents(value) {
+  object(value, 'research events')
+  const eventIds = new Set()
+  const events = array(value.events, 'events', { max: MAX_EVENTS }).map((item, index) => {
+    const event = normalizeResearchEvent(item, `events[${index}]`)
+    if (eventIds.has(event.id)) throw new TypeError(`duplicate event ID: ${event.id}`)
+    eventIds.add(event.id)
+    return event
+  })
+  return deepFreeze({ events })
+}
+
 export function searchResearchEvents(query, { signal } = {}) {
-  return api.get(`/research/events?q=${encodePathValue(query ?? '')}`, { signal })
+  if (typeof query !== 'string') throw new ResearchClientError('query must be a string', 'query')
+  if (query.length > MAX_EVENT_QUERY_CHARS) {
+    throw new ResearchClientError(`query must contain at most ${MAX_EVENT_QUERY_CHARS.toLocaleString()} characters`, 'query')
+  }
+  return api.get(`/research/events?q=${encodePathValue(query)}`, { signal }).then(normalizeResearchEvents)
 }
 
 export function getResearchTrail(nodeId, { signal } = {}) {
-  return api.get(`/research/trail/${encodePathValue(nodeId)}`, { signal }).then(normalizeResearchTrail)
+  const normalizedNodeId = optionalUuid(nodeId, 'nodeId')
+  if (!normalizedNodeId) throw new ResearchClientError('nodeId must be a UUID string', 'nodeId')
+  return api.get(`/research/trail/${encodePathValue(normalizedNodeId)}`, { signal }).then(normalizeResearchTrail)
 }
 
 function storageOrNull(storage) {
