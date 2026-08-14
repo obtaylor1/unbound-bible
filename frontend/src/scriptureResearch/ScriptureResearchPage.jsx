@@ -20,6 +20,7 @@ import {
   DEFAULT_RESEARCH_SETTINGS,
   SOURCE_SCOPES,
 } from './researchModel'
+import './ScriptureResearchPage.css'
 
 const SOURCE_SCOPE_LABELS = new Map(SOURCE_SCOPES.map((scope) => [scope.value, scope.label]))
 
