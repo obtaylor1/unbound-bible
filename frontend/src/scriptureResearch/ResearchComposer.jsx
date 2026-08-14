@@ -18,7 +18,6 @@ const EXAMPLES = [
     modeParameters: { from_event_id: 'eden', to_event_id: 'abel-killed' },
   },
   { label: 'Explain Enoch', question: 'Explain Enoch and its place in biblical tradition', mode: 'explain-a-book' },
-  { label: 'Malachi to Matthew', question: 'What happened between Malachi and Matthew?', mode: 'what-happened-between' },
   { label: 'Genesis 6 and Enoch', question: 'Compare the Genesis 6 account with 1 Enoch', mode: 'compare-accounts' },
   { label: 'Cush', question: 'Research Cush across Scripture and ancient sources', mode: 'people-and-places' },
   { label: "Ge'ez", question: "What can the Ge'ez language reveal about biblical texts?", mode: 'original-languages' },
@@ -175,10 +174,7 @@ export default function ResearchComposer({
               {
                 ...settings,
                 sourceScopes: [...sourceScopes],
-                modeParameters: {
-                  ...(settings.modeParameters ?? {}),
-                  ...(example.modeParameters ?? {}),
-                },
+                modeParameters: { ...(example.modeParameters ?? {}) },
               },
               example.mode ?? mode,
             )}

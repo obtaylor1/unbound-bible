@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
@@ -114,14 +114,15 @@ describe('ResearchComposer', () => {
     expect(screen.getByRole('button', { name: 'Build Timeline' })).toBeDisabled()
   })
 
-  it('offers the six compact examples without auto-running them', async () => {
+  it('offers only supported compact examples without auto-running them', async () => {
     const user = userEvent.setup()
     const onExample = vi.fn()
     const onSubmit = vi.fn()
     render(<ControlledComposer onExample={onExample} onSubmit={onSubmit} />)
-    for (const name of ['Eden to Abel', 'Explain Enoch', 'Malachi to Matthew', 'Genesis 6 and Enoch', 'Cush', "Ge'ez"]) {
+    for (const name of ['Eden to Abel', 'Explain Enoch', 'Genesis 6 and Enoch', 'Cush', "Ge'ez"]) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
+    expect(screen.queryByRole('button', { name: 'Malachi to Matthew' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Explain Enoch' }))
     expect(onExample).toHaveBeenCalledWith(
       'Explain Enoch and its place in biblical tradition',
@@ -164,6 +165,28 @@ describe('ResearchComposer', () => {
       },
       'what-happened-between',
     )
+  })
+
+  it('gives every displayed between-events example a complete verified pair', async () => {
+    const user = userEvent.setup()
+    const onExample = vi.fn()
+    render(<ControlledComposer onExample={onExample} />)
+
+    const examples = screen.getByLabelText('Research examples')
+    for (const button of within(examples).getAllByRole('button')) {
+      await user.click(button)
+    }
+
+    const betweenExamples = onExample.mock.calls.filter((call) => (
+      call[2] === 'what-happened-between'
+    ))
+    expect(betweenExamples.length).toBeGreaterThan(0)
+    for (const [, exampleSettings] of betweenExamples) {
+      expect(exampleSettings.modeParameters).toEqual({
+        from_event_id: expect.any(String),
+        to_event_id: expect.any(String),
+      })
+    }
   })
 
   it('contains no nested form and exposes a real, capability-gated voice action', async () => {

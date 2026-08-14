@@ -786,11 +786,19 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
       <ResearchComposer
         value={question}
-        onChange={(value) => { hasInteractedRef.current = true; setQuestion(value) }}
+        onChange={(value) => {
+          hasInteractedRef.current = true
+          setQuestion(value)
+          setSettings((current) => ({ ...current, modeParameters: {} }))
+        }}
         settings={settings}
         onSettingsChange={(value) => { hasInteractedRef.current = true; setSettings(value) }}
         mode={mode}
-        onModeChange={(value) => { hasInteractedRef.current = true; setMode(value) }}
+        onModeChange={(value) => {
+          hasInteractedRef.current = true
+          setMode(value)
+          setSettings((current) => ({ ...current, modeParameters: {} }))
+        }}
         onSubmit={submitComposer}
         loading={pageState === 'loading'}
         searchEvents={searchResearchEvents}

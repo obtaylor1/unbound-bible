@@ -96,6 +96,55 @@ describe('ScriptureResearchPage', () => {
     expect(await screen.findByText('Genesis records expulsion, births, offerings, and Abel’s death.')).toBeInTheDocument()
   })
 
+  it('clears event IDs when the main question is edited after an event example', async () => {
+    runResearch.mockResolvedValue(response())
+    render(<ScriptureResearchPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Eden to Abel' }))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(1))
+
+    fireEvent.change(screen.getByLabelText('Research question'), {
+      target: { value: 'What does Genesis teach about creation?' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /ask/i }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).toEqual(expect.objectContaining({
+      question: 'What does Genesis teach about creation?',
+      modeParameters: {},
+    }))
+  })
+
+  it('clears event IDs when changing away from between-events mode', async () => {
+    runResearch.mockResolvedValue(response())
+    render(<ScriptureResearchPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Eden to Abel' }))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explain a Book' }))
+    fireEvent.click(screen.getByRole('button', { name: /ask/i }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).toEqual(expect.objectContaining({
+      mode: 'explain-a-book',
+      modeParameters: {},
+    }))
+  })
+
+  it('replaces event IDs when choosing a different example', async () => {
+    runResearch.mockResolvedValue(response())
+    render(<ScriptureResearchPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Eden to Abel' }))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explain Enoch' }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).toEqual(expect.objectContaining({
+      mode: 'explain-a-book',
+      modeParameters: {},
+    }))
+  })
+
   it('announces honest loading stages and renders a successful workspace', async () => {
     const request = deferred()
     runResearch.mockReturnValue(request.promise)
