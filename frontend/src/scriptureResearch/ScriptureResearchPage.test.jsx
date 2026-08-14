@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import { GUEST_RESEARCH_STORAGE_KEY, runResearch } from './researchApi'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
@@ -115,6 +116,78 @@ describe('ScriptureResearchPage', () => {
     unmount()
     expect(firstSignal.aborted).toBe(true)
     await act(async () => first.resolve(response({ query: 'First research question' })))
+  })
+
+  it('completes research after React StrictMode replays the mount effect', async () => {
+    const pending = deferred()
+    runResearch.mockReturnValue(pending.promise)
+    render(<StrictMode><ScriptureResearchPage /></StrictMode>)
+    submitQuestion('Strict mode research')
+
+    await act(async () => pending.resolve(response({ query: 'Strict mode research' })))
+
+    expect(await screen.findByRole('heading', { name: 'Strict mode research' })).toBeInTheDocument()
+  })
+
+  it('clears user A research when the authenticated principal changes to user B', async () => {
+    let auth = { status: 'authenticated', user: { id: 'user-a' } }
+    useAuth.mockImplementation(() => auth)
+    runResearch.mockResolvedValue(response({ query: 'Private user A research' }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Private user A research')
+    expect(await screen.findByRole('heading', { name: 'Private user A research' })).toBeInTheDocument()
+
+    auth = { status: 'authenticated', user: { id: 'user-b' } }
+    rerender(<ScriptureResearchPage />)
+
+    expect(screen.queryByRole('heading', { name: 'Private user A research' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Research question')).toHaveValue('')
+    expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
+  })
+
+  it('ignores user A in-flight completion after logout and restores guest research', async () => {
+    const guest = response({ id: IDS.followup, query: 'Saved guest research', trailNode: null })
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: {
+        nodes: [{ id: guest.id, parentNodeId: null, response: guest }],
+        activeNodeId: guest.id,
+        settings: guest.settings,
+      },
+    }))
+    const pending = deferred()
+    let auth = { status: 'authenticated', user: { id: 'user-a' } }
+    useAuth.mockImplementation(() => auth)
+    runResearch.mockReturnValue(pending.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Private pending user A research')
+
+    auth = { status: 'anonymous', user: null }
+    rerender(<ScriptureResearchPage />)
+    await act(async () => pending.resolve(response({ query: 'Private pending user A research' })))
+
+    expect(await screen.findByRole('heading', { name: 'Saved guest research' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Private pending user A research' })).not.toBeInTheDocument()
+    const stored = JSON.parse(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).session
+    expect(stored.nodes).toHaveLength(1)
+    expect(stored.nodes[0].response.query).toBe('Saved guest research')
+  })
+
+  it('ignores user A in-flight completion after switching to user B', async () => {
+    const pending = deferred()
+    let auth = { status: 'authenticated', user: { id: 'user-a' } }
+    useAuth.mockImplementation(() => auth)
+    runResearch.mockReturnValue(pending.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Private pending user A research')
+
+    auth = { status: 'authenticated', user: { id: 'user-b' } }
+    rerender(<ScriptureResearchPage />)
+    await act(async () => pending.resolve(response({ query: 'Private pending user A research' })))
+
+    expect(screen.queryByRole('heading', { name: 'Private pending user A research' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Research question')).toHaveValue('')
+    expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
   })
 
   it('prevents every in-flight duplicate submission', () => {
@@ -411,6 +484,60 @@ describe('ScriptureResearchPage', () => {
     expect(await screen.findByText(/saved privately/i)).toHaveAttribute('role', 'status')
   })
 
+  it('shares one in-flight persistence operation across rapid Save and Share actions', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    runResearch.mockResolvedValue(response())
+    const creatingStudy = deferred()
+    api.post.mockImplementation((url) => (
+      url === '/studies' ? creatingStudy.promise : Promise.resolve({})
+    ))
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+    const save = await screen.findByRole('button', { name: 'Save research' })
+    const share = screen.getByRole('button', { name: 'Share research' })
+
+    fireEvent.click(save)
+    fireEvent.click(share)
+
+    expect(api.post.mock.calls.filter(([url]) => url === '/studies')).toHaveLength(1)
+    expect(save).toBeDisabled()
+    expect(share).toBeDisabled()
+    await act(async () => creatingStudy.resolve({ id: 'study-1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Share research' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Share study session' })).toBeInTheDocument()
+    expect(api.post.mock.calls.filter(([url]) => url === '/studies')).toHaveLength(1)
+  })
+
+  it('retries partial authenticated persistence without duplicating completed writes', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    runResearch.mockResolvedValue(response())
+    let assistantAttempts = 0
+    api.post.mockImplementation((url, payload) => {
+      if (url === '/studies') return Promise.resolve({ id: 'study-1' })
+      if (url.endsWith('/messages') && payload.role === 'assistant') {
+        assistantAttempts += 1
+        return assistantAttempts === 1
+          ? Promise.reject(new Error('assistant write failed'))
+          : Promise.resolve({})
+      }
+      return Promise.resolve({})
+    })
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+    const save = await screen.findByRole('button', { name: 'Save research' })
+
+    fireEvent.click(save)
+    expect(await screen.findByText(/could not be saved/i)).toHaveTextContent('assistant write failed')
+    fireEvent.click(save)
+    expect(await screen.findByText(/saved privately/i)).toBeInTheDocument()
+
+    expect(api.post.mock.calls.filter(([url]) => url === '/studies')).toHaveLength(1)
+    expect(api.post.mock.calls.filter(([url, payload]) => url.endsWith('/messages') && payload.role === 'user')).toHaveLength(1)
+    expect(api.post.mock.calls.filter(([url, payload]) => url.endsWith('/messages') && payload.role === 'assistant')).toHaveLength(2)
+    expect(api.post.mock.calls.filter(([url]) => url.endsWith('/sources'))).toHaveLength(1)
+  })
+
   it('saves guest research to the existing resilient local study collection', async () => {
     localStorage.setItem('unbound_saved_studies', '{malformed')
     runResearch.mockResolvedValue(response())
@@ -470,15 +597,27 @@ describe('ScriptureResearchPage', () => {
   })
 
   it('opens ShareStudyModal with meaningful result data', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    runResearch.mockResolvedValue(response())
+    api.post.mockResolvedValueOnce({ id: 'study-1' }).mockResolvedValue({})
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+    fireEvent.click(await screen.findByRole('button', { name: 'Share research' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Share study session' })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByText('Scripture Research AI')).toBeInTheDocument()
+    expect(within(dialog).getByText(/Eden and Abel/)).toBeInTheDocument()
+  })
+
+  it('does not open a dead share dialog for guests and gives a sign-in path', async () => {
     runResearch.mockResolvedValue(response())
     render(<ScriptureResearchPage />)
     submitQuestion()
     fireEvent.click(await screen.findByRole('button', { name: 'Share research' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'Share study session' })
-    expect(dialog).toBeInTheDocument()
-    expect(within(dialog).getByText('Scripture Research AI')).toBeInTheDocument()
-    expect(within(dialog).getByText(/Eden and Abel/)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Share study session' })).not.toBeInTheDocument()
+    expect(await screen.findByText(/sign in.*top navigation.*share/i)).toHaveAttribute('role', 'status')
   })
 
   it('starts New Research by clearing question, result, and guest trail', async () => {

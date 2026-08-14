@@ -106,26 +106,6 @@ def _snapshot_context(snapshot: Any) -> ConversationContext | None:
     return context if context.entity_names or context.source_references else None
 
 
-def _merged_context(
-    supplied: ConversationContext | None,
-    derived: ConversationContext | None,
-) -> ConversationContext | None:
-    if supplied is None and derived is None:
-        return None
-    supplied = supplied or ConversationContext()
-    derived = derived or ConversationContext()
-    context = ConversationContext(
-        entity_names=_context_values(
-            [*supplied.entity_names, *derived.entity_names], max_length=200
-        ),
-        source_references=_context_values(
-            [*supplied.source_references, *derived.source_references],
-            max_length=500,
-        ),
-    )
-    return context if context.entity_names or context.source_references else None
-
-
 @router.post(
     '/query',
     response_model=ResearchResponse,
@@ -162,11 +142,12 @@ async def query(
             raise _problem(404, 'not_found', 'Research trail node not found.')
 
     effective_payload = payload
-    if parent is not None:
+    if user is not None:
         effective_payload = payload.model_copy(update={
-            'conversation_context': _merged_context(
-                payload.conversation_context,
-                _snapshot_context(parent.response_snapshot),
+            'conversation_context': (
+                _snapshot_context(parent.response_snapshot)
+                if parent is not None
+                else None
             ),
         })
 
@@ -188,7 +169,7 @@ async def query(
             node = create_research_node(
                 session,
                 user.id,
-                payload,
+                effective_payload,
                 response,
                 parent=parent,
             )

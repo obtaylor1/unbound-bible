@@ -52,6 +52,19 @@ const resultText = (response) => {
 
 const abortError = (error) => error?.name === 'AbortError' || error?.code === 'ERR_CANCELED'
 
+const createPersistenceState = (responseId = null, principalKey = null) => ({
+  responseId,
+  principalKey,
+  studyId: null,
+  inFlight: null,
+  completed: new Set(),
+})
+
+const invalidatedPersistenceError = () => Object.assign(
+  new Error('The signed-in research session changed.'),
+  { name: 'AbortError' },
+)
+
 const compactConversationContext = (response) => {
   const entityNames = [...response.people, ...response.places]
     .map((entity) => entity.name)
@@ -175,7 +188,10 @@ function ResultNotice({ state, response, onRetry }) {
 }
 
 export default function ScriptureResearchPage({ onPageChange }) {
-  const { status: authStatus } = useAuth()
+  const { status: authStatus, user: authUser } = useAuth()
+  const principalKey = authStatus === 'authenticated'
+    ? `user:${authUser?.id ?? 'unknown'}`
+    : authStatus === 'anonymous' ? 'guest' : 'loading'
   const initialGuestSession = useMemo(() => (
     authStatus === 'anonymous' ? loadGuestResearchSession() : createEmptyResearchSession()
   ), [authStatus])
@@ -199,6 +215,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const [shareOpen, setShareOpen] = useState(false)
   const [shareData, setShareData] = useState(null)
   const [studyId, setStudyId] = useState(null)
+  const [persistenceBusy, setPersistenceBusy] = useState(false)
   const activeControllerRef = useRef(null)
   const requestGenerationRef = useRef(0)
   const lastRequestRef = useRef(requestFromResponse(initialGuestResponse))
@@ -206,13 +223,81 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const guestHydratedRef = useRef(authStatus === 'anonymous')
   const hasInteractedRef = useRef(false)
   const authStatusRef = useRef(authStatus)
+  const principalRef = useRef(principalKey)
+  const settledPrincipalRef = useRef(principalKey === 'loading' ? null : principalKey)
+  const activeResponseRef = useRef(activeResponse)
+  const persistenceRef = useRef(createPersistenceState())
   authStatusRef.current = authStatus
+  principalRef.current = principalKey
+  activeResponseRef.current = activeResponse
 
-  useEffect(() => () => {
-    mountedRef.current = false
-    requestGenerationRef.current += 1
-    activeControllerRef.current?.abort()
+  const resetPersistence = useCallback(() => {
+    persistenceRef.current = createPersistenceState()
+    setPersistenceBusy(false)
+    setStudyId(null)
   }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      requestGenerationRef.current += 1
+      activeControllerRef.current?.abort()
+      persistenceRef.current = createPersistenceState()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (principalKey === 'loading') return
+    const previousPrincipal = settledPrincipalRef.current
+    settledPrincipalRef.current = principalKey
+    if (previousPrincipal === null || previousPrincipal === principalKey) return
+
+    activeControllerRef.current?.abort()
+    requestGenerationRef.current += 1
+    resetPersistence()
+    setShareOpen(false)
+    setShareData(null)
+    setErrorMessage('')
+    setStatusMessage('')
+    lastRequestRef.current = null
+
+    if (principalKey === 'guest') {
+      const restored = loadGuestResearchSession()
+      const restoredResponse = restored.activeNodeId
+        ? restored.nodes.find((node) => node.id === restored.activeNodeId)?.response ?? null
+        : null
+      guestHydratedRef.current = true
+      setGuestSession(restored)
+      setAuthenticatedSession(createEmptyResearchSession())
+      setActiveResponse(restoredResponse)
+      setQuestion(restoredResponse?.query ?? '')
+      setSettings(cloneSettings(restoredResponse?.settings ?? restored.settings))
+      setMode(restoredResponse?.mode ?? DEFAULT_RESEARCH_MODE)
+      setPageState(restoredResponse
+        ? restoredResponse.groundingStatus === 'insufficient' ? 'insufficient'
+          : restoredResponse.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success'
+        : 'empty')
+      lastRequestRef.current = requestFromResponse(restoredResponse)
+      return
+    }
+
+    if (previousPrincipal === 'guest') {
+      setAuthenticatedSession({
+        nodes: guestSession.nodes,
+        activeNodeId: guestSession.activeNodeId,
+        settings: cloneSettings(guestSession.settings),
+      })
+      return
+    }
+
+    setAuthenticatedSession(createEmptyResearchSession())
+    setActiveResponse(null)
+    setQuestion('')
+    setSettings(cloneSettings())
+    setMode(DEFAULT_RESEARCH_MODE)
+    setPageState('empty')
+  }, [guestSession, principalKey, resetPersistence])
 
   useEffect(() => {
     if (authStatus !== 'anonymous' || guestHydratedRef.current) return
@@ -279,6 +364,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
     activeControllerRef.current = controller
     const generation = ++requestGenerationRef.current
     const requestAuthStatus = authStatusRef.current
+    const requestPrincipalKey = principalRef.current
     const localParentNodeId = requestAuthStatus === 'anonymous' ? guestSession.activeNodeId : null
     const normalizedRequest = {
       question: requestInput.question.trim(),
@@ -306,14 +392,19 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
     try {
       const response = await runResearch(normalizedRequest, { signal: controller.signal })
-      if (!mountedRef.current || generation !== requestGenerationRef.current || controller.signal.aborted) return
+      if (
+        !mountedRef.current
+        || generation !== requestGenerationRef.current
+        || controller.signal.aborted
+        || (requestPrincipalKey !== 'loading' && principalRef.current !== requestPrincipalKey)
+      ) return
       const serverPersisted = requestAuthStatus === 'authenticated' && Boolean(response.trailNode?.id)
       const retainedResponse = serverPersisted || !response.trailNode
         ? response
         : { ...response, trailNode: null }
       const completionAuthStatus = authStatusRef.current
+      resetPersistence()
       setActiveResponse(retainedResponse)
-      setStudyId(null)
       if (response.groundingStatus === 'insufficient') setPageState('insufficient')
       else if (response.groundingStatus === 'evidence-only') setPageState('evidence-only')
       else setPageState('success')
@@ -333,11 +424,16 @@ export default function ScriptureResearchPage({ onPageChange }) {
         }))
       } else storeGuestResponse(retainedResponse, localParentNodeId, normalizedRequest)
     } catch (error) {
-      if (abortError(error) || controller.signal.aborted || generation !== requestGenerationRef.current) return
+      if (
+        abortError(error)
+        || controller.signal.aborted
+        || generation !== requestGenerationRef.current
+        || (requestPrincipalKey !== 'loading' && principalRef.current !== requestPrincipalKey)
+      ) return
       setErrorMessage(error?.message || 'The research service could not complete this request.')
       setPageState('error')
     }
-  }, [guestSession.activeNodeId, pageState, storeGuestResponse])
+  }, [guestSession.activeNodeId, pageState, resetPersistence, storeGuestResponse])
 
   const submitComposer = useCallback((input) => executeResearch(input), [executeResearch])
   const submitExample = useCallback((exampleQuestion, exampleSettings, exampleMode) => {
@@ -375,22 +471,67 @@ export default function ScriptureResearchPage({ onPageChange }) {
   }, [activeResponse, authStatus, executeResearch])
 
   const persistResearch = useCallback(async () => {
-    if (!activeResponse) return null
-    if (studyId) return studyId
-    const title = `Scripture Research: ${activeResponse.query.slice(0, 80)}`
-    const study = await api.post('/studies', { title })
-    await api.post(`/studies/${study.id}/messages`, { role: 'user', content: activeResponse.query })
-    await api.post(`/studies/${study.id}/messages`, { role: 'assistant', content: resultText(activeResponse) })
-    for (const source of activeResponse.sources) {
-      await api.post(`/studies/${study.id}/sources`, {
-        title: source.title,
-        url: source.openTarget || null,
-        citation: source.reference,
-      })
+    if (!activeResponse || authStatus !== 'authenticated') return null
+    const response = activeResponse
+    const responseId = response.trailNode?.id ?? response.id
+    const requestPrincipalKey = principalRef.current
+    let state = persistenceRef.current
+    if (state.responseId !== responseId || state.principalKey !== requestPrincipalKey) {
+      state = createPersistenceState(responseId, requestPrincipalKey)
+      persistenceRef.current = state
+      setStudyId(null)
     }
-    setStudyId(study.id)
-    return study.id
-  }, [activeResponse, studyId])
+    if (state.inFlight) return state.inFlight
+
+    const assertCurrent = () => {
+      const currentResponse = activeResponseRef.current
+      const currentResponseId = currentResponse?.trailNode?.id ?? currentResponse?.id
+      if (
+        persistenceRef.current !== state
+        || principalRef.current !== requestPrincipalKey
+        || currentResponseId !== responseId
+      ) throw invalidatedPersistenceError()
+    }
+    const writeOnce = async (key, url, payload) => {
+      if (state.completed.has(key)) return
+      assertCurrent()
+      await api.post(url, payload)
+      assertCurrent()
+      state.completed.add(key)
+    }
+
+    const operation = (async () => {
+      if (!state.studyId) {
+        const title = `Scripture Research: ${response.query.slice(0, 80)}`
+        const study = await api.post('/studies', { title })
+        assertCurrent()
+        state.studyId = study.id
+        setStudyId(study.id)
+      }
+      const baseUrl = `/studies/${state.studyId}`
+      await writeOnce('message:user', `${baseUrl}/messages`, { role: 'user', content: response.query })
+      await writeOnce('message:assistant', `${baseUrl}/messages`, { role: 'assistant', content: resultText(response) })
+      for (const [index, source] of response.sources.entries()) {
+        await writeOnce(`source:${source.id ?? index}`, `${baseUrl}/sources`, {
+          title: source.title,
+          url: source.openTarget || null,
+          citation: source.reference,
+        })
+      }
+      return state.studyId
+    })()
+
+    state.inFlight = operation
+    setPersistenceBusy(true)
+    try {
+      return await operation
+    } finally {
+      if (persistenceRef.current === state) {
+        state.inFlight = null
+        setPersistenceBusy(false)
+      }
+    }
+  }, [activeResponse, authStatus])
 
   const saveResearch = useCallback(async () => {
     if (!activeResponse) return
@@ -422,24 +563,36 @@ export default function ScriptureResearchPage({ onPageChange }) {
       setStatusMessage('Research saved to My Library on this device.')
       return
     }
+    const requestPrincipalKey = principalRef.current
     try {
       await persistResearch()
+      if (principalRef.current !== requestPrincipalKey) return
       setStatusMessage('Research saved privately to My Library.')
     } catch (error) {
+      if (abortError(error) || principalRef.current !== requestPrincipalKey) return
       setStatusMessage(`Research could not be saved: ${error.message}`)
     }
   }, [activeResponse, authStatus, persistResearch])
 
   const shareResearch = useCallback(async () => {
     if (!activeResponse) return
+    if (authStatus !== 'authenticated') {
+      setShareOpen(false)
+      setShareData(null)
+      setStatusMessage('Sign in using the Sign in button in the top navigation to share this research.')
+      return
+    }
+    const requestPrincipalKey = principalRef.current
     let persistedId = studyId
-    if (authStatus === 'authenticated' && !persistedId) {
+    if (!persistedId) {
       try { persistedId = await persistResearch() }
       catch (error) {
+        if (abortError(error) || principalRef.current !== requestPrincipalKey) return
         setStatusMessage(`Research could not be prepared for sharing: ${error.message}`)
         return
       }
     }
+    if (principalRef.current !== requestPrincipalKey) return
     setShareData({
       studyId: persistedId,
       title: activeResponse.query,
@@ -463,11 +616,12 @@ export default function ScriptureResearchPage({ onPageChange }) {
     setAuthenticatedSession(createEmptyResearchSession())
     setErrorMessage('')
     setStatusMessage('')
-    setStudyId(null)
+    resetPersistence()
     setShareOpen(false)
+    setShareData(null)
     lastRequestRef.current = null
     if (authStatus === 'anonymous') clearGuestResearchSession()
-  }, [authStatus])
+  }, [authStatus, resetPersistence])
 
   const activeSession = authStatus === 'authenticated' ? authenticatedSession : guestSession
   const activeTrail = useMemo(() => {
@@ -507,12 +661,13 @@ export default function ScriptureResearchPage({ onPageChange }) {
       })
     }
     setActiveResponse(stored.response)
+    resetPersistence()
     setQuestion(stored.response.query)
     setSettings(cloneSettings(stored.response.settings))
     setMode(stored.response.mode)
     setPageState(stored.response.groundingStatus === 'insufficient' ? 'insufficient'
       : stored.response.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success')
-  }, [authStatus, authenticatedSession, guestSession])
+  }, [authStatus, authenticatedSession, guestSession, resetPersistence])
 
   const openTarget = useCallback((target, source) => {
     if (!target) return
@@ -532,8 +687,8 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
   const actionBar = activeResponse ? (
     <>
-      <button type="button" onClick={saveResearch}>Save research</button>
-      <button type="button" onClick={shareResearch}>Share research</button>
+      <button type="button" onClick={saveResearch} disabled={persistenceBusy}>Save research</button>
+      <button type="button" onClick={shareResearch} disabled={persistenceBusy}>Share research</button>
       <button type="button" onClick={newResearch}>New Research</button>
     </>
   ) : null

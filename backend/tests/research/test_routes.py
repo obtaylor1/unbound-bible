@@ -441,8 +441,8 @@ def test_parent_snapshot_prose_never_enters_follow_up_retrieval_or_prompt(
                 'question': 'What happened next?',
                 'parent_node_id': root['id'],
                 'conversation_context': {
-                    'entity_names': ['Abel'],
-                    'source_references': ['Genesis 2'],
+                    'entity_names': ['CLIENT SENTINEL'],
+                    'source_references': ['CLIENT REFERENCE'],
                 },
             },
         )
@@ -450,13 +450,68 @@ def test_parent_snapshot_prose_never_enters_follow_up_retrieval_or_prompt(
     assert child.status_code == 200
     assert seen_questions[-1] == (
         'What happened next?\n'
-        'Context entities: Abel; Cain; Eden\n'
-        'Context source references: Genesis 2; Genesis 4:1'
+        'Context entities: Cain; Eden\n'
+        'Context source references: Genesis 4:1'
     )
     assert sentinel not in '\n'.join(
         message.content for message in seen_messages
     )
     assert sentinel not in seen_questions[-1]
+    assert 'CLIENT SENTINEL' not in seen_questions[-1]
+    assert 'CLIENT REFERENCE' not in '\n'.join(
+        message.content for message in seen_messages
+    )
+
+
+def test_authenticated_root_ignores_client_conversation_context(
+    test_settings, monkeypatch,
+):
+    seen_questions = []
+    seen_messages = []
+
+    class OfflineProvider:
+        name = 'offline'
+
+        async def complete(self, messages):
+            seen_messages.extend(messages)
+            raise ProviderError('offline')
+
+    evidence = ResearchEvidence(
+        id='scripture:1', title='Genesis', reference='Genesis 4:1',
+        text='Eve bore Cain.', source_type='canonical-scripture',
+        tradition='Protestant', translation='KJV',
+    )
+
+    def retrieve(_session, question, _scopes, _depth):
+        seen_questions.append(question)
+        return [evidence]
+
+    monkeypatch.setattr('app.research.router.retrieve_research_evidence', retrieve)
+    monkeypatch.setattr(
+        'app.research.router.create_chat_provider', lambda *_args: OfflineProvider()
+    )
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        owner = _register(client, 'owner@example.com', 'owner')
+        result = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={
+                'question': 'Who was Cain?',
+                'conversation_context': {
+                    'entity_names': ['CLIENT SENTINEL'],
+                    'source_references': ['CLIENT REFERENCE'],
+                },
+            },
+        )
+
+    assert result.status_code == 200
+    assert seen_questions == ['Who was Cain?']
+    assert 'CLIENT SENTINEL' not in '\n'.join(
+        message.content for message in seen_messages
+    )
+    assert 'CLIENT REFERENCE' not in '\n'.join(
+        message.content for message in seen_messages
+    )
 
 
 def test_provider_configuration_failure_is_safe_503(test_settings, monkeypatch):
