@@ -134,14 +134,17 @@ test('reduced motion loading state has no continuously animated element', async 
   await page.getByLabel('Research question').fill('What happened between Eden and Abel?')
   await page.getByRole('button', { name: /Ask/ }).click()
   await expect(page.getByRole('heading', { name: 'Building your grounded research' })).toBeVisible()
-  const continuouslyAnimated = await page.locator('.research-loading, .research-loading *').evaluateAll((elements) => (
-    elements.some((element) => {
-      const style = getComputedStyle(element)
-      const iterations = style.animationIterationCount.split(',').map((value) => value.trim())
-      return style.animationName !== 'none' && iterations.some((value) => value === 'infinite' || Number(value) > 1)
-    })
-  ))
-  expect(continuouslyAnimated).toBe(false)
+  const loadingPulse = await page.locator('.research-loading').evaluate((element) => {
+    const style = getComputedStyle(element, '::after')
+    return {
+      animationName: style.animationName,
+      animationDurations: style.animationDuration.split(',').map((value) => Number.parseFloat(value)),
+      animationIterations: style.animationIterationCount.split(',').map((value) => value.trim()),
+    }
+  })
+  expect(loadingPulse.animationName).toBe('none')
+  expect(loadingPulse.animationDurations.every((duration) => Number.isFinite(duration) && duration <= 0.01)).toBe(true)
+  expect(loadingPulse.animationIterations).not.toContain('infinite')
   await expect.poll(() => calls.query).toBe(1)
   await expect(page.locator('.research-workspace')).toBeVisible({ timeout: 10_000 })
 })
