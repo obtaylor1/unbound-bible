@@ -39,6 +39,7 @@ _MAX_EVIDENCE_METADATA_CHARS = 2_000
 _MAX_MODE_PARAMETERS = 8
 _MAX_MODE_PARAMETER_KEY_CHARS = 64
 _MAX_MODE_PARAMETER_VALUE_CHARS = 256
+_MAX_RETRIEVAL_QUERY_CHARS = 22_000
 MAX_PROVIDER_REQUEST_BYTES = 80_000
 
 _SYSTEM_INSTRUCTION = """Use only the supplied evidence. Return one JSON object matching the schema.
@@ -54,6 +55,25 @@ Claims must contain id, statement, classification, confidence, and source_ids. T
 
 class ResearchServiceError(RuntimeError):
     """Raised when research orchestration cannot finish safely."""
+
+
+def _retrieval_query(request: ResearchQueryRequest) -> str:
+    """Add only compact validated disambiguators to the retrieval question."""
+
+    context = request.conversation_context
+    if context is None or not (
+        context.entity_names or context.source_references
+    ):
+        return request.question
+    parts = [request.question]
+    if context.entity_names:
+        parts.append(f"Context entities: {'; '.join(context.entity_names)}")
+    if context.source_references:
+        parts.append(
+            'Context source references: '
+            f"{'; '.join(context.source_references)}"
+        )
+    return '\n'.join(parts)[:_MAX_RETRIEVAL_QUERY_CHARS]
 
 
 class ResearchService:
@@ -74,7 +94,7 @@ class ResearchService:
     async def query(self, request: ResearchQueryRequest) -> ResearchResponse:
         candidates = islice(self._retriever(
             self._session,
-            request.question,
+            _retrieval_query(request),
             request.source_scopes,
             request.depth,
         ), _MAX_EVIDENCE_RECORDS)

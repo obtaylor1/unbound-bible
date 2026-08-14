@@ -1,3 +1,4 @@
+from copy import deepcopy
 import uuid
 
 import httpx
@@ -422,18 +423,40 @@ def test_parent_snapshot_prose_never_enters_follow_up_retrieval_or_prompt(
         ).json()['trail_node']
         with app.state.session_factory() as session:
             node = session.get(ResearchNode, uuid.UUID(root['id']))
-            node.response_snapshot = {'summary': {'narrative': sentinel}}
+            snapshot = deepcopy(node.response_snapshot)
+            snapshot['summary']['narrative'] = sentinel
+            snapshot['people'] = [{
+                'name': 'Cain', 'description': sentinel, 'role': 'son',
+                'source_ids': ['scripture:1'],
+            }]
+            snapshot['places'] = [{
+                'name': 'Eden', 'description': sentinel, 'location': 'garden',
+                'source_ids': ['scripture:1'],
+            }]
+            node.response_snapshot = snapshot
             session.commit()
         child = client.post(
             '/api/v1/research/query', headers=owner,
-            json={'question': 'What happened next?', 'parent_node_id': root['id']},
+            json={
+                'question': 'What happened next?',
+                'parent_node_id': root['id'],
+                'conversation_context': {
+                    'entity_names': ['Abel'],
+                    'source_references': ['Genesis 2'],
+                },
+            },
         )
 
     assert child.status_code == 200
-    assert seen_questions[-1] == 'What happened next?'
+    assert seen_questions[-1] == (
+        'What happened next?\n'
+        'Context entities: Abel; Cain; Eden\n'
+        'Context source references: Genesis 2; Genesis 4:1'
+    )
     assert sentinel not in '\n'.join(
         message.content for message in seen_messages
     )
+    assert sentinel not in seen_questions[-1]
 
 
 def test_provider_configuration_failure_is_safe_503(test_settings, monkeypatch):

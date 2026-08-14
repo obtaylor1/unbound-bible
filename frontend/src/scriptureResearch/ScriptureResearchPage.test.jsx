@@ -66,6 +66,7 @@ describe('ScriptureResearchPage', () => {
     localStorage.clear()
     window.location.hash = '#aistudy'
     vi.clearAllMocks()
+    runResearch.mockReset()
     useAuth.mockReturnValue({ status: 'anonymous', user: null })
   })
 
@@ -262,6 +263,74 @@ describe('ScriptureResearchPage', () => {
     expect(screen.queryByRole('heading', { name: saved.query })).not.toBeInTheDocument()
   })
 
+  it('retains and stores a query that completes after auth loading resolves anonymous', async () => {
+    const pending = deferred()
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({ status, user: null }))
+    runResearch.mockReturnValue(pending.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Who was Cain?')
+
+    status = 'anonymous'
+    rerender(<ScriptureResearchPage />)
+    await act(async () => pending.resolve(response({ query: 'Who was Cain?', trailNode: null })))
+
+    expect(await screen.findByRole('heading', { name: 'Who was Cain?' })).toBeInTheDocument()
+    const stored = JSON.parse(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY))
+    expect(stored.session.nodes).toHaveLength(1)
+    expect(stored.session.nodes[0].response.query).toBe('Who was Cain?')
+  })
+
+  it('retains a safe local trail when auth loading resolves authenticated mid-query', async () => {
+    const pending = deferred()
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({
+      status,
+      user: status === 'authenticated' ? { id: 'user-1' } : null,
+    }))
+    runResearch
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(response({
+        id: IDS.followup,
+        query: 'What happened to Cain after Abel’s death?',
+        trailNode: null,
+      }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Who was Cain?')
+
+    status = 'authenticated'
+    rerender(<ScriptureResearchPage />)
+    await act(async () => pending.resolve(response({ query: 'Who was Cain?', trailNode: null })))
+
+    expect(await screen.findByRole('heading', { name: 'Who was Cain?' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Research trail' })).toHaveTextContent('Who was Cain?')
+    fireEvent.click(screen.getByRole('button', { name: 'What happened to Cain after Abel’s death?' }))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).not.toHaveProperty('parentNodeId')
+    expect(runResearch.mock.calls[1][0]).toMatchObject({
+      conversationContext: { entityNames: [], sourceReferences: ['Genesis 2–4'] },
+    })
+  })
+
+  it('retains the local trail when authentication resolves after query completion', async () => {
+    const pending = deferred()
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({
+      status,
+      user: status === 'authenticated' ? { id: 'user-1' } : null,
+    }))
+    runResearch.mockReturnValueOnce(pending.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Who was Cain?')
+
+    await act(async () => pending.resolve(response({ query: 'Who was Cain?', trailNode: null })))
+    expect(await screen.findByRole('navigation', { name: 'Research trail' })).toHaveTextContent('Who was Cain?')
+
+    status = 'authenticated'
+    rerender(<ScriptureResearchPage />)
+    expect(screen.getByRole('navigation', { name: 'Research trail' })).toHaveTextContent('Who was Cain?')
+  })
+
   it('recovers safely from malformed guest storage', () => {
     localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, '{not json')
     render(<ScriptureResearchPage />)
@@ -339,6 +408,26 @@ describe('ScriptureResearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open Full Text/i }))
 
     expect(onPageChange).toHaveBeenCalledWith('apocrypha')
+    expect(window.location.hash).toBe(expectedHash)
+  })
+
+  it.each([
+    ['/api/v1/texts/Genesis/9/1/details', '#scriptures?book=Genesis&chapter=9&translation=NRSV&canon=ETHIO81&verse=1'],
+    ['/api/v1/texts/Genesis/9/1/details?translation=WEB', '#scriptures?book=Genesis&chapter=9&translation=WEB&canon=ETHIO81&verse=1'],
+    ['bible://Genesis/3', '#scriptures?book=Genesis&chapter=3&translation=NRSV&canon=ETHIO81'],
+    ['bible://Genesis/3?translation=WEB', '#scriptures?book=Genesis&chapter=3&translation=WEB&canon=ETHIO81'],
+    ['#scriptures?book=Exodus&chapter=3&canon=ETHIO81&verse=2', '#scriptures?book=Exodus&chapter=3&translation=NRSV&canon=ETHIO81&verse=2'],
+    ['#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81', '#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81'],
+  ])('opens %s in its source translation unless the target supplies one', async (openTarget, expectedHash) => {
+    const source = response().sources[0]
+    runResearch.mockResolvedValue(response({
+      sources: [{ ...source, translation: 'NRSV', openTarget }],
+    }))
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+    fireEvent.click(await screen.findByRole('button', { name: 'Cite Genesis 2–4' }))
+    fireEvent.click(screen.getByRole('button', { name: /Open Full Text/i }))
+
     expect(window.location.hash).toBe(expectedHash)
   })
 

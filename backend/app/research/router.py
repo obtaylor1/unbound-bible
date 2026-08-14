@@ -22,7 +22,12 @@ from app.research.models import (
     get_owned_research_node,
 )
 from app.research.retrieval import retrieve_research_evidence
-from app.research.schemas import ResearchQueryRequest, ResearchResponse, TrailNode
+from app.research.schemas import (
+    ConversationContext,
+    ResearchQueryRequest,
+    ResearchResponse,
+    TrailNode,
+)
 from app.research.service import ResearchService, ResearchServiceError
 from app.security.rate_limits import enforce_rate_limit
 
@@ -66,6 +71,61 @@ def _node_summary(node: ResearchNode) -> dict[str, Any]:
     }
 
 
+def _context_values(values: list[str], *, max_length: int) -> list[str]:
+    normalized: list[str] = []
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value or len(value) > max_length or value in normalized:
+            continue
+        normalized.append(value)
+        if len(normalized) == 16:
+            break
+    return normalized
+
+
+def _snapshot_context(snapshot: Any) -> ConversationContext | None:
+    """Extract only names and source references from a validated snapshot."""
+
+    try:
+        response = ResearchResponse.model_validate(snapshot)
+    except (TypeError, ValueError):
+        return None
+    context = ConversationContext(
+        entity_names=_context_values(
+            [
+                *(person.name for person in response.people),
+                *(place.name for place in response.places),
+            ],
+            max_length=200,
+        ),
+        source_references=_context_values(
+            [source.reference for source in response.sources],
+            max_length=500,
+        ),
+    )
+    return context if context.entity_names or context.source_references else None
+
+
+def _merged_context(
+    supplied: ConversationContext | None,
+    derived: ConversationContext | None,
+) -> ConversationContext | None:
+    if supplied is None and derived is None:
+        return None
+    supplied = supplied or ConversationContext()
+    derived = derived or ConversationContext()
+    context = ConversationContext(
+        entity_names=_context_values(
+            [*supplied.entity_names, *derived.entity_names], max_length=200
+        ),
+        source_references=_context_values(
+            [*supplied.source_references, *derived.source_references],
+            max_length=500,
+        ),
+    )
+    return context if context.entity_names or context.source_references else None
+
+
 @router.post(
     '/query',
     response_model=ResearchResponse,
@@ -101,6 +161,15 @@ async def query(
             _rollback(session)
             raise _problem(404, 'not_found', 'Research trail node not found.')
 
+    effective_payload = payload
+    if parent is not None:
+        effective_payload = payload.model_copy(update={
+            'conversation_context': _merged_context(
+                payload.conversation_context,
+                _snapshot_context(parent.response_snapshot),
+            ),
+        })
+
     try:
         settings = request.app.state.settings
         provider = create_chat_provider(
@@ -113,7 +182,7 @@ async def query(
             provider,
             session,
             user,
-        ).query(payload)
+        ).query(effective_payload)
 
         if user is not None:
             node = create_research_node(

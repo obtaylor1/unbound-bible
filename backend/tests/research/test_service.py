@@ -318,6 +318,45 @@ async def test_prompt_includes_only_validated_guest_entity_and_source_context():
 
 
 @pytest.mark.asyncio
+async def test_guest_context_augments_retrieval_with_only_names_and_references():
+    retrieval_queries = []
+
+    def retrieve(_session, question, _scopes, _depth):
+        retrieval_queries.append(question)
+        return evidence()
+
+    await ResearchService(
+        retriever=retrieve,
+        provider=RecordingProvider(provider_document()),
+    ).query(request(conversation_context={
+        'entity_names': ['Cain', 'Eden'],
+        'source_references': ['Genesis 3–4'],
+    }))
+
+    assert retrieval_queries == [
+        'What happened after the flood?\n'
+        'Context entities: Cain; Eden\n'
+        'Context source references: Genesis 3–4'
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_question_is_unchanged_without_conversation_context():
+    retrieval_queries = []
+
+    def retrieve(_session, question, _scopes, _depth):
+        retrieval_queries.append(question)
+        return evidence()
+
+    await ResearchService(
+        retriever=retrieve,
+        provider=RecordingProvider(provider_document()),
+    ).query(request())
+
+    assert retrieval_queries == ['What happened after the flood?']
+
+
+@pytest.mark.asyncio
 async def test_evidence_conversion_preserves_typed_provenance_and_open_target():
     result = await ResearchService(
         retriever=lambda *_: evidence(),

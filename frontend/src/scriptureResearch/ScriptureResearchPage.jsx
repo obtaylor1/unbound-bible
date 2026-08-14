@@ -77,16 +77,23 @@ const readLocalStudies = () => {
   }
 }
 
-const readerHashFromOpenTarget = (target) => {
-  if (target.startsWith('#scriptures')) return target
+const readerHashFromOpenTarget = (target, source) => {
+  if (target.startsWith('#scriptures')) {
+    const params = new URLSearchParams(target.split('?')[1] ?? '')
+    if (params.has('translation') || !source?.translation) return target
+    return readerHash({ ...parseReaderHash(target), translation: source.translation })
+  }
   const current = parseReaderHash()
-  const apiMatch = /^\/api\/v1\/texts\/([^/]+)\/(\d+)\/(\d+)\/details$/.exec(target)
+  const [apiPath, apiQuery = ''] = target.split('?')
+  const apiMatch = /^\/api\/v1\/texts\/([^/]+)\/(\d+)\/(\d+)\/details$/.exec(apiPath)
   if (apiMatch) {
+    const targetTranslation = new URLSearchParams(apiQuery).get('translation')
     return readerHash({
       ...current,
       book: decodeURIComponent(apiMatch[1]),
       chapter: Number(apiMatch[2]),
       verse: Number(apiMatch[3]),
+      translation: targetTranslation || source?.translation || current.translation,
     })
   }
   if (target.startsWith('bible://')) {
@@ -98,6 +105,7 @@ const readerHashFromOpenTarget = (target) => {
         book: decodeURIComponent(parsed.hostname),
         chapter: Number(path[0]),
         verse: path[1] ? Number(path[1]) : null,
+        translation: parsed.searchParams.get('translation') || source?.translation || current.translation,
       })
     } catch {
       return null
@@ -164,6 +172,8 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const mountedRef = useRef(true)
   const guestHydratedRef = useRef(authStatus === 'anonymous')
   const hasInteractedRef = useRef(false)
+  const authStatusRef = useRef(authStatus)
+  authStatusRef.current = authStatus
 
   useEffect(() => () => {
     mountedRef.current = false
@@ -190,12 +200,28 @@ export default function ScriptureResearchPage({ onPageChange }) {
     lastRequestRef.current = requestFromResponse(restoredResponse)
   }, [activeResponse, authStatus, pageState])
 
+  useEffect(() => {
+    if (
+      authStatus !== 'authenticated'
+      || authenticatedSession.activeNodeId
+      || !guestSession.activeNodeId
+    ) return
+    setAuthenticatedSession({
+      nodes: guestSession.nodes,
+      activeNodeId: guestSession.activeNodeId,
+      settings: cloneSettings(guestSession.settings),
+    })
+  }, [authStatus, authenticatedSession.activeNodeId, guestSession])
+
   const storeGuestResponse = useCallback((response, localParentNodeId, requestSettings) => {
     const id = response.trailNode?.id ?? response.id
+    const parentNodeId = localParentNodeId && localParentNodeId !== id
+      ? localParentNodeId
+      : null
     setGuestSession((current) => {
       const withoutSameNode = current.nodes.filter((node) => node.id !== id)
       const next = {
-        nodes: [...withoutSameNode, { id, parentNodeId: localParentNodeId ?? null, response }].slice(-64),
+        nodes: [...withoutSameNode, { id, parentNodeId, response }].slice(-64),
         activeNodeId: id,
         settings: cloneSettings(requestSettings),
       }
@@ -211,14 +237,15 @@ export default function ScriptureResearchPage({ onPageChange }) {
     const controller = new AbortController()
     activeControllerRef.current = controller
     const generation = ++requestGenerationRef.current
-    const localParentNodeId = authStatus === 'anonymous' ? guestSession.activeNodeId : null
+    const requestAuthStatus = authStatusRef.current
+    const localParentNodeId = requestAuthStatus === 'anonymous' ? guestSession.activeNodeId : null
     const normalizedRequest = {
       question: requestInput.question.trim(),
       sourceScopes: [...requestInput.sourceScopes],
       depth: requestInput.depth,
       mode: requestInput.mode,
       modeParameters: { ...(requestInput.modeParameters ?? {}) },
-      ...(authStatus === 'authenticated' && requestInput.parentNodeId
+      ...(requestAuthStatus === 'authenticated' && requestInput.parentNodeId
         ? { parentNodeId: requestInput.parentNodeId }
         : {}),
       ...(requestInput.conversationContext
@@ -239,29 +266,37 @@ export default function ScriptureResearchPage({ onPageChange }) {
     try {
       const response = await runResearch(normalizedRequest, { signal: controller.signal })
       if (!mountedRef.current || generation !== requestGenerationRef.current || controller.signal.aborted) return
-      setActiveResponse(response)
+      const serverPersisted = requestAuthStatus === 'authenticated' && Boolean(response.trailNode?.id)
+      const retainedResponse = serverPersisted || !response.trailNode
+        ? response
+        : { ...response, trailNode: null }
+      const completionAuthStatus = authStatusRef.current
+      setActiveResponse(retainedResponse)
       setStudyId(null)
       if (response.groundingStatus === 'insufficient') setPageState('insufficient')
       else if (response.groundingStatus === 'evidence-only') setPageState('evidence-only')
       else setPageState('success')
-      if (authStatus === 'anonymous') storeGuestResponse(response, localParentNodeId, normalizedRequest)
-      else if (authStatus === 'authenticated') {
-        const id = response.trailNode?.id ?? response.id
+      if (completionAuthStatus === 'authenticated') {
+        const id = retainedResponse.trailNode?.id ?? retainedResponse.id
         setAuthenticatedSession((current) => ({
           nodes: [
             ...current.nodes.filter((node) => node.id !== id),
-            { id, parentNodeId: normalizedRequest.parentNodeId ?? null, response },
+            {
+              id,
+              parentNodeId: serverPersisted ? normalizedRequest.parentNodeId ?? null : null,
+              response: retainedResponse,
+            },
           ].slice(-64),
           activeNodeId: id,
           settings: cloneSettings(normalizedRequest),
         }))
-      }
+      } else storeGuestResponse(retainedResponse, localParentNodeId, normalizedRequest)
     } catch (error) {
       if (abortError(error) || controller.signal.aborted || generation !== requestGenerationRef.current) return
       setErrorMessage(error?.message || 'The research service could not complete this request.')
       setPageState('error')
     }
-  }, [authStatus, guestSession.activeNodeId, pageState, storeGuestResponse])
+  }, [guestSession.activeNodeId, pageState, storeGuestResponse])
 
   const submitComposer = useCallback((input) => executeResearch(input), [executeResearch])
   const submitExample = useCallback((exampleQuestion, exampleSettings, exampleMode) => {
@@ -279,7 +314,10 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
   const followUp = useCallback((followUpQuestion) => {
     if (!activeResponse) return
-    const guestContext = authStatus === 'anonymous'
+    const parentNodeId = authStatus === 'authenticated'
+      ? activeResponse.trailNode?.id
+      : null
+    const localContext = !parentNodeId
       ? compactConversationContext(activeResponse)
       : null
     executeResearch({
@@ -288,10 +326,10 @@ export default function ScriptureResearchPage({ onPageChange }) {
       depth: activeResponse.settings.depth,
       mode: activeResponse.mode,
       modeParameters: activeResponse.settings.modeParameters,
-      ...(authStatus === 'authenticated' && activeResponse.trailNode?.id
-        ? { parentNodeId: activeResponse.trailNode.id }
+      ...(parentNodeId
+        ? { parentNodeId }
         : {}),
-      ...(guestContext ? { conversationContext: guestContext } : {}),
+      ...(localContext ? { conversationContext: localContext } : {}),
     })
   }, [activeResponse, authStatus, executeResearch])
 
@@ -435,9 +473,9 @@ export default function ScriptureResearchPage({ onPageChange }) {
       : stored.response.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success')
   }, [authStatus, authenticatedSession, guestSession])
 
-  const openTarget = useCallback((target) => {
+  const openTarget = useCallback((target, source) => {
     if (!target) return
-    const nextHash = readerHashFromOpenTarget(target)
+    const nextHash = readerHashFromOpenTarget(target, source)
     if (!nextHash) return
     onPageChange?.('apocrypha')
     if (window.location.hash !== nextHash) window.location.hash = nextHash
