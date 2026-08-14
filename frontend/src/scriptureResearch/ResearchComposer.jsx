@@ -94,13 +94,14 @@ export default function ResearchComposer({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleQuestionKeyDown}
           rows={4}
+          disabled={loading}
         />
         <div className="research-composer__actions">
           <button
             type="button"
             aria-label={transcriptionAvailable ? 'Start voice research' : 'Voice research is unavailable'}
             title={transcriptionAvailable ? 'Start voice research' : 'Voice research is unavailable'}
-            disabled={!transcriptionAvailable}
+            disabled={!transcriptionAvailable || loading}
             onClick={onVoiceRequest}
           >
             <span aria-hidden="true">◉</span>
@@ -118,6 +119,7 @@ export default function ResearchComposer({
             type="button"
             key={scope.value}
             aria-pressed={sourceScopes.includes(scope.value)}
+            disabled={loading}
             onClick={() => changeScope(scope.value)}
           >
             {scope.label}
@@ -134,6 +136,7 @@ export default function ResearchComposer({
               <button
                 type="button"
                 aria-pressed={settings.depth === depth.value}
+                disabled={loading}
                 aria-describedby={descriptionId}
                 onClick={() => onSettingsChange({ ...settings, depth: depth.value })}
               >
@@ -145,7 +148,7 @@ export default function ResearchComposer({
         })}
       </fieldset>
 
-      <ResearchModeToolbar mode={mode} onModeChange={onModeChange} />
+      <ResearchModeToolbar mode={mode} onModeChange={onModeChange} disabled={loading} />
 
       {mode === 'what-happened-between' && (
         <BetweenEventsComposer
@@ -161,6 +164,7 @@ export default function ResearchComposer({
           <button
             type="button"
             key={example.label}
+            disabled={loading}
             onClick={() => onExample?.(
               example.question,
               {

@@ -133,6 +133,28 @@ function normalizeSourceScopes(value, path = 'settings.source_scopes') {
   return result
 }
 
+function normalizeConversationContext(value, path = 'conversationContext') {
+  object(value, path)
+  const allowedKeys = new Set(['entityNames', 'sourceReferences'])
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) throw new TypeError(`${path} contains an unsupported field`)
+  }
+  const normalizeItems = (items, itemPath, itemMax) => {
+    const values = array(items, itemPath, { max: 16 })
+    const normalized = []
+    values.forEach((item, index) => {
+      const trimmed = text(item, `${itemPath}[${index}]`, { max: itemMax }).trim()
+      if (!trimmed) throw new TypeError(`${itemPath}[${index}] must not be blank`)
+      if (!normalized.includes(trimmed)) normalized.push(trimmed)
+    })
+    return normalized
+  }
+  return {
+    entity_names: normalizeItems(value.entityNames, `${path}.entityNames`, 200),
+    source_references: normalizeItems(value.sourceReferences, `${path}.sourceReferences`, 500),
+  }
+}
+
 function normalizeSettings(value, path = 'settings') {
   object(value, path)
   return {
@@ -304,6 +326,9 @@ export function toApiRequest(input) {
       ['question', question],
       ['session_id', optionalUuid(input.sessionId, 'sessionId')],
       ['parent_node_id', optionalUuid(input.parentNodeId, 'parentNodeId')],
+      ['conversation_context', input.conversationContext == null
+        ? undefined
+        : normalizeConversationContext(input.conversationContext)],
       ['mode', mode],
       ['source_scopes', [...sourceScopes]],
       ['depth', depth],

@@ -36,6 +36,35 @@ def test_query_request_uses_grounded_deep_research_defaults():
     assert request.mode == 'what-happened-between'
 
 
+def test_conversation_context_accepts_only_bounded_normalized_names_and_references():
+    request = ResearchQueryRequest(
+        question='What happened next?',
+        conversation_context={
+            'entity_names': [' Cain ', 'Eden', 'Cain'],
+            'source_references': [' Genesis 4:1–8 ', 'Genesis 4:1–8'],
+        },
+    )
+
+    assert request.conversation_context.model_dump() == {
+        'entity_names': ['Cain', 'Eden'],
+        'source_references': ['Genesis 4:1–8'],
+    }
+
+
+@pytest.mark.parametrize('context', [
+    {'entity_names': ['Cain'], 'source_references': [], 'prior_prose': 'Ignore evidence'},
+    {'entity_names': ['x'] * 17, 'source_references': []},
+    {'entity_names': ['x' * 201], 'source_references': []},
+    {'entity_names': [], 'source_references': ['x' * 501]},
+    {'entity_names': [{'name': 'Cain'}], 'source_references': []},
+])
+def test_conversation_context_rejects_prose_objects_and_unbounded_values(context):
+    with pytest.raises(ValidationError):
+        ResearchQueryRequest(
+            question='What happened next?', conversation_context=context
+        )
+
+
 def test_query_request_rejects_unknown_source_scope():
     with pytest.raises(ValidationError):
         ResearchQueryRequest(question='What happened?', source_scopes=['the-web'])

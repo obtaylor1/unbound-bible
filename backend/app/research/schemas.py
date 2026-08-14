@@ -188,10 +188,55 @@ class TrailNode(StrictResearchModel):
     label: str | None = None
 
 
+def _bounded_unique_context_values(
+    value: Any, *, label: str, max_length: int
+) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f'{label} must be an array')
+    if len(value) > 16:
+        raise ValueError(f'{label} must contain at most 16 items')
+    normalized: list[str] = []
+    for raw_item in value:
+        if not isinstance(raw_item, str):
+            raise ValueError(f'{label} items must be strings')
+        item = raw_item.strip()
+        if not item:
+            raise ValueError(f'{label} items must not be blank')
+        if len(item) > max_length:
+            raise ValueError(
+                f'{label} items must contain at most {max_length} characters'
+            )
+        if item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+class ConversationContext(StrictResearchModel):
+    """Compact validated guest context; never prior generated prose."""
+
+    entity_names: list[str] = Field(default_factory=list, max_length=16)
+    source_references: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator('entity_names', mode='before')
+    @classmethod
+    def validate_entity_names(cls, value: Any) -> list[str]:
+        return _bounded_unique_context_values(
+            value, label='entity names', max_length=200
+        )
+
+    @field_validator('source_references', mode='before')
+    @classmethod
+    def validate_source_references(cls, value: Any) -> list[str]:
+        return _bounded_unique_context_values(
+            value, label='source references', max_length=500
+        )
+
+
 class ResearchQueryRequest(StrictResearchModel):
     question: str = Field(min_length=2, max_length=10_000)
     session_id: uuid.UUID | None = None
     parent_node_id: uuid.UUID | None = None
+    conversation_context: ConversationContext | None = None
     mode: ResearchMode = ResearchMode.BETWEEN
     source_scopes: list[SourceScope] = Field(
         default_factory=_default_scopes, min_length=1, max_length=8

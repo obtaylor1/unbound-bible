@@ -64,6 +64,7 @@ function submitQuestion(question = 'What happened between Eden and Abel?') {
 describe('ScriptureResearchPage', () => {
   beforeEach(() => {
     localStorage.clear()
+    window.location.hash = '#aistudy'
     vi.clearAllMocks()
     useAuth.mockReturnValue({ status: 'anonymous', user: null })
   })
@@ -103,27 +104,28 @@ describe('ScriptureResearchPage', () => {
     expect(screen.getByText('Grounded')).toBeInTheDocument()
   })
 
-  it('aborts the previous request, ignores its stale result, and aborts on unmount', async () => {
+  it('aborts an in-flight request on unmount and ignores its late result', async () => {
     const first = deferred()
-    const second = deferred()
-    runResearch.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    runResearch.mockReturnValueOnce(first.promise)
     const { unmount } = render(<ScriptureResearchPage />)
 
     submitQuestion('First research question')
     const firstSignal = runResearch.mock.calls[0][1].signal
-    // Starting a new request is permitted through the retry path after an error-free cancellation.
-    fireEvent.change(screen.getByLabelText('Research question'), { target: { value: 'Second research question' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start new request' }))
-    expect(firstSignal.aborted).toBe(true)
-
-    const secondSignal = runResearch.mock.calls[1][1].signal
-    await act(async () => second.resolve(response({ query: 'Second research question' })))
-    await act(async () => first.resolve(response({ query: 'First research question' })))
-    expect(screen.getByRole('heading', { name: 'Second research question' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'First research question' })).not.toBeInTheDocument()
-
     unmount()
-    expect(secondSignal.aborted).toBe(true)
+    expect(firstSignal.aborted).toBe(true)
+    await act(async () => first.resolve(response({ query: 'First research question' })))
+  })
+
+  it('prevents every in-flight duplicate submission', () => {
+    runResearch.mockReturnValue(new Promise(() => {}))
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+
+    expect(screen.queryByRole('button', { name: 'Start new request' })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Research question' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Eden to Abel' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Eden to Abel' }))
+    expect(runResearch).toHaveBeenCalledOnce()
   })
 
   it('retries an error with the exact original question and settings', async () => {
@@ -151,6 +153,23 @@ describe('ScriptureResearchPage', () => {
     expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument()
     expect(screen.getByText(new RegExp(detail, 'i'))).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry research' })).toBeInTheDocument()
+    if (groundingStatus === 'insufficient') {
+      const notice = screen.getByRole('heading', { name: heading }).closest('section')
+      expect(within(notice).getByText(/Biblical Canon/)).toBeInTheDocument()
+    }
+  })
+
+  it.each([
+    ['grounded', 'Grounded research is ready.'],
+    ['insufficient', 'Research completed with insufficient verified evidence.'],
+    ['evidence-only', 'Verified evidence is ready without AI synthesis.'],
+  ])('announces the %s completion transition politely', async (groundingStatus, announcement) => {
+    runResearch.mockResolvedValue(response({ groundingStatus }))
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+
+    expect(await screen.findByText(announcement)).toHaveAttribute('role', 'status')
+    expect(screen.getByText(announcement)).toHaveAttribute('aria-live', 'polite')
   })
 
   it('sends authenticated follow-ups with the active parent node', async () => {
@@ -182,7 +201,10 @@ describe('ScriptureResearchPage', () => {
   })
 
   it('keeps guest follow-ups standalone while restoring a validated local trail', async () => {
-    const saved = response()
+    const saved = response({
+      people: [{ name: 'Cain', description: 'Prior prose must not be sent.', role: 'son', sourceIds: ['gen-2-4'] }],
+      places: [{ name: 'Eden', description: 'Prior prose must not be sent.', location: 'unknown', sourceIds: ['gen-2-4'] }],
+    })
     localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
       version: 1,
       session: {
@@ -197,7 +219,47 @@ describe('ScriptureResearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'What happened to Cain after Abel’s death?' }))
     await waitFor(() => expect(runResearch).toHaveBeenCalledOnce())
     expect(runResearch.mock.calls[0][0]).not.toHaveProperty('parentNodeId')
+    expect(runResearch.mock.calls[0][0]).toMatchObject({
+      conversationContext: {
+        entityNames: ['Cain', 'Eden'],
+        sourceReferences: ['Genesis 2–4'],
+      },
+    })
+    expect(JSON.stringify(runResearch.mock.calls[0][0])).not.toContain('Prior prose')
     expect(JSON.parse(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).session.nodes).toHaveLength(2)
+  })
+
+  it('hydrates a saved guest session once when authentication resolves to anonymous', () => {
+    const saved = response()
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: { nodes: [{ id: saved.id, parentNodeId: null, response: saved }], activeNodeId: saved.id, settings: saved.settings },
+    }))
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({ status, user: null }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    expect(screen.queryByRole('heading', { name: saved.query })).not.toBeInTheDocument()
+
+    status = 'anonymous'
+    rerender(<ScriptureResearchPage />)
+    expect(screen.getByRole('heading', { name: saved.query })).toBeInTheDocument()
+  })
+
+  it('does not overwrite user work when authentication resolves to anonymous', () => {
+    const saved = response()
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: { nodes: [{ id: saved.id, parentNodeId: null, response: saved }], activeNodeId: saved.id, settings: saved.settings },
+    }))
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({ status, user: null }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    fireEvent.change(screen.getByLabelText('Research question'), { target: { value: 'My new draft' } })
+
+    status = 'anonymous'
+    rerender(<ScriptureResearchPage />)
+    expect(screen.getByLabelText('Research question')).toHaveValue('My new draft')
+    expect(screen.queryByRole('heading', { name: saved.query })).not.toBeInTheDocument()
   })
 
   it('recovers safely from malformed guest storage', () => {
@@ -240,6 +302,44 @@ describe('ScriptureResearchPage', () => {
     expect(api.post).toHaveBeenCalledWith('/studies/study-1/messages', expect.objectContaining({ role: 'assistant', content: expect.stringContaining('Genesis records expulsion') }))
     expect(api.post).toHaveBeenCalledWith('/studies/study-1/sources', expect.objectContaining({ title: 'Genesis', citation: 'Genesis 2–4' }))
     expect(await screen.findByText(/saved privately/i)).toHaveAttribute('role', 'status')
+  })
+
+  it('saves guest research to the existing resilient local study collection', async () => {
+    localStorage.setItem('unbound_saved_studies', '{malformed')
+    runResearch.mockResolvedValue(response())
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+    fireEvent.click(await screen.findByRole('button', { name: 'Save research' }))
+
+    const saved = JSON.parse(localStorage.getItem('unbound_saved_studies'))
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({
+      type: 'scripture-research',
+      question: 'What happened between Eden and Abel?',
+      title: expect.stringContaining('Eden and Abel'),
+      result: expect.stringContaining('Genesis records expulsion'),
+      sources: [{ title: 'Genesis', reference: 'Genesis 2–4' }],
+    })
+    expect(saved[0].date).toEqual(expect.any(String))
+    expect(screen.getByText(/saved to My Library on this device/i)).toHaveAttribute('role', 'status')
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['/api/v1/texts/Genesis/9/1/details', '#scriptures?book=Genesis&chapter=9&translation=KJV&canon=ETHIO81&verse=1'],
+    ['bible://Genesis/3', '#scriptures?book=Genesis&chapter=3&translation=KJV&canon=ETHIO81'],
+    ['#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81&verse=2', '#scriptures?book=Exodus&chapter=3&translation=KJV&canon=ETHIO81&verse=2'],
+  ])('opens the internal full-text target %s without losing reader parameters', async (openTarget, expectedHash) => {
+    const onPageChange = vi.fn()
+    const source = response().sources[0]
+    runResearch.mockResolvedValue(response({ sources: [{ ...source, openTarget }] }))
+    render(<ScriptureResearchPage onPageChange={onPageChange} />)
+    submitQuestion()
+    fireEvent.click(await screen.findByRole('button', { name: 'Cite Genesis 2–4' }))
+    fireEvent.click(screen.getByRole('button', { name: /Open Full Text/i }))
+
+    expect(onPageChange).toHaveBeenCalledWith('apocrypha')
+    expect(window.location.hash).toBe(expectedHash)
   })
 
   it('opens ShareStudyModal with meaningful result data', async () => {

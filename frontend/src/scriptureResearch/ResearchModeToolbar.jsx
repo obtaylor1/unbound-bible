@@ -1,6 +1,6 @@
 import { RESEARCH_MODES } from './researchModel'
 
-export default function ResearchModeToolbar({ mode, onModeChange }) {
+export default function ResearchModeToolbar({ mode, onModeChange, disabled = false }) {
   return (
     <div className="research-mode-toolbar" role="group" aria-label="Research modes">
       {RESEARCH_MODES.map((option) => (
@@ -9,6 +9,7 @@ export default function ResearchModeToolbar({ mode, onModeChange }) {
           type="button"
           key={option.value}
           aria-pressed={mode === option.value}
+          disabled={disabled}
           onClick={() => onModeChange(option.value)}
         >
           {option.label}

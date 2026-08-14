@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ShareStudyModal from '../components/ShareStudyModal'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
+import { parseReaderHash, readerHash } from '../reader/readerRoute'
 import ResearchComposer from './ResearchComposer'
 import ResearchLoadingState from './ResearchLoadingState'
 import ResearchTrail from './ResearchTrail'
@@ -17,7 +18,10 @@ import {
   createEmptyResearchSession,
   DEFAULT_RESEARCH_MODE,
   DEFAULT_RESEARCH_SETTINGS,
+  SOURCE_SCOPES,
 } from './researchModel'
+
+const SOURCE_SCOPE_LABELS = new Map(SOURCE_SCOPES.map((scope) => [scope.value, scope.label]))
 
 const cloneSettings = (settings = DEFAULT_RESEARCH_SETTINGS) => ({
   sourceScopes: [...settings.sourceScopes],
@@ -48,12 +52,70 @@ const resultText = (response) => {
 
 const abortError = (error) => error?.name === 'AbortError' || error?.code === 'ERR_CANCELED'
 
+const compactConversationContext = (response) => {
+  const entityNames = [...response.people, ...response.places]
+    .map((entity) => entity.name)
+    .filter((name, index, names) => name && names.indexOf(name) === index)
+    .slice(0, 16)
+  const sourceReferences = response.sources
+    .map((source) => source.reference)
+    .filter((reference, index, references) => reference && references.indexOf(reference) === index)
+    .slice(0, 16)
+  return entityNames.length || sourceReferences.length
+    ? { entityNames, sourceReferences }
+    : null
+}
+
+const readLocalStudies = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem('unbound_saved_studies') || '[]')
+    return Array.isArray(stored)
+      ? stored.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : []
+  } catch {
+    return []
+  }
+}
+
+const readerHashFromOpenTarget = (target) => {
+  if (target.startsWith('#scriptures')) return target
+  const current = parseReaderHash()
+  const apiMatch = /^\/api\/v1\/texts\/([^/]+)\/(\d+)\/(\d+)\/details$/.exec(target)
+  if (apiMatch) {
+    return readerHash({
+      ...current,
+      book: decodeURIComponent(apiMatch[1]),
+      chapter: Number(apiMatch[2]),
+      verse: Number(apiMatch[3]),
+    })
+  }
+  if (target.startsWith('bible://')) {
+    try {
+      const parsed = new URL(target)
+      const path = parsed.pathname.split('/').filter(Boolean)
+      return readerHash({
+        ...current,
+        book: decodeURIComponent(parsed.hostname),
+        chapter: Number(path[0]),
+        verse: path[1] ? Number(path[1]) : null,
+      })
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 function ResultNotice({ state, response, onRetry }) {
   if (state === 'insufficient') {
+    const scopeLabels = response?.settings.sourceScopes
+      .map((scope) => SOURCE_SCOPE_LABELS.get(scope) ?? scope)
+      .join(', ') || 'the selected library sources'
     return (
       <section className="research-result-notice research-result-notice--insufficient">
         <h2>Not enough verified evidence</h2>
         <p>The selected library sources did not contain enough relevant material to answer this question safely.</p>
+        <p>Sources without enough verified material: {scopeLabels}.</p>
         <p>Try a narrower question or intentionally add another source scope.</p>
         <button type="button" onClick={onRetry}>Retry research</button>
       </section>
@@ -100,12 +162,33 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const requestGenerationRef = useRef(0)
   const lastRequestRef = useRef(requestFromResponse(initialGuestResponse))
   const mountedRef = useRef(true)
+  const guestHydratedRef = useRef(authStatus === 'anonymous')
+  const hasInteractedRef = useRef(false)
 
   useEffect(() => () => {
     mountedRef.current = false
     requestGenerationRef.current += 1
     activeControllerRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    if (authStatus !== 'anonymous' || guestHydratedRef.current) return
+    guestHydratedRef.current = true
+    if (hasInteractedRef.current || pageState !== 'empty' || activeResponse) return
+    const restored = loadGuestResearchSession()
+    const restoredResponse = restored.activeNodeId
+      ? restored.nodes.find((node) => node.id === restored.activeNodeId)?.response ?? null
+      : null
+    setGuestSession(restored)
+    setSettings(cloneSettings(restoredResponse?.settings ?? restored.settings))
+    if (!restoredResponse) return
+    setQuestion(restoredResponse.query)
+    setMode(restoredResponse.mode)
+    setActiveResponse(restoredResponse)
+    setPageState(restoredResponse.groundingStatus === 'insufficient' ? 'insufficient'
+      : restoredResponse.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success')
+    lastRequestRef.current = requestFromResponse(restoredResponse)
+  }, [activeResponse, authStatus, pageState])
 
   const storeGuestResponse = useCallback((response, localParentNodeId, requestSettings) => {
     const id = response.trailNode?.id ?? response.id
@@ -122,6 +205,8 @@ export default function ScriptureResearchPage({ onPageChange }) {
   }, [])
 
   const executeResearch = useCallback(async (requestInput) => {
+    if (pageState === 'loading') return
+    hasInteractedRef.current = true
     activeControllerRef.current?.abort()
     const controller = new AbortController()
     activeControllerRef.current = controller
@@ -135,6 +220,12 @@ export default function ScriptureResearchPage({ onPageChange }) {
       modeParameters: { ...(requestInput.modeParameters ?? {}) },
       ...(authStatus === 'authenticated' && requestInput.parentNodeId
         ? { parentNodeId: requestInput.parentNodeId }
+        : {}),
+      ...(requestInput.conversationContext
+        ? { conversationContext: {
+          entityNames: [...requestInput.conversationContext.entityNames],
+          sourceReferences: [...requestInput.conversationContext.sourceReferences],
+        } }
         : {}),
     }
     lastRequestRef.current = normalizedRequest
@@ -170,7 +261,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
       setErrorMessage(error?.message || 'The research service could not complete this request.')
       setPageState('error')
     }
-  }, [authStatus, guestSession.activeNodeId, storeGuestResponse])
+  }, [authStatus, guestSession.activeNodeId, pageState, storeGuestResponse])
 
   const submitComposer = useCallback((input) => executeResearch(input), [executeResearch])
   const submitExample = useCallback((exampleQuestion, exampleSettings, exampleMode) => {
@@ -188,6 +279,9 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
   const followUp = useCallback((followUpQuestion) => {
     if (!activeResponse) return
+    const guestContext = authStatus === 'anonymous'
+      ? compactConversationContext(activeResponse)
+      : null
     executeResearch({
       question: followUpQuestion,
       sourceScopes: activeResponse.settings.sourceScopes,
@@ -197,6 +291,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
       ...(authStatus === 'authenticated' && activeResponse.trailNode?.id
         ? { parentNodeId: activeResponse.trailNode.id }
         : {}),
+      ...(guestContext ? { conversationContext: guestContext } : {}),
     })
   }, [activeResponse, authStatus, executeResearch])
 
@@ -221,7 +316,31 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const saveResearch = useCallback(async () => {
     if (!activeResponse) return
     if (authStatus !== 'authenticated') {
-      setStatusMessage('Sign in to save this research privately to My Library.')
+      const now = new Date()
+      const localStudy = {
+        id: `research-${now.getTime()}-${Math.random().toString(16).slice(2)}`,
+        title: `Scripture Research: ${activeResponse.query.slice(0, 80)}`,
+        type: 'scripture-research',
+        date: now.toLocaleDateString(),
+        timestamp: now.toISOString(),
+        question: activeResponse.query,
+        result: resultText(activeResponse),
+        sources: activeResponse.sources.map((source) => ({
+          id: source.id,
+          title: source.title,
+          reference: source.reference,
+          openTarget: source.openTarget,
+        })),
+        messages: [
+          { type: 'user', content: activeResponse.query },
+          { type: 'ai', content: resultText(activeResponse) },
+        ],
+      }
+      localStorage.setItem(
+        'unbound_saved_studies',
+        JSON.stringify([...readLocalStudies(), localStudy]),
+      )
+      setStatusMessage('Research saved to My Library on this device.')
       return
     }
     try {
@@ -253,6 +372,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
   }, [activeResponse, authStatus, persistResearch, studyId])
 
   const newResearch = useCallback(() => {
+    hasInteractedRef.current = true
     activeControllerRef.current?.abort()
     requestGenerationRef.current += 1
     setQuestion('')
@@ -317,12 +437,19 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
   const openTarget = useCallback((target) => {
     if (!target) return
-    if (target.startsWith('#')) {
-      const page = target.slice(1).split('?')[0]
-      if (onPageChange) onPageChange(page)
-      else window.location.hash = target.slice(1)
-    }
+    const nextHash = readerHashFromOpenTarget(target)
+    if (!nextHash) return
+    onPageChange?.('apocrypha')
+    if (window.location.hash !== nextHash) window.location.hash = nextHash
   }, [onPageChange])
+
+  const completionAnnouncement = pageState === 'success'
+    ? 'Grounded research is ready.'
+    : pageState === 'insufficient'
+      ? 'Research completed with insufficient verified evidence.'
+      : pageState === 'evidence-only'
+        ? 'Verified evidence is ready without AI synthesis.'
+        : ''
 
   const actionBar = activeResponse ? (
     <>
@@ -341,26 +468,18 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
       <ResearchComposer
         value={question}
-        onChange={setQuestion}
+        onChange={(value) => { hasInteractedRef.current = true; setQuestion(value) }}
         settings={settings}
-        onSettingsChange={setSettings}
+        onSettingsChange={(value) => { hasInteractedRef.current = true; setSettings(value) }}
         mode={mode}
-        onModeChange={setMode}
+        onModeChange={(value) => { hasInteractedRef.current = true; setMode(value) }}
         onSubmit={submitComposer}
         loading={pageState === 'loading'}
         searchEvents={searchResearchEvents}
         onExample={submitExample}
       />
 
-      {pageState === 'loading' && (
-        <>
-          <ResearchLoadingState mode={lastRequestRef.current?.mode ?? mode} />
-          <button type="button" onClick={() => executeResearch({
-            question: question.trim(), sourceScopes: settings.sourceScopes, depth: settings.depth,
-            mode, modeParameters: settings.modeParameters,
-          })} disabled={!question.trim()}>Start new request</button>
-        </>
-      )}
+      {pageState === 'loading' && <ResearchLoadingState mode={lastRequestRef.current?.mode ?? mode} />}
       {pageState === 'error' && (
         <section className="research-error">
           <h2>Research could not be completed</h2>
@@ -386,7 +505,11 @@ export default function ScriptureResearchPage({ onPageChange }) {
         </>
       )}
 
-      {statusMessage && <p role="status" aria-live="polite">{statusMessage}</p>}
+      {(statusMessage || completionAnnouncement) && (
+        <p role="status" aria-live="polite" aria-atomic="true">
+          {statusMessage || completionAnnouncement}
+        </p>
+      )}
       <ShareStudyModal isOpen={shareOpen} onClose={() => setShareOpen(false)} shareData={shareData} />
     </div>
   )

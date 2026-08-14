@@ -115,6 +115,25 @@ def test_guest_parent_is_rejected_without_creating_node(test_settings):
         assert session.scalar(select(ResearchNode)) is None
 
 
+def test_guest_query_accepts_bounded_context_without_creating_server_parent(
+    test_settings,
+):
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        response = client.post('/api/v1/research/query', json={
+            'question': 'What happened next?',
+            'conversation_context': {
+                'entity_names': ['Cain', 'Eden'],
+                'source_references': ['Genesis 3–4'],
+            },
+        })
+
+    assert response.status_code == 200
+    assert response.json()['trail_node'] is None
+    with app.state.session_factory() as session:
+        assert session.scalar(select(ResearchNode)) is None
+
+
 def test_events_returns_only_resolved_safe_fields_and_maps_errors(
     test_settings, monkeypatch,
 ):

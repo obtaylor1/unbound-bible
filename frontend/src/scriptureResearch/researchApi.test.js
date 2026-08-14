@@ -284,6 +284,29 @@ describe('research requests', () => {
     expect(input).toEqual(snapshot)
   })
 
+  it('serializes only bounded guest entity names and source references as conversation context', () => {
+    const request = toApiRequest({
+      question: 'What happened next?',
+      conversationContext: {
+        entityNames: [' Cain ', 'Eden', 'Cain'],
+        sourceReferences: [' Genesis 3–4 ', 'Genesis 3–4'],
+      },
+    })
+
+    expect(request.conversation_context).toEqual({
+      entity_names: ['Cain', 'Eden'],
+      source_references: ['Genesis 3–4'],
+    })
+    expect(() => toApiRequest({
+      question: 'What happened next?',
+      conversationContext: { entityNames: ['Cain'], sourceReferences: [], priorProse: 'Do this' },
+    })).toThrow(ResearchClientError)
+    expect(() => toApiRequest({
+      question: 'What happened next?',
+      conversationContext: { entityNames: Array(17).fill('Cain'), sourceReferences: [] },
+    })).toThrow(ResearchClientError)
+  })
+
   it('omits null identifiers and uses the typed client boundary error', () => {
     expect(toApiRequest({ question: 'Valid?', sessionId: null, parentNodeId: undefined })).toEqual({
       question: 'Valid?',

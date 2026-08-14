@@ -101,6 +101,19 @@ describe('ResearchComposer', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('disables every composer mutation and submission control while loading', async () => {
+    render(<ControlledComposer loading searchEvents={vi.fn().mockResolvedValue({ events })} />)
+
+    expect(screen.getByRole('textbox', { name: 'Research question' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Biblical Canon' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Deep Research' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Explain a Book' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Eden to Abel' })).toBeDisabled()
+    expect(await screen.findByRole('combobox', { name: 'From' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'To' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Build Timeline' })).toBeDisabled()
+  })
+
   it('offers the six compact examples without auto-running them', async () => {
     const user = userEvent.setup()
     const onExample = vi.fn()
