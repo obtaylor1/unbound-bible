@@ -14,7 +14,15 @@ class OllamaChatProvider:
 
     async def complete(self, messages: Sequence[ChatMessage]) -> ChatResult:
         try:
-            response = await self.client.post(f"{self.base_url}/api/chat", json={"model": self.model, "stream": False, "messages": [vars(message) for message in messages]})
+            response = await self.client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "stream": False,
+                    "messages": [vars(message) for message in messages],
+                },
+                timeout=60,
+            )
             response.raise_for_status()
             payload = response.json()
             return ChatResult(content=payload["message"]["content"], provider=self.name, model=payload.get("model") or self.model)

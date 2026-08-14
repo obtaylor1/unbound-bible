@@ -15,7 +15,15 @@ class OpenAICompatibleChatProvider:
     async def complete(self, messages: Sequence[ChatMessage]) -> ChatResult:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         try:
-            response = await self.client.post(f"{self.base_url}/chat/completions", headers=headers, json={"model": self.model, "messages": [vars(message) for message in messages]})
+            response = await self.client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": [vars(message) for message in messages],
+                },
+                timeout=30,
+            )
             response.raise_for_status()
             payload = response.json()
             content = payload["choices"][0]["message"]["content"]

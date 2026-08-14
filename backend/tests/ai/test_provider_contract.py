@@ -17,7 +17,9 @@ def transport(request: httpx.Request) -> httpx.Response:
 @pytest.mark.asyncio
 async def test_chat_providers_return_normalized_metadata(provider_name, test_settings):
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
-    provider = create_chat_provider(provider_name, test_settings, http_client=client)
+    provider = create_chat_provider(
+        provider_name, test_settings, http_client=client
+    )
     result = await provider.complete([ChatMessage(role="user", content="Question")])
     await client.aclose()
     assert result.provider == provider_name
@@ -41,7 +43,9 @@ async def test_chat_provider_maps_network_errors_to_retryable_unavailable(
         raise error_type('private network detail', request=request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
-    provider = create_chat_provider(provider_name, test_settings, http_client=client)
+    provider = create_chat_provider(
+        provider_name, test_settings, http_client=client
+    )
 
     with pytest.raises(ProviderError) as raised:
         await provider.complete([ChatMessage(role='user', content='Question')])
@@ -50,3 +54,36 @@ async def test_chat_provider_maps_network_errors_to_retryable_unavailable(
     assert raised.value.code == 'unavailable'
     assert raised.value.retryable is True
     assert 'private network detail' not in str(raised.value)
+
+
+@pytest.mark.parametrize(('provider_name', 'expected_timeout'), [
+    ('openai_compatible', 30.0),
+    ('ollama', 60.0),
+])
+@pytest.mark.asyncio
+async def test_chat_provider_preserves_per_call_timeout_with_shared_client(
+    provider_name, expected_timeout, test_settings,
+):
+    seen_timeouts = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen_timeouts.append(request.extensions['timeout'])
+        return transport(request)
+
+    client = httpx.AsyncClient(
+        timeout=1,
+        transport=httpx.MockTransport(record),
+    )
+    provider = create_chat_provider(
+        provider_name, test_settings, http_client=client
+    )
+
+    await provider.complete([ChatMessage(role='user', content='Question')])
+
+    await client.aclose()
+    assert seen_timeouts == [{
+        'connect': expected_timeout,
+        'read': expected_timeout,
+        'write': expected_timeout,
+        'pool': expected_timeout,
+    }]
