@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../api/client', () => ({
   api: {
     get: vi.fn(),
+    patch: vi.fn(),
     post: vi.fn(),
   },
 }))
@@ -13,6 +14,8 @@ import {
   getResearchTrail,
   GUEST_RESEARCH_STORAGE_KEY,
   loadGuestResearchSession,
+  linkResearchStudy,
+  listResearchTrails,
   normalizeResearchEvents,
   normalizeResearchResponse,
   normalizeResearchTrail,
@@ -182,6 +185,7 @@ describe('research requests', () => {
     api.get.mockResolvedValue({
       ancestry: [{ id: '9b913a39-d88c-413c-ac5e-f23372161289', parent_node_id: null, question: 'Root question', mode: 'explain-a-book', created_at: '2026-08-14T00:00:00Z', updated_at: null }],
       active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parent_node_id: '9b913a39-d88c-413c-ac5e-f23372161289', question: 'Child question', mode: 'compare-accounts', created_at: null, updated_at: null },
+      active_response: validEdenResponse(),
       children: [],
       children_truncated: false,
     })
@@ -190,10 +194,46 @@ describe('research requests', () => {
     expect(trail).toMatchObject({
       ancestry: [{ parentNodeId: null, createdAt: '2026-08-14T00:00:00Z' }],
       active: { id: '07449bd5-e672-4504-ab7d-45a1e6615cb1', parentNodeId: '9b913a39-d88c-413c-ac5e-f23372161289' },
+      activeResponse: { query: 'What happened between Eden and Abel?' },
       children: [],
       childrenTruncated: false,
     })
     expect(Object.isFrozen(trail.active)).toBe(true)
+  })
+
+  it('lists owner-scoped recent trails and links a node to an existing study', async () => {
+    const signal = new AbortController().signal
+    api.get.mockResolvedValue({
+      nodes: [{
+        id: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
+        parent_node_id: null,
+        question: 'Saved research',
+        mode: 'what-happened-between',
+        created_at: '2026-08-14T00:00:00Z',
+        updated_at: '2026-08-14T00:01:00Z',
+      }],
+    })
+    api.patch.mockResolvedValue({
+      node_id: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
+      study_id: '9b913a39-d88c-413c-ac5e-f23372161289',
+    })
+
+    const recent = await listResearchTrails({ signal })
+    const linked = await linkResearchStudy(
+      '07449bd5-e672-4504-ab7d-45a1e6615cb1',
+      '9b913a39-d88c-413c-ac5e-f23372161289',
+    )
+
+    expect(api.get).toHaveBeenCalledWith('/research/trail', { signal })
+    expect(recent.nodes[0]).toMatchObject({ question: 'Saved research', parentNodeId: null })
+    expect(api.patch).toHaveBeenCalledWith(
+      '/research/trail/07449bd5-e672-4504-ab7d-45a1e6615cb1/study',
+      { study_id: '9b913a39-d88c-413c-ac5e-f23372161289' },
+    )
+    expect(linked).toEqual({
+      nodeId: '07449bd5-e672-4504-ab7d-45a1e6615cb1',
+      studyId: '9b913a39-d88c-413c-ac5e-f23372161289',
+    })
   })
 
   it('normalizes and freezes reviewed event results', async () => {
@@ -328,6 +368,7 @@ describe('research requests', () => {
     expect(() => searchResearchEvents(123)).toThrow(/query.*string/i)
     expect(() => searchResearchEvents('x'.repeat(4_097))).toThrow(/query.*4,?096/i)
     expect(() => getResearchTrail('not-a-uuid')).toThrow(/nodeId.*UUID/i)
+    expect(() => linkResearchStudy('not-a-uuid', '9b913a39-d88c-413c-ac5e-f23372161289')).toThrow(/nodeId.*UUID/i)
     expect(api.get).not.toHaveBeenCalled()
   })
 })

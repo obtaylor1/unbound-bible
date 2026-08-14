@@ -366,13 +366,27 @@ function normalizeTrailSummary(value, path) {
 export function normalizeResearchTrail(value) {
   object(value, 'research trail')
   const childrenTruncated = field(value, 'children_truncated', 'childrenTruncated')
+  const activeResponse = field(value, 'active_response', 'activeResponse')
   if (typeof childrenTruncated !== 'boolean') throw new TypeError('children_truncated must be a boolean')
   return deepFreeze({
     ancestry: array(value.ancestry, 'ancestry', { max: 64 }).map((item, index) => normalizeTrailSummary(item, `ancestry[${index}]`)),
     active: normalizeTrailSummary(value.active, 'active'),
+    activeResponse: activeResponse == null ? null : normalizeResearchResponse(activeResponse),
     children: array(value.children, 'children', { max: 64 }).map((item, index) => normalizeTrailSummary(item, `children[${index}]`)),
     childrenTruncated,
   })
+}
+
+export function normalizeRecentResearchTrails(value) {
+  object(value, 'recent research trails')
+  const seen = new Set()
+  const nodes = array(value.nodes, 'nodes', { max: 64 }).map((item, index) => {
+    const node = normalizeTrailSummary(item, `nodes[${index}]`)
+    if (seen.has(node.id)) throw new TypeError(`duplicate research trail node ID: ${node.id}`)
+    seen.add(node.id)
+    return node
+  })
+  return deepFreeze({ nodes })
 }
 
 function normalizeResearchEvent(value, path) {
@@ -421,6 +435,27 @@ export function getResearchTrail(nodeId, { signal } = {}) {
   const normalizedNodeId = optionalUuid(nodeId, 'nodeId')
   if (!normalizedNodeId) throw new ResearchClientError('nodeId must be a UUID string', 'nodeId')
   return api.get(`/research/trail/${encodePathValue(normalizedNodeId)}`, { signal }).then(normalizeResearchTrail)
+}
+
+export function listResearchTrails({ signal } = {}) {
+  return api.get('/research/trail', { signal }).then(normalizeRecentResearchTrails)
+}
+
+export function linkResearchStudy(nodeId, studyId, { signal } = {}) {
+  const normalizedNodeId = optionalUuid(nodeId, 'nodeId')
+  const normalizedStudyId = optionalUuid(studyId, 'studyId')
+  if (!normalizedNodeId) throw new ResearchClientError('nodeId must be a UUID string', 'nodeId')
+  if (!normalizedStudyId) throw new ResearchClientError('studyId must be a UUID string', 'studyId')
+  const path = `/research/trail/${encodePathValue(normalizedNodeId)}/study`
+  const payload = { study_id: normalizedStudyId }
+  const request = signal ? api.patch(path, payload, { signal }) : api.patch(path, payload)
+  return request.then((value) => {
+    object(value, 'research study link')
+    return deepFreeze({
+      nodeId: uuid(field(value, 'node_id', 'nodeId'), 'node_id'),
+      studyId: uuid(field(value, 'study_id', 'studyId'), 'study_id'),
+    })
+  })
 }
 
 function storageOrNull(storage) {

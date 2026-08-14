@@ -20,12 +20,15 @@ from app.research.models import (
     build_trail_snapshot,
     create_research_node,
     get_owned_research_node,
+    link_research_node_to_study,
+    list_owned_research_nodes,
 )
 from app.research.retrieval import retrieve_research_evidence
 from app.research.schemas import (
     ConversationContext,
     ResearchQueryRequest,
     ResearchResponse,
+    ResearchStudyLinkRequest,
     TrailNode,
 )
 from app.research.service import ResearchService, ResearchServiceError
@@ -69,6 +72,19 @@ def _node_summary(node: ResearchNode) -> dict[str, Any]:
         'created_at': node.created_at.isoformat() if node.created_at else None,
         'updated_at': node.updated_at.isoformat() if node.updated_at else None,
     }
+
+
+def _restored_response(node: ResearchNode) -> ResearchResponse:
+    """Revalidate stored display data and restore authoritative trail metadata."""
+
+    response = ResearchResponse.model_validate(node.response_snapshot)
+    return response.model_copy(update={
+        'trail_node': TrailNode(
+            id=node.id,
+            parent_node_id=node.parent_id,
+            question=node.question,
+        ),
+    })
 
 
 def _context_values(values: list[str], *, max_length: int) -> list[str]:
@@ -242,6 +258,27 @@ def events(
         ) from error
 
 
+@router.get('/trail')
+def recent_trails(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict[str, list[dict[str, Any]]]:
+    """List the current owner's recent nodes for deterministic restoration."""
+
+    try:
+        return {
+            'nodes': [
+                _node_summary(node)
+                for node in list_owned_research_nodes(session, user.id)
+            ],
+        }
+    except SQLAlchemyError as error:
+        _rollback(session)
+        raise _problem(
+            503, 'research_unavailable', 'Research is temporarily unavailable.'
+        ) from error
+
+
 @router.get('/trail/{node_id}')
 def trail(
     node_id: uuid.UUID,
@@ -263,6 +300,7 @@ def trail(
         return {
             'ancestry': ancestry[:-1],
             'active': _node_summary(node),
+            'active_response': _restored_response(node),
             'children': snapshot['children'][:MAX_TRAIL_DEPTH],
             'children_truncated': snapshot['children_truncated'],
         }
@@ -271,6 +309,33 @@ def trail(
     except ResearchTrailError as error:
         _rollback(session)
         raise _trail_error(error) from error
+    except SQLAlchemyError as error:
+        _rollback(session)
+        raise _problem(
+            503, 'research_unavailable', 'Research is temporarily unavailable.'
+        ) from error
+
+
+@router.patch('/trail/{node_id}/study')
+def link_study(
+    node_id: uuid.UUID,
+    payload: ResearchStudyLinkRequest,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Link an owned research node to an owned saved study."""
+
+    try:
+        node = link_research_node_to_study(
+            session, node_id, payload.study_id, user.id
+        )
+        if node is None:
+            raise _problem(404, 'not_found', 'Research or study not found.')
+        session.commit()
+        return {'node_id': str(node.id), 'study_id': str(payload.study_id)}
+    except HTTPException:
+        _rollback(session)
+        raise
     except SQLAlchemyError as error:
         _rollback(session)
         raise _problem(

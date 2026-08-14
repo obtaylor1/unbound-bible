@@ -1,14 +1,27 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
-import { GUEST_RESEARCH_STORAGE_KEY, runResearch } from './researchApi'
+import {
+  GUEST_RESEARCH_STORAGE_KEY,
+  getResearchTrail,
+  linkResearchStudy,
+  listResearchTrails,
+  runResearch,
+} from './researchApi'
 import { api } from '../api/client'
 import { useAuth } from '../auth/authContext'
 import ScriptureResearchPage from './ScriptureResearchPage'
 
 vi.mock('./researchApi', async (importOriginal) => {
   const original = await importOriginal()
-  return { ...original, runResearch: vi.fn(), searchResearchEvents: vi.fn().mockResolvedValue({ events: [] }) }
+  return {
+    ...original,
+    getResearchTrail: vi.fn(),
+    linkResearchStudy: vi.fn(),
+    listResearchTrails: vi.fn(),
+    runResearch: vi.fn(),
+    searchResearchEvents: vi.fn().mockResolvedValue({ events: [] }),
+  }
 })
 vi.mock('../api/client', () => ({ api: { post: vi.fn() } }))
 vi.mock('../auth/authContext', () => ({ useAuth: vi.fn() }))
@@ -68,6 +81,9 @@ describe('ScriptureResearchPage', () => {
     window.location.hash = '#aistudy'
     vi.clearAllMocks()
     runResearch.mockReset()
+    getResearchTrail.mockReset()
+    linkResearchStudy.mockReset()
+    listResearchTrails.mockReset().mockResolvedValue({ nodes: [] })
     useAuth.mockReturnValue({ status: 'anonymous', user: null })
   })
 
@@ -310,6 +326,90 @@ describe('ScriptureResearchPage', () => {
 
     await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
     expect(runResearch.mock.calls[1][0]).toEqual(expect.objectContaining({ parentNodeId: IDS.node }))
+  })
+
+  it('turns a timeline event into a focused follow-up request', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    const timelineEvent = {
+      title: 'Expulsion from Eden',
+      dateLabel: 'After Eden',
+      description: 'Adam and Eve leave the garden.',
+      confidence: 'high',
+      sourceIds: ['gen-2-4'],
+    }
+    runResearch
+      .mockResolvedValueOnce(response({ timeline: [timelineEvent] }))
+      .mockResolvedValueOnce(response({
+        id: IDS.followup,
+        query: 'What does the verified evidence show about Expulsion from Eden?',
+        trailNode: {
+          id: IDS.followup,
+          parentNodeId: IDS.node,
+          question: 'What does the verified evidence show about Expulsion from Eden?',
+          label: null,
+        },
+      }))
+    render(<ScriptureResearchPage />)
+    submitQuestion()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Research Expulsion from Eden' }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).toEqual(expect.objectContaining({
+      question: 'What does the verified evidence show about Expulsion from Eden?',
+      parentNodeId: IDS.node,
+    }))
+  })
+
+  it('restores the current user’s latest research branch and keeps it navigable after reload', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    const rootSummary = {
+      id: IDS.node,
+      parentNodeId: null,
+      question: 'What happened between Eden and Abel?',
+      mode: 'what-happened-between',
+      createdAt: null,
+      updatedAt: null,
+    }
+    const childSummary = {
+      id: IDS.followup,
+      parentNodeId: IDS.node,
+      question: 'What happened to Cain after Abel’s death?',
+      mode: 'what-happened-between',
+      createdAt: null,
+      updatedAt: null,
+    }
+    const rootResponse = response()
+    const childResponse = response({
+      id: IDS.followup,
+      query: childSummary.question,
+      trailNode: {
+        id: IDS.followup,
+        parentNodeId: IDS.node,
+        question: childSummary.question,
+        label: null,
+      },
+    })
+    listResearchTrails.mockResolvedValue({ nodes: [childSummary] })
+    getResearchTrail
+      .mockResolvedValueOnce({
+        ancestry: [rootSummary], active: childSummary, children: [],
+        childrenTruncated: false, activeResponse: childResponse,
+      })
+      .mockResolvedValueOnce({
+        ancestry: [], active: rootSummary, children: [childSummary],
+        childrenTruncated: false, activeResponse: rootResponse,
+      })
+
+    render(<ScriptureResearchPage />)
+
+    expect(await screen.findByRole('heading', { name: childSummary.question })).toBeInTheDocument()
+    expect(listResearchTrails).toHaveBeenCalledOnce()
+    expect(getResearchTrail).toHaveBeenNthCalledWith(1, IDS.followup, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    const trail = screen.getByRole('navigation', { name: 'Research trail' })
+    fireEvent.click(within(trail).getByRole('button', { name: rootSummary.question }))
+    expect(await screen.findByRole('heading', { name: rootSummary.question })).toBeInTheDocument()
+    expect(getResearchTrail).toHaveBeenNthCalledWith(2, IDS.node, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
   it('keeps authenticated responses navigable in the active research trail', async () => {
@@ -750,6 +850,7 @@ describe('ScriptureResearchPage', () => {
     expect(api.post).toHaveBeenCalledWith('/studies/study-1/messages', { role: 'user', content: 'What happened between Eden and Abel?' })
     expect(api.post).toHaveBeenCalledWith('/studies/study-1/messages', expect.objectContaining({ role: 'assistant', content: expect.stringContaining('Genesis records expulsion') }))
     expect(api.post).toHaveBeenCalledWith('/studies/study-1/sources', expect.objectContaining({ title: 'Genesis', citation: 'Genesis 2–4' }))
+    expect(linkResearchStudy).toHaveBeenCalledWith(IDS.node, 'study-1')
     expect(await screen.findByText(/saved privately/i)).toHaveAttribute('role', 'status')
   })
 

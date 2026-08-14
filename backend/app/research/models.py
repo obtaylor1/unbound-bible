@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -186,6 +186,8 @@ def create_research_node(
         source_scopes=[scope.value for scope in request.source_scopes],
         depth=request.depth.value,
         response_snapshot=_snapshot_dict(response_snapshot),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     session.add(node)
     session.flush()
@@ -205,6 +207,52 @@ def get_owned_research_node(
             ResearchNode.owner_id == owner_id,
         )
     )
+
+
+def list_owned_research_nodes(
+    session: Session,
+    owner_id: uuid.UUID,
+    *,
+    limit: int = MAX_TRAIL_DEPTH,
+) -> list[ResearchNode]:
+    """List recent owner-visible nodes in a stable newest-first order."""
+
+    bounded_limit = max(1, min(limit, MAX_TRAIL_DEPTH))
+    return list(session.scalars(
+        select(ResearchNode)
+        .where(ResearchNode.owner_id == owner_id)
+        .order_by(
+            ResearchNode.updated_at.desc(),
+            ResearchNode.created_at.desc(),
+            ResearchNode.id.asc(),
+        )
+        .limit(bounded_limit)
+    ).all())
+
+
+def link_research_node_to_study(
+    session: Session,
+    node_id: uuid.UUID,
+    study_id: uuid.UUID,
+    owner_id: uuid.UUID,
+) -> ResearchNode | None:
+    """Attach one owned research node to one owned study without leaking either."""
+
+    node = get_owned_research_node(session, node_id, owner_id)
+    if node is None:
+        return None
+    study = session.scalar(
+        select(StudySession).where(
+            StudySession.id == study_id,
+            StudySession.owner_id == owner_id,
+        )
+    )
+    if study is None:
+        return None
+    node.study_id = study.id
+    node.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    return node
 
 
 def _trail_node(node: ResearchNode) -> dict[str, Any]:

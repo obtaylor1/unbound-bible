@@ -9,6 +9,9 @@ import ResearchTrail from './ResearchTrail'
 import ResearchWorkspace from './ResearchWorkspace'
 import {
   clearGuestResearchSession,
+  getResearchTrail,
+  linkResearchStudy,
+  listResearchTrails,
   loadGuestResearchSession,
   runResearch,
   saveGuestResearchSession,
@@ -228,6 +231,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
   const settledPrincipalRef = useRef(principalKey === 'loading' ? null : principalKey)
   const activeResponseRef = useRef(activeResponse)
   const persistenceRef = useRef(createPersistenceState())
+  const restoredPrincipalRef = useRef(null)
   authStatusRef.current = authStatus
   principalRef.current = principalKey
   activeResponseRef.current = activeResponse
@@ -265,6 +269,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
     setErrorMessage('')
     setStatusMessage('')
     if (!interruptedGuestRequest) lastRequestRef.current = null
+    if (previousPrincipal !== 'guest') hasInteractedRef.current = false
 
     if (principalKey === 'guest') {
       const restored = loadGuestResearchSession()
@@ -338,6 +343,65 @@ export default function ScriptureResearchPage({ onPageChange }) {
       settings: cloneSettings(guestSession.settings),
     })
   }, [authStatus, authenticatedSession.activeNodeId, guestSession])
+
+  const applyAuthenticatedTrail = useCallback((trail) => {
+    if (!trail?.activeResponse) return false
+    const summaries = [...trail.ancestry, trail.active, ...trail.children]
+    const nodes = summaries.map((node) => ({
+      id: node.id,
+      parentNodeId: node.parentNodeId,
+      question: node.question,
+      response: node.id === trail.active.id ? trail.activeResponse : null,
+    }))
+    const response = trail.activeResponse
+    setAuthenticatedSession({
+      nodes,
+      activeNodeId: trail.active.id,
+      settings: cloneSettings(response.settings),
+    })
+    setActiveResponse(response)
+    setQuestion(response.query)
+    setSettings(cloneSettings(response.settings))
+    setMode(response.mode)
+    setPageState(response.groundingStatus === 'insufficient' ? 'insufficient'
+      : response.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success')
+    lastRequestRef.current = requestFromResponse(response)
+    return true
+  }, [])
+
+  useEffect(() => {
+    if (
+      authStatus !== 'authenticated'
+      || authenticatedSession.activeNodeId
+      || guestSession.activeNodeId
+      || hasInteractedRef.current
+      || restoredPrincipalRef.current === principalKey
+    ) return undefined
+    restoredPrincipalRef.current = principalKey
+    const controller = new AbortController()
+    const restore = async () => {
+      try {
+        const recent = await listResearchTrails({ signal: controller.signal })
+        const latest = recent.nodes[0]
+        if (!latest || controller.signal.aborted || principalRef.current !== principalKey) return
+        const trail = await getResearchTrail(latest.id, { signal: controller.signal })
+        if (controller.signal.aborted || principalRef.current !== principalKey) return
+        applyAuthenticatedTrail(trail)
+      } catch (error) {
+        if (!abortError(error) && principalRef.current === principalKey) {
+          setStatusMessage('Saved research history could not be restored right now.')
+        }
+      }
+    }
+    restore()
+    return () => controller.abort()
+  }, [
+    applyAuthenticatedTrail,
+    authStatus,
+    authenticatedSession.activeNodeId,
+    guestSession.activeNodeId,
+    principalKey,
+  ])
 
   const storeGuestResponse = useCallback((response, localParentNodeId, requestSettings) => {
     const id = response.trailNode?.id ?? response.id
@@ -554,6 +618,12 @@ export default function ScriptureResearchPage({ onPageChange }) {
     })
   }, [activeResponse, authStatus, executeResearch])
 
+  const researchTimelineEvent = useCallback((event) => {
+    const title = typeof event?.title === 'string' ? event.title.trim() : ''
+    if (!title) return
+    followUp(`What does the verified evidence show about ${title}?`)
+  }, [followUp])
+
   const persistResearch = useCallback(async () => {
     if (!activeResponse || authStatus !== 'authenticated') return null
     const response = activeResponse
@@ -591,6 +661,12 @@ export default function ScriptureResearchPage({ onPageChange }) {
         assertCurrent()
         state.studyId = study.id
         setStudyId(study.id)
+      }
+      if (response.trailNode?.id && !state.completed.has('research-node-link')) {
+        assertCurrent()
+        await linkResearchStudy(response.trailNode.id, state.studyId)
+        assertCurrent()
+        state.completed.add('research-node-link')
       }
       const baseUrl = `/studies/${state.studyId}`
       await writeOnce('message:user', `${baseUrl}/messages`, { role: 'user', content: response.query })
@@ -719,22 +795,41 @@ export default function ScriptureResearchPage({ onPageChange }) {
       ancestry.unshift({
         id: current.id,
         parentNodeId: current.parentNodeId,
-        question: current.response.query,
-        label: current.response.trailNode?.label ?? null,
+        question: current.response?.query ?? current.question,
+        label: current.response?.trailNode?.label ?? null,
       })
       current = current.parentNodeId ? lookup.get(current.parentNodeId) : null
     }
     const active = ancestry.at(-1)
     const children = activeSession.nodes.filter((node) => node.parentNodeId === active.id).map((node) => ({
-      id: node.id, parentNodeId: node.parentNodeId, question: node.response.query, label: node.response.trailNode?.label ?? null,
+      id: node.id, parentNodeId: node.parentNodeId,
+      question: node.response?.query ?? node.question,
+      label: node.response?.trailNode?.label ?? null,
     }))
     return { ancestry, active, children, childrenTruncated: false }
   }, [activeSession])
 
-  const selectTrailNode = useCallback((node) => {
+  const selectTrailNode = useCallback(async (node) => {
     const session = authStatus === 'authenticated' ? authenticatedSession : guestSession
     const stored = session.nodes.find((item) => item.id === node.id)
     if (!stored) return
+    if (authStatus === 'authenticated' && !stored.response) {
+      const requestPrincipalKey = principalRef.current
+      activeControllerRef.current?.abort()
+      const controller = new AbortController()
+      activeControllerRef.current = controller
+      try {
+        const trail = await getResearchTrail(node.id, { signal: controller.signal })
+        if (controller.signal.aborted || principalRef.current !== requestPrincipalKey) return
+        resetPersistence()
+        applyAuthenticatedTrail(trail)
+      } catch (error) {
+        if (!abortError(error) && principalRef.current === requestPrincipalKey) {
+          setStatusMessage(`Research history could not be opened: ${error.message}`)
+        }
+      }
+      return
+    }
     if (authStatus === 'authenticated') {
       setAuthenticatedSession((current) => ({ ...current, activeNodeId: node.id, settings: cloneSettings(stored.response.settings) }))
     } else {
@@ -751,7 +846,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
     setMode(stored.response.mode)
     setPageState(stored.response.groundingStatus === 'insufficient' ? 'insufficient'
       : stored.response.groundingStatus === 'evidence-only' ? 'evidence-only' : 'success')
-  }, [authStatus, authenticatedSession, guestSession, resetPersistence])
+  }, [applyAuthenticatedTrail, authStatus, authenticatedSession, guestSession, resetPersistence])
 
   const openTarget = useCallback((target, source) => {
     if (!target) return
@@ -826,7 +921,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
           <ResearchWorkspace
             response={activeResponse}
             onRelatedQuestion={followUp}
-            onEventResearch={followUp}
+            onEventResearch={researchTimelineEvent}
             onPersonResearch={(person) => followUp(`Research ${person.name}`)}
             onPlaceResearch={(place) => followUp(`Research ${place.name}`)}
             onOpenTarget={openTarget}

@@ -260,6 +260,94 @@ def test_authenticated_query_creates_owned_root_child_and_trail(test_settings):
         ).status_code == 404
 
 
+def test_authenticated_trail_list_and_detail_restore_only_the_owners_latest_branch(
+    test_settings,
+):
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        owner = _register(client, 'restore-owner@example.com', 'restore-owner')
+        stranger = _register(client, 'restore-stranger@example.com', 'restore-stranger')
+        root_response = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={'question': 'Who was Abel?'},
+        ).json()
+        root = root_response['trail_node']
+        child_response = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={
+                'question': 'What happened next?',
+                'parent_node_id': root['id'],
+            },
+        ).json()
+        child = child_response['trail_node']
+        stranger_node = client.post(
+            '/api/v1/research/query', headers=stranger,
+            json={'question': 'Private stranger research'},
+        ).json()['trail_node']
+
+        recent = client.get('/api/v1/research/trail', headers=owner)
+        detail = client.get(
+            f"/api/v1/research/trail/{child['id']}", headers=owner
+        )
+
+    assert recent.status_code == 200
+    assert [item['id'] for item in recent.json()['nodes']][:2] == [
+        child['id'], root['id'],
+    ]
+    assert stranger_node['id'] not in {
+        item['id'] for item in recent.json()['nodes']
+    }
+    assert detail.status_code == 200
+    assert detail.json()['active']['id'] == child['id']
+    assert detail.json()['active_response']['query'] == 'What happened next?'
+    assert detail.json()['active_response']['trail_node'] == child
+    assert [item['id'] for item in detail.json()['ancestry']] == [root['id']]
+
+
+def test_authenticated_save_links_the_owned_research_node_to_the_owned_study(
+    test_settings,
+):
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        owner = _register(client, 'link-owner@example.com', 'link-owner')
+        stranger = _register(client, 'link-stranger@example.com', 'link-stranger')
+        node_id = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={'question': 'Link this research'},
+        ).json()['trail_node']['id']
+        study_id = client.post(
+            '/api/v1/studies', headers=owner, json={'title': 'Saved research'}
+        ).json()['id']
+        stranger_study_id = client.post(
+            '/api/v1/studies', headers=stranger,
+            json={'title': 'Stranger study'},
+        ).json()['id']
+
+        linked = client.patch(
+            f'/api/v1/research/trail/{node_id}/study',
+            headers=owner,
+            json={'study_id': study_id},
+        )
+        cross_owner_study = client.patch(
+            f'/api/v1/research/trail/{node_id}/study',
+            headers=owner,
+            json={'study_id': stranger_study_id},
+        )
+        cross_owner_node = client.patch(
+            f'/api/v1/research/trail/{node_id}/study',
+            headers=stranger,
+            json={'study_id': stranger_study_id},
+        )
+
+    assert linked.status_code == 200
+    assert linked.json() == {'node_id': node_id, 'study_id': study_id}
+    assert cross_owner_study.status_code == 404
+    assert cross_owner_node.status_code == 404
+    with app.state.session_factory() as session:
+        node = session.get(ResearchNode, uuid.UUID(node_id))
+        assert str(node.study_id) == study_id
+
+
 def test_guest_parent_is_rejected_without_creating_node(test_settings):
     app = create_application(test_settings)
     with TestClient(app) as client:

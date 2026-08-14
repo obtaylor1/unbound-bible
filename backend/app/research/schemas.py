@@ -188,6 +188,10 @@ class TrailNode(StrictResearchModel):
     label: str | None = None
 
 
+class ResearchStudyLinkRequest(StrictResearchModel):
+    study_id: uuid.UUID
+
+
 def _bounded_unique_context_values(
     value: Any, *, label: str, max_length: int
 ) -> list[str]:
