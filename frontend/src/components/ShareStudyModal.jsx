@@ -3,22 +3,74 @@ import './ShareStudyModal.css'
 import { createShare, updateShare } from '../services/sharingApi'
 
 export default function ShareStudyModal({ isOpen, onClose, shareData }) {
+  if (!isOpen || !shareData) return null
+
+  const shareIdentity = JSON.stringify({
+    studyId: shareData.studyId,
+    title: shareData.title,
+    type: shareData.type,
+  })
+
+  return <ShareStudyDialog key={shareIdentity} onClose={onClose} shareData={shareData} />
+}
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+function ShareStudyDialog({ onClose, shareData }) {
   const [visibility, setVisibility] = useState('unlisted')
   const [created, setCreated] = useState(null)
   const [state, setState] = useState('idle')
   const [error, setError] = useState('')
+  const dialogRef = useRef(null)
   const closeButtonRef = useRef(null)
+  const onCloseRef = useRef(onClose)
   const previousFocusRef = useRef(null)
 
   useEffect(() => {
-    if (!isOpen) return
-    previousFocusRef.current = document.activeElement; closeButtonRef.current?.focus()
-    const escape = (event) => event.key === 'Escape' && onClose()
-    document.addEventListener('keydown', escape)
-    return () => { document.removeEventListener('keydown', escape); previousFocusRef.current?.focus() }
-  }, [isOpen, onClose])
+    onCloseRef.current = onClose
+  }, [onClose])
 
-  if (!isOpen || !shareData) return null
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement
+    closeButtonRef.current?.focus()
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = [...(dialogRef.current?.querySelectorAll(FOCUSABLE_SELECTOR) ?? [])]
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const focusIsInside = dialogRef.current?.contains(document.activeElement)
+
+      if (event.shiftKey && (document.activeElement === first || !focusIsInside)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !focusIsInside)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previousFocusRef.current?.focus()
+    }
+  }, [])
+
   const shareUrl = created ? `${window.location.origin}/share/${created.share_id}` : ''
   const persist = async () => {
     setState('creating'); setError('')
@@ -35,7 +87,7 @@ export default function ShareStudyModal({ isOpen, onClose, shareData }) {
   const whatsappHref = `https://wa.me/?text=${encodeURIComponent(`${shareData.title} — ${shareUrl}`)}`
 
   return <div className="share-modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <div className="share-modal-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+    <div ref={dialogRef} className="share-modal-card glass-panel" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
       <div className="modal-header"><h3 id="share-dialog-title">Share study session</h3><button ref={closeButtonRef} className="close-btn" aria-label="Close sharing dialog" onClick={onClose}>✕</button></div>
       <div className="modal-body">
         <div className="share-summary-box"><span className="summary-label">Session type</span><span className="summary-val">{shareData.type}</span><span className="summary-label">Title</span><span className="summary-val bold">{shareData.title}</span></div>
