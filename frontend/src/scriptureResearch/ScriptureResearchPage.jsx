@@ -77,6 +77,39 @@ const readLocalStudies = () => {
   }
 }
 
+const mergedGuestNodes = (...collections) => {
+  const byId = new Map()
+  collections.flat().forEach((node) => {
+    byId.delete(node.id)
+    byId.set(node.id, { ...node })
+  })
+  const nodes = [...byId.values()].slice(-64)
+  const retainedIds = new Set(nodes.map((node) => node.id))
+  nodes.forEach((node, index) => {
+    if (
+      node.parentNodeId === node.id
+      || (node.parentNodeId && !retainedIds.has(node.parentNodeId))
+    ) nodes[index] = { ...node, parentNodeId: null }
+  })
+
+  const lookup = new Map(nodes.map((node) => [node.id, node]))
+  nodes.forEach((node, index) => {
+    const seen = new Set([node.id])
+    let parentNodeId = node.parentNodeId
+    while (parentNodeId) {
+      if (seen.has(parentNodeId)) {
+        const detached = { ...node, parentNodeId: null }
+        nodes[index] = detached
+        lookup.set(detached.id, detached)
+        break
+      }
+      seen.add(parentNodeId)
+      parentNodeId = lookup.get(parentNodeId)?.parentNodeId ?? null
+    }
+  })
+  return nodes
+}
+
 const readerHashFromOpenTarget = (target, source) => {
   if (target.startsWith('#scriptures')) {
     const params = new URLSearchParams(target.split('?')[1] ?? '')
@@ -215,13 +248,21 @@ export default function ScriptureResearchPage({ onPageChange }) {
 
   const storeGuestResponse = useCallback((response, localParentNodeId, requestSettings) => {
     const id = response.trailNode?.id ?? response.id
-    const parentNodeId = localParentNodeId && localParentNodeId !== id
-      ? localParentNodeId
-      : null
     setGuestSession((current) => {
-      const withoutSameNode = current.nodes.filter((node) => node.id !== id)
+      const latest = loadGuestResearchSession()
+      const candidateParentId = localParentNodeId
+        ?? current.activeNodeId
+        ?? latest.activeNodeId
+      const parentNodeId = candidateParentId && candidateParentId !== id
+        ? candidateParentId
+        : null
+      const nodes = mergedGuestNodes(
+        latest.nodes,
+        current.nodes,
+        [{ id, parentNodeId, response }],
+      )
       const next = {
-        nodes: [...withoutSameNode, { id, parentNodeId, response }].slice(-64),
+        nodes,
         activeNodeId: id,
         settings: cloneSettings(requestSettings),
       }

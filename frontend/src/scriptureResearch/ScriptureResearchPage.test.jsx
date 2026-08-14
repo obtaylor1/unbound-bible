@@ -281,6 +281,44 @@ describe('ScriptureResearchPage', () => {
     expect(stored.session.nodes[0].response.query).toBe('Who was Cain?')
   })
 
+  it('merges saved guest ancestry when a startup query resolves anonymous', async () => {
+    const saved = response({ trailNode: null })
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: {
+        nodes: [{ id: saved.id, parentNodeId: null, response: saved }],
+        activeNodeId: saved.id,
+        settings: saved.settings,
+      },
+    }))
+    const pending = deferred()
+    let status = 'loading'
+    useAuth.mockImplementation(() => ({ status, user: null }))
+    runResearch.mockReturnValue(pending.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Who was Cain?')
+
+    status = 'anonymous'
+    rerender(<ScriptureResearchPage />)
+    await act(async () => pending.resolve(response({
+      id: IDS.followup,
+      query: 'Who was Cain?',
+      trailNode: null,
+    })))
+
+    const stored = JSON.parse(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).session
+    expect(stored.nodes).toHaveLength(2)
+    expect(stored.nodes.map((node) => node.id)).toEqual([saved.id, IDS.followup])
+    expect(stored.nodes[1].parentNodeId).toBe(saved.id)
+    expect(stored.activeNodeId).toBe(IDS.followup)
+
+    const trail = await screen.findByRole('navigation', { name: 'Research trail' })
+    expect(trail).toHaveTextContent(saved.query)
+    expect(trail).toHaveTextContent('Who was Cain?')
+    fireEvent.click(within(trail).getByRole('button', { name: saved.query }))
+    expect(screen.getByRole('heading', { name: saved.query })).toBeInTheDocument()
+  })
+
   it('retains a safe local trail when auth loading resolves authenticated mid-query', async () => {
     const pending = deferred()
     let status = 'loading'
