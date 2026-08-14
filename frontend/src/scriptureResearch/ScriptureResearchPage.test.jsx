@@ -430,6 +430,64 @@ describe('ScriptureResearchPage', () => {
     expect(await screen.findByRole('heading', { name: 'Start a fresh investigation' })).toBeInTheDocument()
   })
 
+  it('keeps a typed draft when the recent-trail list resolves late', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    const restoring = deferred()
+    listResearchTrails.mockReturnValue(restoring.promise)
+    render(<ScriptureResearchPage />)
+    await waitFor(() => expect(listResearchTrails).toHaveBeenCalledOnce())
+    const restoreSignal = listResearchTrails.mock.calls[0][0].signal
+
+    fireEvent.change(screen.getByLabelText('Research question'), {
+      target: { value: 'My new research draft' },
+    })
+
+    expect(restoreSignal.aborted).toBe(true)
+    await act(async () => restoring.resolve({
+      nodes: [{
+        id: IDS.node, parentNodeId: null, question: 'Saved research',
+        mode: 'what-happened-between', createdAt: null, updatedAt: null,
+      }],
+    }))
+    expect(getResearchTrail).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Research question')).toHaveValue('My new research draft')
+  })
+
+  it.each([
+    {
+      name: 'source scope',
+      interact: () => fireEvent.click(screen.getByRole('button', { name: 'Ethiopian Tradition' })),
+      assertChoice: () => expect(screen.getByRole('button', { name: 'Ethiopian Tradition' })).toHaveAttribute('aria-pressed', 'true'),
+    },
+    {
+      name: 'research mode',
+      interact: () => fireEvent.click(screen.getByRole('button', { name: 'Explain a Book' })),
+      assertChoice: () => expect(screen.getByRole('button', { name: 'Explain a Book' })).toHaveAttribute('aria-pressed', 'true'),
+    },
+  ])('keeps a changed $name when trail detail resolves late', async ({ interact, assertChoice }) => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    const summary = {
+      id: IDS.node, parentNodeId: null, question: 'Saved research',
+      mode: 'what-happened-between', createdAt: null, updatedAt: null,
+    }
+    const restoring = deferred()
+    listResearchTrails.mockResolvedValue({ nodes: [summary] })
+    getResearchTrail.mockReturnValue(restoring.promise)
+    render(<ScriptureResearchPage />)
+    await waitFor(() => expect(getResearchTrail).toHaveBeenCalledOnce())
+    const restoreSignal = getResearchTrail.mock.calls[0][1].signal
+
+    interact()
+
+    expect(restoreSignal.aborted).toBe(true)
+    await act(async () => restoring.resolve({
+      ancestry: [], active: summary, children: [], childrenTruncated: false,
+      activeResponse: response(),
+    }))
+    assertChoice()
+    expect(screen.queryByRole('heading', { name: response().query })).not.toBeInTheDocument()
+  })
+
   it('keeps authenticated responses navigable in the active research trail', async () => {
     useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
     runResearch

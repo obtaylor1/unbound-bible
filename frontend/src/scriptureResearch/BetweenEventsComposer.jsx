@@ -6,6 +6,7 @@ export default function BetweenEventsComposer({
   onSubmit,
   searchEvents = searchResearchEvents,
   loading: submitting = false,
+  onInteraction,
 }) {
   const [events, setEvents] = useState([])
   const [fromId, setFromId] = useState('')
@@ -87,12 +88,18 @@ export default function BetweenEventsComposer({
     <section className="between-events-composer" aria-label="Build a timeline between events">
       <div className="between-events-composer__selectors">
         <label htmlFor={fromIdAttribute}>From</label>
-        <select id={fromIdAttribute} value={fromId} disabled={submitting} onChange={(event) => setFromId(event.target.value)}>
+        <select id={fromIdAttribute} value={fromId} disabled={submitting} onChange={(event) => {
+          onInteraction?.()
+          setFromId(event.target.value)
+        }}>
           <option value="">Choose an event</option>
           {events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}
         </select>
         <label htmlFor={toIdAttribute}>To</label>
-        <select id={toIdAttribute} value={toId} disabled={submitting} onChange={(event) => setToId(event.target.value)}>
+        <select id={toIdAttribute} value={toId} disabled={submitting} onChange={(event) => {
+          onInteraction?.()
+          setToId(event.target.value)
+        }}>
           <option value="">Choose an event</option>
           {events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}
         </select>

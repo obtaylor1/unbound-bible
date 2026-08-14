@@ -242,6 +242,11 @@ export default function ScriptureResearchPage({ onPageChange }) {
     setStudyId(null)
   }, [])
 
+  const markComposerInteraction = useCallback(() => {
+    hasInteractedRef.current = true
+    activeControllerRef.current?.abort()
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -384,9 +389,18 @@ export default function ScriptureResearchPage({ onPageChange }) {
       try {
         const recent = await listResearchTrails({ signal: controller.signal })
         const latest = recent.nodes[0]
-        if (!latest || controller.signal.aborted || principalRef.current !== principalKey) return
+        if (
+          !latest
+          || controller.signal.aborted
+          || hasInteractedRef.current
+          || principalRef.current !== principalKey
+        ) return
         const trail = await getResearchTrail(latest.id, { signal: controller.signal })
-        if (controller.signal.aborted || principalRef.current !== principalKey) return
+        if (
+          controller.signal.aborted
+          || hasInteractedRef.current
+          || principalRef.current !== principalKey
+        ) return
         applyAuthenticatedTrail(trail)
       } catch (error) {
         if (!abortError(error) && principalRef.current === principalKey) {
@@ -899,6 +913,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
         loading={pageState === 'loading'}
         searchEvents={searchResearchEvents}
         onExample={submitExample}
+        onInteraction={markComposerInteraction}
       />
 
       {pageState === 'loading' && (

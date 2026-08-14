@@ -36,6 +36,7 @@ export default function ResearchComposer({
   onVoiceRequest,
   searchEvents,
   onExample,
+  onInteraction,
 }) {
   const question = typeof value === 'string' ? value : ''
   const sourceScopes = settings.sourceScopes
@@ -66,6 +67,7 @@ export default function ResearchComposer({
     } else {
       nextScopes = [...sourceScopes, scope]
     }
+    onInteraction?.()
     onSettingsChange({ ...settings, sourceScopes: nextScopes })
   }
 
@@ -95,7 +97,10 @@ export default function ResearchComposer({
         <textarea
           id={questionId}
           value={question}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            onInteraction?.()
+            onChange(event.target.value)
+          }}
           onKeyDown={handleQuestionKeyDown}
           rows={4}
           disabled={loading}
@@ -145,7 +150,10 @@ export default function ResearchComposer({
                 aria-pressed={settings.depth === depth.value}
                 disabled={loading}
                 aria-describedby={descriptionId}
-                onClick={() => onSettingsChange({ ...settings, depth: depth.value })}
+                onClick={() => {
+                  onInteraction?.()
+                  onSettingsChange({ ...settings, depth: depth.value })
+                }}
               >
                 {depth.label}
               </button>
@@ -155,7 +163,10 @@ export default function ResearchComposer({
         })}
       </fieldset>
 
-      <ResearchModeToolbar mode={mode} onModeChange={onModeChange} disabled={loading} />
+      <ResearchModeToolbar mode={mode} onModeChange={(value) => {
+        onInteraction?.()
+        onModeChange(value)
+      }} disabled={loading} />
 
       {mode === 'what-happened-between' && (
         <BetweenEventsComposer
@@ -163,6 +174,7 @@ export default function ResearchComposer({
           onSubmit={submitBetweenEvents}
           searchEvents={searchEvents}
           loading={loading}
+          onInteraction={onInteraction}
         />
       )}
 
@@ -172,15 +184,18 @@ export default function ResearchComposer({
             type="button"
             key={example.label}
             disabled={loading}
-            onClick={() => onExample?.(
-              example.question,
-              {
-                ...settings,
-                sourceScopes: [...sourceScopes],
-                modeParameters: { ...(example.modeParameters ?? {}) },
-              },
-              example.mode ?? mode,
-            )}
+            onClick={() => {
+              onInteraction?.()
+              onExample?.(
+                example.question,
+                {
+                  ...settings,
+                  sourceScopes: [...sourceScopes],
+                  modeParameters: { ...(example.modeParameters ?? {}) },
+                },
+                example.mode ?? mode,
+              )
+            }}
           >
             {example.label}
           </button>
