@@ -379,6 +379,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
     ) return undefined
     restoredPrincipalRef.current = principalKey
     const controller = new AbortController()
+    activeControllerRef.current = controller
     const restore = async () => {
       try {
         const recent = await listResearchTrails({ signal: controller.signal })

@@ -412,6 +412,24 @@ describe('ScriptureResearchPage', () => {
     expect(getResearchTrail).toHaveBeenNthCalledWith(2, IDS.node, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
+  it('cancels background trail restoration when the user starts new research', async () => {
+    useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
+    const restoring = deferred()
+    const researching = deferred()
+    listResearchTrails.mockReturnValue(restoring.promise)
+    runResearch.mockReturnValue(researching.promise)
+    render(<ScriptureResearchPage />)
+    await waitFor(() => expect(listResearchTrails).toHaveBeenCalledOnce())
+    const restoreSignal = listResearchTrails.mock.calls[0][0].signal
+
+    submitQuestion('Start a fresh investigation')
+
+    expect(restoreSignal.aborted).toBe(true)
+    await act(async () => restoring.resolve({ nodes: [] }))
+    await act(async () => researching.resolve(response({ query: 'Start a fresh investigation' })))
+    expect(await screen.findByRole('heading', { name: 'Start a fresh investigation' })).toBeInTheDocument()
+  })
+
   it('keeps authenticated responses navigable in the active research trail', async () => {
     useAuth.mockReturnValue({ status: 'authenticated', user: { id: 'user-1' } })
     runResearch
