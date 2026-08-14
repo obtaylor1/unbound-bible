@@ -354,6 +354,37 @@ describe('ScriptureResearchPage', () => {
     expect(stored.session.nodes[0].response.query).toBe('Who was Cain?')
   })
 
+  it('recovers an anonymous in-flight request after sign-in and retries the exact request as the authenticated user', async () => {
+    const pendingGuest = deferred()
+    let auth = { status: 'anonymous', user: null }
+    useAuth.mockImplementation(() => auth)
+    runResearch
+      .mockReturnValueOnce(pendingGuest.promise)
+      .mockResolvedValueOnce(response({
+        query: 'Who was Cain?',
+        trailNode: { id: IDS.node, parentNodeId: null, question: 'Who was Cain?', label: null },
+      }))
+    const { rerender } = render(<ScriptureResearchPage />)
+    submitQuestion('Who was Cain?')
+    const originalRequest = runResearch.mock.calls[0][0]
+    const guestSignal = runResearch.mock.calls[0][1].signal
+
+    auth = { status: 'authenticated', user: { id: 'user-1' } }
+    rerender(<ScriptureResearchPage />)
+
+    expect(guestSignal.aborted).toBe(true)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/sign-in changed.*retry/i)
+    expect(screen.getByLabelText('Research question')).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry research' }))
+
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    expect(runResearch.mock.calls[1][0]).toEqual(originalRequest)
+    expect(await screen.findByRole('heading', { name: 'Who was Cain?' })).toBeInTheDocument()
+    await act(async () => pendingGuest.resolve(response({ query: 'Leaked guest result', trailNode: null })))
+    expect(screen.queryByRole('heading', { name: 'Leaked guest result' })).not.toBeInTheDocument()
+    expect(localStorage.getItem(GUEST_RESEARCH_STORAGE_KEY)).toBeNull()
+  })
+
   it('merges saved guest ancestry when a startup query resolves anonymous', async () => {
     const saved = response({ trailNode: null })
     localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
@@ -392,7 +423,7 @@ describe('ScriptureResearchPage', () => {
     expect(screen.getByRole('heading', { name: saved.query })).toBeInTheDocument()
   })
 
-  it('retains a safe local trail when auth loading resolves authenticated mid-query', async () => {
+  it('revalidates a local parent before its first authenticated follow-up', async () => {
     const pending = deferred()
     let status = 'loading'
     useAuth.mockImplementation(() => ({
@@ -402,9 +433,13 @@ describe('ScriptureResearchPage', () => {
     runResearch
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce(response({
+        query: 'Who was Cain?',
+        trailNode: { id: IDS.node, parentNodeId: null, question: 'Who was Cain?', label: null },
+      }))
+      .mockResolvedValueOnce(response({
         id: IDS.followup,
         query: 'What happened to Cain after Abel’s death?',
-        trailNode: null,
+        trailNode: { id: IDS.followup, parentNodeId: IDS.node, question: 'What happened to Cain after Abel’s death?', label: null },
       }))
     const { rerender } = render(<ScriptureResearchPage />)
     submitQuestion('Who was Cain?')
@@ -416,11 +451,52 @@ describe('ScriptureResearchPage', () => {
     expect(await screen.findByRole('heading', { name: 'Who was Cain?' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Research trail' })).toHaveTextContent('Who was Cain?')
     fireEvent.click(screen.getByRole('button', { name: 'What happened to Cain after Abel’s death?' }))
-    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledTimes(3))
+    expect(runResearch.mock.calls[1][0]).toMatchObject({ question: 'Who was Cain?' })
     expect(runResearch.mock.calls[1][0]).not.toHaveProperty('parentNodeId')
-    expect(runResearch.mock.calls[1][0]).toMatchObject({
-      conversationContext: { entityNames: [], sourceReferences: ['Genesis 2–4'] },
+    expect(runResearch.mock.calls[1][0]).not.toHaveProperty('conversationContext')
+    expect(runResearch.mock.calls[2][0]).toMatchObject({
+      question: 'What happened to Cain after Abel’s death?',
+      parentNodeId: IDS.node,
     })
+    expect(runResearch.mock.calls[2][0]).not.toHaveProperty('conversationContext')
+    const trail = await screen.findByRole('navigation', { name: 'Research trail' })
+    expect(within(trail).getByRole('button', { name: 'Who was Cain?' })).toBeInTheDocument()
+    expect(within(trail).getByRole('button', { name: 'What happened to Cain after Abel’s death?' })).toBeInTheDocument()
+  })
+
+  it('stops authenticated local-parent revalidation when the principal changes mid-chain', async () => {
+    const saved = response({ query: 'Who was Cain?', trailNode: null })
+    localStorage.setItem(GUEST_RESEARCH_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      session: {
+        nodes: [{ id: saved.id, parentNodeId: null, response: saved }],
+        activeNodeId: saved.id,
+        settings: saved.settings,
+      },
+    }))
+    const pendingParent = deferred()
+    let auth = { status: 'anonymous', user: null }
+    useAuth.mockImplementation(() => auth)
+    runResearch.mockReturnValueOnce(pendingParent.promise)
+    const { rerender } = render(<ScriptureResearchPage />)
+    auth = { status: 'authenticated', user: { id: 'user-a' } }
+    rerender(<ScriptureResearchPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'What happened to Cain after Abel’s death?' }))
+    await waitFor(() => expect(runResearch).toHaveBeenCalledOnce())
+    const parentSignal = runResearch.mock.calls[0][1].signal
+    auth = { status: 'authenticated', user: { id: 'user-b' } }
+    rerender(<ScriptureResearchPage />)
+    expect(parentSignal.aborted).toBe(true)
+    await act(async () => pendingParent.resolve(response({
+      query: 'Who was Cain?',
+      trailNode: { id: IDS.node, parentNodeId: null, question: 'Who was Cain?', label: null },
+    })))
+
+    expect(runResearch).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('heading', { name: 'Who was Cain?' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Research question')).toHaveValue('')
   })
 
   it('retains the local trail when authentication resolves after query completion', async () => {
