@@ -222,7 +222,7 @@ def build_trail_snapshot(
     session: Session,
     node_id: uuid.UUID,
     owner_id: uuid.UUID,
-) -> dict[str, list[dict[str, Any]]] | None:
+) -> dict[str, Any] | None:
     """Return bounded ancestry and direct children in deterministic order."""
 
     current = get_owned_research_node(session, node_id, owner_id)
@@ -254,8 +254,10 @@ def build_trail_snapshot(
             ResearchNode.owner_id == owner_id,
         )
         .order_by(ResearchNode.updated_at.desc(), ResearchNode.id.asc())
+        .limit(MAX_TRAIL_DEPTH + 1)
     ).all()
     return {
         'ancestry': list(reversed(reverse_ancestry)),
-        'children': [_trail_node(child) for child in children],
+        'children': [_trail_node(child) for child in children[:MAX_TRAIL_DEPTH]],
+        'children_truncated': len(children) > MAX_TRAIL_DEPTH,
     }

@@ -103,7 +103,11 @@ async def query(
 
     try:
         settings = request.app.state.settings
-        provider = create_chat_provider(settings.ai_chat_provider, settings)
+        provider = create_chat_provider(
+            settings.ai_chat_provider,
+            settings,
+            request.app.state.http_client,
+        )
         response = await ResearchService(
             retrieve_research_evidence,
             provider,
@@ -208,6 +212,7 @@ def trail(
             'ancestry': ancestry[:-1],
             'active': _node_summary(node),
             'children': snapshot['children'][:MAX_TRAIL_DEPTH],
+            'children_truncated': snapshot['children_truncated'],
         }
     except HTTPException:
         raise

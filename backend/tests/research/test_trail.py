@@ -478,6 +478,61 @@ def test_trail_snapshot_is_deterministic_and_cycle_safe(test_settings):
         ]
 
 
+def test_trail_snapshot_limits_children_in_database_and_reports_truncation(
+    test_settings,
+):
+    application = create_application(test_settings)
+    with application.state.session_factory() as session:
+        owner = _register(
+            session,
+            test_settings,
+            email='owner@example.com',
+            username='owner',
+        )
+        root = create_research_node(
+            session, owner.id, _request('Root'), _snapshot('Root')
+        )
+        session.flush()
+        session.add_all(
+            ResearchNode(
+                owner_id=owner.id,
+                parent_id=root.id,
+                question=f'Child {index:03}',
+                mode='research-question',
+                source_scopes=['biblical-canon'],
+                depth='quick',
+                response_snapshot=_snapshot(f'Child {index:03}'),
+            )
+            for index in range(MAX_TRAIL_DEPTH + 2)
+        )
+        session.commit()
+
+        child_selects = []
+
+        def capture_child_select(_conn, _cursor, statement, parameters, *_args):
+            if 'research_nodes.parent_id =' in statement and 'ORDER BY' in statement:
+                child_selects.append((statement, parameters))
+
+        event.listen(
+            application.state.database_engine,
+            'before_cursor_execute',
+            capture_child_select,
+        )
+        try:
+            trail = build_trail_snapshot(session, root.id, owner.id)
+        finally:
+            event.remove(
+                application.state.database_engine,
+                'before_cursor_execute',
+                capture_child_select,
+            )
+
+        assert len(trail['children']) == MAX_TRAIL_DEPTH
+        assert trail['children_truncated'] is True
+        assert len(child_selects) == 1
+        assert 'LIMIT' in child_selects[0][0].upper()
+
+
 def test_trail_snapshot_rejects_overlong_ancestry_with_bounded_queries(test_settings):
     application = create_application(test_settings)
     with application.state.session_factory() as session:

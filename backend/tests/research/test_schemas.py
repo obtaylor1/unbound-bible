@@ -10,6 +10,7 @@ from app.research.schemas import (
     ResearchMode,
     ResearchQueryRequest,
     ResearchResponse,
+    ResearchSettings,
     SourceScope,
     SourceType,
 )
@@ -56,6 +57,37 @@ def test_query_request_requires_one_to_eight_unique_compatible_scopes(
         ResearchQueryRequest(
             question='What happened?', source_scopes=source_scopes
         )
+
+
+@pytest.mark.parametrize('model', [ResearchQueryRequest, ResearchSettings])
+@pytest.mark.parametrize('mode_parameters', [
+    {f'key-{index}': 'value' for index in range(9)},
+    {'x' * 65: 'value'},
+    {'   ': 'value'},
+    {'from': '   '},
+    {'from': 'x' * 1_000_000},
+    {'from': 'Eden', ' from ': 'Abel'},
+])
+def test_mode_parameters_reject_unbounded_blank_or_normalized_duplicate_values(
+    model, mode_parameters,
+):
+    values = {'mode_parameters': mode_parameters}
+    if model is ResearchQueryRequest:
+        values['question'] = 'What happened?'
+
+    with pytest.raises(ValidationError):
+        model(**values)
+
+
+@pytest.mark.parametrize('model', [ResearchQueryRequest, ResearchSettings])
+def test_mode_parameters_are_stripped_and_echo_only_normalized_values(model):
+    values = {'mode_parameters': {' from ': ' Eden ', 'to': ' Abel '}}
+    if model is ResearchQueryRequest:
+        values['question'] = 'What happened?'
+
+    result = model(**values)
+
+    assert result.mode_parameters == {'from': 'Eden', 'to': 'Abel'}
 
 
 @pytest.mark.parametrize(

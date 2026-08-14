@@ -6,7 +6,7 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SourceScope(StrEnum):
@@ -84,12 +84,40 @@ def _default_scopes() -> list[SourceScope]:
     return [SourceScope.BIBLICAL_CANON]
 
 
+def _bounded_mode_parameters(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError('mode parameters must be an object')
+    if len(value) > 8:
+        raise ValueError('mode parameters must contain at most 8 items')
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+            raise ValueError('mode parameter keys and values must be strings')
+        key = raw_key.strip()
+        item = raw_value.strip()
+        if not 1 <= len(key) <= 64:
+            raise ValueError('mode parameter keys must contain 1 to 64 characters')
+        if not item:
+            raise ValueError('mode parameter values must not be blank')
+        if len(item) > 256:
+            raise ValueError('mode parameter values must contain at most 256 characters')
+        if key in normalized:
+            raise ValueError('mode parameter keys must be unique after normalization')
+        normalized[key] = item
+    return normalized
+
+
 class ResearchSettings(StrictResearchModel):
     source_scopes: list[SourceScope] = Field(
         default_factory=_default_scopes, min_length=1, max_length=8
     )
     depth: ResearchDepth = ResearchDepth.DEEP
     mode_parameters: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator('mode_parameters', mode='before')
+    @classmethod
+    def validate_mode_parameters(cls, value: Any) -> dict[str, str]:
+        return _bounded_mode_parameters(value)
 
     @model_validator(mode='after')
     def validate_source_scopes(self) -> ResearchSettings:
@@ -171,6 +199,11 @@ class ResearchQueryRequest(StrictResearchModel):
     )
     depth: ResearchDepth = ResearchDepth.DEEP
     mode_parameters: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator('mode_parameters', mode='before')
+    @classmethod
+    def validate_mode_parameters(cls, value: Any) -> dict[str, str]:
+        return _bounded_mode_parameters(value)
 
     @model_validator(mode='after')
     def validate_source_scopes(self) -> ResearchQueryRequest:

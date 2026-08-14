@@ -312,6 +312,41 @@ async def test_evidence_conversion_preserves_typed_provenance_and_open_target():
 
 
 @pytest.mark.asyncio
+async def test_response_source_metadata_and_text_are_bounded_before_serialization():
+    oversized = ResearchEvidence(
+        id='scripture:oversized',
+        title='T' * 1_000_000,
+        reference='R' * 1_000_000,
+        text='E' * 1_000_000,
+        source_type='canonical-scripture',
+        tradition='P' * 1_000_000,
+        translation='K' * 1_000_000,
+        date_or_era='D' * 1_000_000,
+        original_language='L' * 1_000_000,
+        open_target='O' * 1_000_000,
+    )
+
+    result = await ResearchService(
+        retriever=lambda *_: [oversized],
+        provider=FailingProvider(),
+    ).query(request())
+
+    source = result.sources[0]
+    assert len(source.title) == 1_000
+    assert len(source.reference) == 2_000
+    assert len(source.text) == 2_000
+    for value in (
+        source.tradition,
+        source.translation,
+        source.date_or_era,
+        source.original_language,
+        source.open_target,
+    ):
+        assert value is not None and len(value) == 2_000
+    assert len(result.model_dump_json()) < 20_000
+
+
+@pytest.mark.asyncio
 async def test_retriever_receives_session_question_scopes_and_depth_exactly():
     calls = []
     session = RecordingSession()
@@ -400,8 +435,8 @@ async def test_retriever_generator_is_not_consumed_past_evidence_limit():
 @pytest.mark.asyncio
 async def test_prompt_is_valid_bounded_json_with_normalized_mode_parameters():
     raw_parameters = {
-        f'{index:02d}-' + ('k' * 100): 'v' * 1_000_000
-        for index in range(12)
+        f'{index:02d}-' + ('k' * 61): 'v' * 256
+        for index in range(8)
     }
     payload_request = request(mode_parameters=raw_parameters)
     provider = RecordingProvider(provider_document())
@@ -552,7 +587,7 @@ async def test_provider_request_byte_limit_handles_multibyte_untrusted_data():
         text='祝福' * 50_000, source_type='canonical-scripture',
         tradition='傳統' * 1_000,
     )
-    payload_request = request(mode_parameters={'備考': '😀' * 1_000_000})
+    payload_request = request(mode_parameters={'備考': '😀' * 256})
     provider = RecordingProvider(provider_document(claims=[]))
 
     await ResearchService(

@@ -20,6 +20,10 @@ class OllamaChatProvider:
             return ChatResult(content=payload["message"]["content"], provider=self.name, model=payload.get("model") or self.model)
         except httpx.TimeoutException as error:
             raise ProviderError("Local AI provider timed out", code="timeout", retryable=True) from error
+        except httpx.RequestError as error:
+            raise ProviderError(
+                "Local AI provider is unavailable", code="unavailable", retryable=True
+            ) from error
         except httpx.HTTPStatusError as error:
             raise ProviderError("Local AI provider is unavailable", code="unavailable", retryable=True) from error
         except (KeyError, TypeError, ValueError) as error:

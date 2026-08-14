@@ -278,15 +278,21 @@ def _fallback_response(
 def _to_source(evidence: ResearchEvidence) -> ResearchSource:
     return ResearchSource(
         id=evidence.id,
-        title=evidence.title,
-        reference=evidence.reference,
-        text=evidence.text,
+        title=_bounded(evidence.title, 1_000),
+        reference=_bounded(evidence.reference, _MAX_EVIDENCE_METADATA_CHARS),
+        text=_bounded(evidence.text, _MAX_EVIDENCE_TEXT_CHARS),
         source_type=evidence.source_type,
-        tradition=evidence.tradition,
-        date_or_era=evidence.date_or_era,
-        original_language=evidence.original_language,
-        translation=evidence.translation,
-        open_target=evidence.open_target,
+        tradition=_bounded(evidence.tradition, _MAX_EVIDENCE_METADATA_CHARS),
+        date_or_era=_bounded(evidence.date_or_era, _MAX_EVIDENCE_METADATA_CHARS),
+        original_language=_bounded(
+            evidence.original_language, _MAX_EVIDENCE_METADATA_CHARS
+        ),
+        translation=_bounded(
+            evidence.translation, _MAX_EVIDENCE_METADATA_CHARS
+        ),
+        open_target=_bounded(
+            evidence.open_target, _MAX_EVIDENCE_METADATA_CHARS
+        ),
     )
 
 

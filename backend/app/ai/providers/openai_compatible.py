@@ -22,6 +22,10 @@ class OpenAICompatibleChatProvider:
             return ChatResult(content=content, provider=self.name, model=payload.get("model") or self.model)
         except httpx.TimeoutException as error:
             raise ProviderError("AI provider timed out", code="timeout", retryable=True) from error
+        except httpx.RequestError as error:
+            raise ProviderError(
+                "AI provider is unavailable", code="unavailable", retryable=True
+            ) from error
         except httpx.HTTPStatusError as error:
             code = "authentication" if error.response.status_code in (401, 403) else "unavailable"
             raise ProviderError("AI provider request failed", code=code, retryable=error.response.status_code >= 500) from error

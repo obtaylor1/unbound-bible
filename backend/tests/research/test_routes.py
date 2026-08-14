@@ -1,5 +1,6 @@
 import uuid
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -7,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.ai.contracts import ProviderError
 from app.ai.models import AIOperation
 from app.application import create_application
+import app.application_state as application_state_module
 from app.auth.dependencies import get_session
 from app.research.models import ResearchNode
 from app.research.retrieval import ResearchEvidence
@@ -90,6 +92,7 @@ def test_authenticated_query_creates_owned_root_child_and_trail(test_settings):
         assert trail.json()['active']['id'] == root_node['id']
         assert trail.json()['ancestry'] == []
         assert [item['id'] for item in trail.json()['children']] == [child_node['id']]
+        assert trail.json()['children_truncated'] is False
         assert client.get(
             f"/api/v1/research/trail/{root_node['id']}", headers=stranger
         ).status_code == 404
@@ -183,6 +186,86 @@ def test_provider_failure_still_atomically_audits_and_persists_authenticated_nod
     with app.state.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(AIOperation)) == 1
         assert session.scalar(select(func.count()).select_from(ResearchNode)) == 1
+
+
+def test_network_failure_returns_evidence_only_and_persists_atomically(
+    test_settings, monkeypatch,
+):
+    test_settings.ai_chat_provider = 'openai_compatible'
+    evidence = ResearchEvidence(
+        id='scripture:1', title='Genesis', reference='Genesis 4:1',
+        text='Eve bore Cain.', source_type='canonical-scripture',
+        tradition='Protestant', translation='KJV',
+    )
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('private network address', request=request)
+
+    shared_client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
+    monkeypatch.setattr(
+        application_state_module, '_create_http_client', lambda: shared_client
+    )
+    monkeypatch.setattr(
+        'app.research.router.retrieve_research_evidence', lambda *_args: [evidence]
+    )
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        owner = _register(client, 'owner@example.com', 'owner')
+        response = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={'question': 'What happened in Genesis 4:1?'},
+        )
+
+    assert response.status_code == 200
+    assert response.json()['grounding_status'] == 'evidence-only'
+    assert 'private network address' not in response.text
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(AIOperation)) == 1
+        assert session.scalar(select(func.count()).select_from(ResearchNode)) == 1
+
+
+def test_oversized_evidence_is_bounded_in_response_and_stored_snapshot(
+    test_settings, monkeypatch,
+):
+    class OfflineProvider:
+        name = 'offline'
+
+        async def complete(self, _messages):
+            raise ProviderError('offline')
+
+    oversized = ResearchEvidence(
+        id='scripture:oversized',
+        title='T' * 1_000_000,
+        reference='R' * 1_000_000,
+        text='E' * 1_000_000,
+        source_type='canonical-scripture',
+        tradition='P' * 1_000_000,
+        translation='K' * 1_000_000,
+        date_or_era='D' * 1_000_000,
+        original_language='L' * 1_000_000,
+        open_target='O' * 1_000_000,
+    )
+    monkeypatch.setattr(
+        'app.research.router.retrieve_research_evidence', lambda *_args: [oversized]
+    )
+    monkeypatch.setattr(
+        'app.research.router.create_chat_provider', lambda *_args: OfflineProvider()
+    )
+    app = create_application(test_settings)
+    with TestClient(app) as client:
+        owner = _register(client, 'owner@example.com', 'owner')
+        response = client.post(
+            '/api/v1/research/query', headers=owner,
+            json={'question': 'Bound the source response'},
+        )
+
+    assert response.status_code == 200
+    assert len(response.content) < 20_000
+    assert len(response.json()['sources'][0]['text']) == 2_000
+    with app.state.session_factory() as session:
+        node = session.scalar(select(ResearchNode))
+        assert len(node.response_snapshot['sources'][0]['text']) == 2_000
+        assert len(str(node.response_snapshot)) < 20_000
 
 
 def test_node_failure_rolls_back_pending_audit(test_settings, monkeypatch):
