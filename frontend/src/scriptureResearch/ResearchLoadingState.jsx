@@ -6,13 +6,18 @@ const BASE_STAGES = [
   'Comparing available evidence…',
 ]
 
-export default function ResearchLoadingState({ mode }) {
+export default function ResearchLoadingState({ mode, modeParameters = {} }) {
+  const hasCompleteEventRange = mode === 'what-happened-between'
+    && typeof modeParameters.from_event_id === 'string'
+    && modeParameters.from_event_id.trim().length > 0
+    && typeof modeParameters.to_event_id === 'string'
+    && modeParameters.to_event_id.trim().length > 0
   const stages = useMemo(() => [
     ...BASE_STAGES,
-    ...(mode === 'what-happened-between' ? ['Building the timeline…'] : []),
+    ...(hasCompleteEventRange ? ['Building the timeline…'] : []),
     'Verifying citations…',
     'Preparing the research summary…',
-  ], [mode])
+  ], [hasCompleteEventRange])
   const [stageIndex, setStageIndex] = useState(0)
 
   useEffect(() => {

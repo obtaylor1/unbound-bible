@@ -129,6 +129,9 @@ export default function ResearchComposer({
             {scope.label}
           </button>
         ))}
+        <p className="research-composer__scope-note">
+          All Sources includes Biblical Canon and Ethiopian Tradition. More verified source categories are coming later.
+        </p>
       </fieldset>
 
       <fieldset className="research-composer__depths">

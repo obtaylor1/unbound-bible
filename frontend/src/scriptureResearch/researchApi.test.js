@@ -103,11 +103,6 @@ describe('research model', () => {
     expect(SOURCE_SCOPES).toEqual([
       { value: 'biblical-canon', label: 'Biblical Canon' },
       { value: 'ethiopian-tradition', label: 'Ethiopian Tradition' },
-      { value: 'apocrypha', label: 'Apocrypha' },
-      { value: '1-enoch', label: '1 Enoch' },
-      { value: 'jubilees', label: 'Jubilees' },
-      { value: 'ancient-sources', label: 'Ancient Sources' },
-      { value: 'commentary', label: 'Commentary' },
       { value: 'all-sources', label: 'All Sources' },
     ])
     expect(RESEARCH_DEPTHS).toEqual([

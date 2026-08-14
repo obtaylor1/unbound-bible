@@ -805,7 +805,12 @@ export default function ScriptureResearchPage({ onPageChange }) {
         onExample={submitExample}
       />
 
-      {pageState === 'loading' && <ResearchLoadingState mode={lastRequestRef.current?.mode ?? mode} />}
+      {pageState === 'loading' && (
+        <ResearchLoadingState
+          mode={lastRequestRef.current?.mode ?? mode}
+          modeParameters={lastRequestRef.current?.modeParameters ?? settings.modeParameters}
+        />
+      )}
       {pageState === 'error' && (
         <section className="research-error">
           <h2>Research could not be completed</h2>

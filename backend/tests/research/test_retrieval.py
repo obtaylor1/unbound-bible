@@ -360,6 +360,33 @@ def test_multiple_scopes_permit_relevant_records_without_unrelated_sources(resea
     }
 
 
+def test_all_sources_is_exactly_the_union_of_released_retrieval_scopes(
+    research_session,
+):
+    insert_verses(research_session, [
+        {'id': 1, 'book': 'Genesis', 'chapter': 1, 'verse': 1,
+         'text': 'shared creation testimony', 'translation': 'KJV'},
+        {'id': 2, 'book': '1 Enoch', 'chapter': 1, 'verse': 1,
+         'text': 'shared creation testimony',
+         'translation': 'EOTC-COMPOSITE-EN'},
+        {'id': 3, 'book': 'Antiquities', 'chapter': 1, 'verse': 1,
+         'text': 'shared creation testimony', 'translation': 'JOSEPHUS'},
+    ])
+    add_ethiopian_edition(research_session)
+
+    evidence = retrieve_research_evidence(
+        research_session,
+        'shared creation testimony',
+        [SourceScope.ALL_SOURCES],
+        ResearchDepth.STUDY,
+    )
+
+    assert [item.id for item in evidence] == ['scripture:2', 'scripture:1']
+    assert {item.source_type for item in evidence} == {
+        'canonical-scripture', 'ethiopian-canon'
+    }
+
+
 def test_multiple_scopes_do_not_force_one_result_from_each_scope(research_session):
     insert_verses(research_session, [
         {

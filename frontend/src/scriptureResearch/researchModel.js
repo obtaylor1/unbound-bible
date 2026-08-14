@@ -8,12 +8,20 @@ function deepFreeze(value) {
 export const SOURCE_SCOPES = deepFreeze([
   { value: 'biblical-canon', label: 'Biblical Canon' },
   { value: 'ethiopian-tradition', label: 'Ethiopian Tradition' },
-  { value: 'apocrypha', label: 'Apocrypha' },
-  { value: '1-enoch', label: '1 Enoch' },
-  { value: 'jubilees', label: 'Jubilees' },
-  { value: 'ancient-sources', label: 'Ancient Sources' },
-  { value: 'commentary', label: 'Commentary' },
   { value: 'all-sources', label: 'All Sources' },
+])
+
+// Keep deferred values readable in existing saved research while only presenting
+// retrieval-backed scopes as choices in the composer.
+export const KNOWN_SOURCE_SCOPE_VALUES = deepFreeze([
+  'biblical-canon',
+  'ethiopian-tradition',
+  'apocrypha',
+  '1-enoch',
+  'jubilees',
+  'ancient-sources',
+  'commentary',
+  'all-sources',
 ])
 
 export const RESEARCH_DEPTHS = deepFreeze([

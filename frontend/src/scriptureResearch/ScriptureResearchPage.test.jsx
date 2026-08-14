@@ -258,7 +258,7 @@ describe('ScriptureResearchPage', () => {
   it('retries an error with the exact original question and settings', async () => {
     runResearch.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce(response())
     render(<ScriptureResearchPage />)
-    fireEvent.click(screen.getByRole('button', { name: 'Commentary' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ethiopian Tradition' }))
     submitQuestion('Why was Cain’s offering rejected?')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Network unavailable')

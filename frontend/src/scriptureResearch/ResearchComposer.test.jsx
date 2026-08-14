@@ -53,11 +53,23 @@ describe('ResearchComposer', () => {
     await user.click(screen.getByRole('button', { name: 'All Sources' }))
     expect(screen.getByRole('button', { name: 'All Sources' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Biblical Canon' })).toHaveAttribute('aria-pressed', 'false')
-    await user.click(screen.getByRole('button', { name: 'Commentary' }))
+    await user.click(screen.getByRole('button', { name: 'Ethiopian Tradition' }))
     expect(screen.getByRole('button', { name: 'All Sources' })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: 'Commentary' }))
-    expect(screen.getByRole('button', { name: 'Commentary' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Ethiopian Tradition' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'Ethiopian Tradition' }))
+    expect(screen.getByRole('button', { name: 'Ethiopian Tradition' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('exposes only source scopes backed by retrieval and explains deferred categories', () => {
+    render(<ControlledComposer />)
+
+    const scopeGroup = screen.getByRole('group', { name: 'Source scope' })
+    expect(within(scopeGroup).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Biblical Canon', 'Ethiopian Tradition', 'All Sources',
+    ])
+    expect(within(scopeGroup).getByText(
+      'All Sources includes Biblical Canon and Ethiopian Tradition. More verified source categories are coming later.',
+    )).toBeInTheDocument()
   })
 
   it('selects exactly one depth and exposes descriptions accessibly', async () => {
@@ -136,7 +148,7 @@ describe('ResearchComposer', () => {
     const firstSettings = onExample.mock.calls[0][1]
     expect(firstSettings).not.toBe(DEFAULT_RESEARCH_SETTINGS)
     expect(firstSettings.sourceScopes).not.toBe(DEFAULT_RESEARCH_SETTINGS.sourceScopes)
-    firstSettings.sourceScopes.push('commentary')
+    firstSettings.sourceScopes.push('ethiopian-tradition')
     await user.click(screen.getByRole('button', { name: 'Cush' }))
     expect(onExample.mock.calls[1]).toEqual([
       'Research Cush across Scripture and ancient sources',

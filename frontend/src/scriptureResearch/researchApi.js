@@ -3,9 +3,9 @@ import {
   createEmptyResearchSession,
   DEFAULT_RESEARCH_MODE,
   DEFAULT_RESEARCH_SETTINGS,
+  KNOWN_SOURCE_SCOPE_VALUES,
   RESEARCH_DEPTHS,
   RESEARCH_MODES,
-  SOURCE_SCOPES,
   deepFreeze,
 } from './researchModel'
 
@@ -19,7 +19,7 @@ const MAX_EVENTS = 64
 const MAX_EVENT_QUERY_CHARS = 4_096
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-const SOURCE_SCOPE_VALUES = new Set(SOURCE_SCOPES.map(({ value }) => value))
+const SOURCE_SCOPE_VALUES = new Set(KNOWN_SOURCE_SCOPE_VALUES)
 const DEPTH_VALUES = new Set(RESEARCH_DEPTHS.map(({ value }) => value))
 const MODE_VALUES = new Set(RESEARCH_MODES.map(({ value }) => value))
 const GROUNDING_VALUES = new Set(['grounded', 'partially-grounded', 'evidence-only', 'insufficient'])
