@@ -527,7 +527,7 @@ test('selected verse Study Tools expose all truthful destinations and restore fo
     'Cross-references',
     'Add or view notes',
     'Highlights and bookmarks',
-    'Ask the Bible',
+    'Scripture Research AI',
     'Decolonial audit',
   ]) {
     await expect(dialog.getByRole('button', { name })).toBeVisible()
@@ -801,7 +801,7 @@ test('route Study Tools activate their real destinations from selected Genesis 1
   // The browser boundary verifies each destination URL from the selected reader state.
   const destinations = [
     ['Add or view notes', '#library', { level: 2, name: 'Notes & saved studies' }],
-    ['Ask the Bible', '#aistudy', { level: 1, name: /Ask the Bible/ }],
+    ['Scripture Research AI', '#aistudy', { level: 1, name: /Scripture Research AI/ }],
     ['Decolonial audit', '#race-misuse', { level: 2, name: 'Race & Scripture Misuse' }],
   ]
 
