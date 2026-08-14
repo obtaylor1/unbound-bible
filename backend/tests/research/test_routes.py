@@ -153,7 +153,7 @@ def test_between_event_query_returns_only_complete_verified_interval(
     assert all(source['reference'].startswith('Genesis ') for source in data['sources'])
 
 
-def test_between_event_query_rejects_invalid_or_missing_ranges_honestly(
+def test_between_event_query_rejects_invalid_or_partial_ranges_honestly(
     test_settings,
 ):
     app = create_application(test_settings)
@@ -167,10 +167,10 @@ def test_between_event_query_rejects_invalid_or_missing_ranges_honestly(
                 'to_event_id': 'eden',
             },
         })
-        missing_response = client.post('/api/v1/research/query', json={
+        partial_response = client.post('/api/v1/research/query', json={
             'question': 'What happened between these events?',
             'mode': 'what-happened-between',
-            'mode_parameters': {},
+            'mode_parameters': {'from_event_id': 'eden'},
         })
         unknown_response = client.post('/api/v1/research/query', json={
             'question': 'What happened between unknown events?',
@@ -181,10 +181,42 @@ def test_between_event_query_rejects_invalid_or_missing_ranges_honestly(
             },
         })
 
-    for response in (reversed_response, missing_response, unknown_response):
+    for response in (reversed_response, partial_response, unknown_response):
         assert response.status_code == 200
         assert response.json()['grounding_status'] == 'insufficient'
         assert response.json()['sources'] == []
+
+
+def test_explicit_default_mode_without_event_ids_uses_ordinary_retrieval(
+    test_settings, monkeypatch,
+):
+    class OfflineProvider:
+        name = 'offline'
+
+        async def complete(self, _messages):
+            raise ProviderError('private provider detail')
+
+    monkeypatch.setattr(
+        'app.research.router.create_chat_provider', lambda *_args: OfflineProvider()
+    )
+    app = create_application(test_settings)
+    _seed_eden_to_abel(app)
+    with TestClient(app) as client:
+        response = client.post('/api/v1/research/query', json={
+            'question': 'What does Genesis teach about creation?',
+            'mode': 'what-happened-between',
+            'source_scopes': ['biblical-canon'],
+            'depth': 'deep-research',
+            'mode_parameters': {},
+        })
+
+    assert response.status_code == 200
+    assert response.json()['grounding_status'] == 'evidence-only'
+    assert response.json()['sources']
+    assert all(
+        source['reference'].startswith('Genesis ')
+        for source in response.json()['sources']
+    )
 
 
 def test_authenticated_query_creates_owned_root_child_and_trail(test_settings):

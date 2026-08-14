@@ -227,7 +227,6 @@ async def test_between_event_mode_uses_validated_interval_not_lexical_retrieval(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('parameters', [
-    {},
     {'from_event_id': 'eden'},
     {'to_event_id': 'abel-killed'},
 ])
@@ -251,6 +250,43 @@ async def test_between_event_mode_missing_range_fails_honestly(parameters):
     assert generic_calls == []
     assert resolver_calls == []
     assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_between_event_mode_without_event_ids_uses_ordinary_retrieval():
+    provider = FailingProvider()
+    generic_calls = []
+    resolver_calls = []
+    session = RecordingSession()
+
+    def generic_retriever(*args):
+        generic_calls.append(args)
+        return evidence()
+
+    result = await ResearchService(
+        retriever=generic_retriever,
+        provider=provider,
+        session=session,
+        event_resolver=lambda *args: resolver_calls.append(args),
+        event_retriever=lambda *_: between_evidence(),
+    ).query(request(
+        question='What does Genesis teach about creation?',
+        mode=ResearchMode.BETWEEN,
+        mode_parameters={},
+        source_scopes=[SourceScope.BIBLICAL_CANON],
+        depth=ResearchDepth.DEEP,
+    ))
+
+    assert generic_calls == [(
+        session,
+        'What does Genesis teach about creation?',
+        [SourceScope.BIBLICAL_CANON],
+        ResearchDepth.DEEP,
+    )]
+    assert resolver_calls == []
+    assert len(provider.calls) == 1
+    assert result.grounding_status == GroundingStatus.EVIDENCE_ONLY
+    assert [source.id for source in result.sources] == ['scripture:1']
 
 
 @pytest.mark.asyncio

@@ -99,17 +99,10 @@ class ResearchService:
 
     async def query(self, request: ResearchQueryRequest) -> ResearchResponse:
         retrieval_error: str | None = None
-        uses_event_range = (
-            request.mode == ResearchMode.BETWEEN
-            and (
-                'mode' in request.model_fields_set
-                or 'from_event_id' in request.mode_parameters
-                or 'to_event_id' in request.mode_parameters
-            )
-        )
-        if uses_event_range:
-            from_id = request.mode_parameters.get('from_event_id')
-            to_id = request.mode_parameters.get('to_event_id')
+        from_id = request.mode_parameters.get('from_event_id')
+        to_id = request.mode_parameters.get('to_event_id')
+        has_event_parameter = from_id is not None or to_id is not None
+        if request.mode == ResearchMode.BETWEEN and has_event_parameter:
             if from_id is None or to_id is None:
                 candidates = iter(())
                 retrieval_error = 'missing_event_range'
