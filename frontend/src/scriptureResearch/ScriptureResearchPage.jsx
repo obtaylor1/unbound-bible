@@ -390,18 +390,21 @@ export default function ScriptureResearchPage({ onPageChange }) {
         : {}),
     })
     const normalizedRequest = normalizeRequest(requestInput)
-    const parentRevalidation = requestAuthStatus === 'authenticated' && requestInput.revalidateParent
+    const retryParentIntent = requestInput.revalidateParent
       ? {
         request: normalizeRequest(requestInput.revalidateParent),
         localNodeId: requestInput.revalidateParent.localNodeId,
       }
       : null
-    lastRequestRef.current = parentRevalidation
+    const parentRevalidation = requestAuthStatus === 'authenticated'
+      ? retryParentIntent
+      : null
+    lastRequestRef.current = retryParentIntent
       ? {
         ...normalizedRequest,
         revalidateParent: {
-          ...parentRevalidation.request,
-          localNodeId: parentRevalidation.localNodeId,
+          ...retryParentIntent.request,
+          localNodeId: retryParentIntent.localNodeId,
         },
       }
       : normalizedRequest
@@ -412,6 +415,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
     setStatusMessage('')
     setPageState('loading')
 
+    let requestPhase = parentRevalidation ? 'parent-revalidation' : 'research'
     try {
       const requestIsCurrent = () => (
         mountedRef.current
@@ -428,34 +432,16 @@ export default function ScriptureResearchPage({ onPageChange }) {
         if (!authoritativeParentId) {
           throw new Error('The prior research could not be securely revalidated. Retry research to continue.')
         }
-        if (authoritativeParent.groundingStatus === 'insufficient') {
-          resetPersistence()
-          setActiveResponse(authoritativeParent)
-          setQuestion(authoritativeParent.query)
-          setSettings(cloneSettings(authoritativeParent.settings))
-          setMode(authoritativeParent.mode)
-          setPageState('insufficient')
-          setAuthenticatedSession((current) => ({
-            nodes: [
-              ...current.nodes.filter((node) => ![
-                parentRevalidation.localNodeId,
-                authoritativeParentId,
-              ].includes(node.id)),
-              {
-                id: authoritativeParentId,
-                parentNodeId: null,
-                response: authoritativeParent,
-              },
-            ].slice(-64),
-            activeNodeId: authoritativeParentId,
-            settings: cloneSettings(authoritativeParent.settings),
-          }))
+        if (['insufficient', 'evidence-only'].includes(authoritativeParent.groundingStatus)) {
+          setErrorMessage('The prior research could not be revalidated with enough grounded evidence. Retry research to try this follow-up again.')
+          setPageState('error')
           return
         }
         effectiveRequest = {
           ...normalizedRequest,
           parentNodeId: authoritativeParentId,
         }
+        requestPhase = 'child-research'
       }
 
       const response = await runResearch(effectiveRequest, { signal: controller.signal })
@@ -503,7 +489,9 @@ export default function ScriptureResearchPage({ onPageChange }) {
         || generation !== requestGenerationRef.current
         || (requestPrincipalKey !== 'loading' && principalRef.current !== requestPrincipalKey)
       ) return
-      setErrorMessage(error?.message || 'The research service could not complete this request.')
+      setErrorMessage(requestPhase === 'parent-revalidation'
+        ? `The prior research could not be revalidated right now. ${error?.message || 'Retry research to try this follow-up again.'}`
+        : error?.message || 'The research service could not complete this request.')
       setPageState('error')
     }
   }, [guestSession.activeNodeId, pageState, resetPersistence, storeGuestResponse])
@@ -527,7 +515,6 @@ export default function ScriptureResearchPage({ onPageChange }) {
     const parentNodeId = authStatus === 'authenticated'
       ? activeResponse.trailNode?.id
       : null
-    const needsAuthenticatedRevalidation = authStatus === 'authenticated' && !parentNodeId
     const localContext = authStatus !== 'authenticated' && !parentNodeId
       ? compactConversationContext(activeResponse)
       : null
@@ -540,7 +527,7 @@ export default function ScriptureResearchPage({ onPageChange }) {
       ...(parentNodeId
         ? { parentNodeId }
         : {}),
-      ...(needsAuthenticatedRevalidation ? {
+      ...(!parentNodeId ? {
         revalidateParent: {
           ...requestFromResponse(activeResponse),
           localNodeId: activeResponse.trailNode?.id ?? activeResponse.id,
