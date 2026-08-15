@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  STAGING_URL: https://staging.theunboundbible.com
+  STAGING_URL: https://web-staging-a537.up.railway.app
   RAILWAY_DEPLOY_TIMEOUT_SECONDS: 900
 
 jobs:
