@@ -7,7 +7,7 @@ import {
 } from './pageRoutes'
 
 describe('page routes', () => {
-  it('maps the supplied AI Study deep link to Ask the Bible', () => {
+  it('maps the supplied AI Study deep link to Scripture Research AI', () => {
     expect(pageFromHash('#aistudy')).toBe('chat')
   })
 
@@ -28,6 +28,7 @@ describe('page routes', () => {
   })
 
   it('provides a stable accessible page title', () => {
+    expect(titleForPage('chat')).toBe('Scripture Research AI')
     expect(titleForPage('textual')).toBe('Compare Scripture')
     expect(titleForPage('missing')).toBe('The Unbound Bible')
   })

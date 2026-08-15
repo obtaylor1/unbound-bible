@@ -77,7 +77,7 @@ describe('study tool registry', () => {
       },
       { id: 'notes', kind: 'route', label: 'Add or view notes', page: 'notes' },
       { id: 'markers', kind: 'local', label: 'Highlights and bookmarks' },
-      { id: 'ask', kind: 'route', label: 'Ask the Bible', page: 'chat' },
+      { id: 'ask', kind: 'route', label: 'Scripture Research AI', page: 'chat' },
       {
         id: 'audit',
         kind: 'route',
@@ -355,7 +355,7 @@ describe('StudyTools', () => {
     )
 
     await user.click(screen.getByRole('button', { name: 'Add or view notes' }))
-    await user.click(screen.getByRole('button', { name: 'Ask the Bible' }))
+    await user.click(screen.getByRole('button', { name: 'Scripture Research AI' }))
     await user.click(screen.getByRole('button', { name: 'Decolonial audit' }))
 
     expect(onNavigate.mock.calls).toEqual([

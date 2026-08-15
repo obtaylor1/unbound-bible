@@ -6,7 +6,11 @@ describe('Navigation', () => {
   it('exposes accessible disclosure and action names', () => {
     render(<Navigation currentPage="home" onPageChange={vi.fn()} />)
 
-    expect(screen.getByRole('button', { name: 'AI Study' })).toHaveAttribute('aria-expanded', 'false')
+    const aiStudy = screen.getByRole('button', { name: 'AI Study' })
+    expect(aiStudy).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(aiStudy)
+    expect(screen.getByRole('button', { name: 'Scripture Research AI' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask the Bible' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Search' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
     expect(screen.getByLabelText('Open navigation')).toBeInTheDocument()

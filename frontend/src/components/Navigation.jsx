@@ -26,7 +26,7 @@ const GROUPS = [
   {
     id: 'aistudy', label: 'AI Study', icon: '✧', pages: ['chat', 'sermon'],
     items: [
-      ['chat', 'Ask the Bible', '✧'],
+      ['chat', 'Scripture Research AI', '✧'],
       ['sermon', 'Sermon Analysis', '◉']
     ]
   },

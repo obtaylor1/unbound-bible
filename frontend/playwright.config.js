@@ -50,6 +50,10 @@ export default defineConfig({
   webServer: externalBaseURL ? undefined : localWebServers,
   projects: [
     {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
       name: 'desktop-chromium',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },

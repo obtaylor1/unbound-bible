@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.exc import IntegrityError
 
 import app.application as application_module
+import app.application_state as application_state_module
 from app.api.router import api_router
 from app.application import create_application
 from app.database import Base
@@ -77,6 +78,69 @@ def test_shared_state_wiring_supports_a_legacy_shaped_application(test_settings)
     response = TestClient(legacy_application).get('/api/v1/books?canon=ETHIO81')
     assert response.status_code == 200
     assert response.json()['navigation_count'] == 95
+
+
+def test_shared_http_client_is_reused_by_research_queries_and_closed_once(
+    test_settings, monkeypatch,
+):
+    test_settings.ai_chat_provider = 'openai_compatible'
+    constructed = []
+    provider_clients = []
+
+    class SharedClient:
+        def __init__(self):
+            self.close_calls = 0
+
+        async def aclose(self):
+            self.close_calls += 1
+
+    def create_client():
+        client = SharedClient()
+        constructed.append(client)
+        return client
+
+    class UnusedProvider:
+        name = 'unused'
+
+    def create_provider(_name, _settings, http_client=None):
+        provider_clients.append(http_client)
+        return UnusedProvider()
+
+    monkeypatch.setattr(
+        application_state_module, '_create_http_client', create_client,
+        raising=False,
+    )
+    monkeypatch.setattr('app.research.router.create_chat_provider', create_provider)
+    app = create_application(test_settings)
+
+    with TestClient(app) as client:
+        assert client.post(
+            '/api/v1/research/query', json={'question': 'First question'}
+        ).status_code == 200
+        assert client.post(
+            '/api/v1/research/query', json={'question': 'Second question'}
+        ).status_code == 200
+        assert len(constructed) == 1
+        assert provider_clients == [constructed[0], constructed[0]]
+
+    assert constructed[0].close_calls == 1
+
+
+def test_demo_only_application_does_not_construct_http_client(
+    test_settings, monkeypatch,
+):
+    constructed = []
+    monkeypatch.setattr(
+        application_state_module,
+        '_create_http_client',
+        lambda: constructed.append(object()),
+        raising=False,
+    )
+
+    with TestClient(create_application(test_settings)) as client:
+        assert client.get('/api/v1/health').status_code == 200
+
+    assert constructed == []
 
 
 def test_legacy_main_invokes_shared_application_state_wiring():

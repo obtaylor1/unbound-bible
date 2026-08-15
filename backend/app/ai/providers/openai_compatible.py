@@ -15,13 +15,25 @@ class OpenAICompatibleChatProvider:
     async def complete(self, messages: Sequence[ChatMessage]) -> ChatResult:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         try:
-            response = await self.client.post(f"{self.base_url}/chat/completions", headers=headers, json={"model": self.model, "messages": [vars(message) for message in messages]})
+            response = await self.client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": [vars(message) for message in messages],
+                },
+                timeout=30,
+            )
             response.raise_for_status()
             payload = response.json()
             content = payload["choices"][0]["message"]["content"]
             return ChatResult(content=content, provider=self.name, model=payload.get("model") or self.model)
         except httpx.TimeoutException as error:
             raise ProviderError("AI provider timed out", code="timeout", retryable=True) from error
+        except httpx.RequestError as error:
+            raise ProviderError(
+                "AI provider is unavailable", code="unavailable", retryable=True
+            ) from error
         except httpx.HTTPStatusError as error:
             code = "authentication" if error.response.status_code in (401, 403) else "unavailable"
             raise ProviderError("AI provider request failed", code=code, retryable=error.response.status_code >= 500) from error

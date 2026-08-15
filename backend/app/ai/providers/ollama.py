@@ -14,12 +14,24 @@ class OllamaChatProvider:
 
     async def complete(self, messages: Sequence[ChatMessage]) -> ChatResult:
         try:
-            response = await self.client.post(f"{self.base_url}/api/chat", json={"model": self.model, "stream": False, "messages": [vars(message) for message in messages]})
+            response = await self.client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "stream": False,
+                    "messages": [vars(message) for message in messages],
+                },
+                timeout=60,
+            )
             response.raise_for_status()
             payload = response.json()
             return ChatResult(content=payload["message"]["content"], provider=self.name, model=payload.get("model") or self.model)
         except httpx.TimeoutException as error:
             raise ProviderError("Local AI provider timed out", code="timeout", retryable=True) from error
+        except httpx.RequestError as error:
+            raise ProviderError(
+                "Local AI provider is unavailable", code="unavailable", retryable=True
+            ) from error
         except httpx.HTTPStatusError as error:
             raise ProviderError("Local AI provider is unavailable", code="unavailable", retryable=True) from error
         except (KeyError, TypeError, ValueError) as error:
