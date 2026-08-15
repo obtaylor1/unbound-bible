@@ -165,7 +165,7 @@ def test_staging_workflow_requires_successful_main_quality_and_smoke_checks_rail
     assert "github.event.workflow_run.head_repository.full_name == github.repository" in workflow_text
     assert "workflow_dispatch:" not in workflow_text
     assert "environment: staging" in workflow_text
-    assert "https://staging.theunboundbible.com" in workflow_text
+    assert "https://web-staging-a537.up.railway.app" in workflow_text
     assert "/healthz" in workflow_text
     assert "/api/v1/health" in workflow_text
     assert "/api/v1/health/providers" in workflow_text
