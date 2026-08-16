@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,23 @@ def test_frontend_image_builds_vite_and_serves_with_non_root_nginx():
     assert "set $api_upstream ${API_UPSTREAM}" in nginx
     assert "proxy_pass http://$api_upstream" in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
+
+
+def test_frontend_resolver_script_formats_ipv6_for_nginx():
+    result = subprocess.run(
+        [
+            "sh",
+            "-c",
+            ". frontend/15-dynamic-resolver.envsh; printf '%s' \"$NGINX_RESOLVER\"",
+        ],
+        cwd=ROOT,
+        env={"NGINX_RESOLVER": "fd12::10"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout == "[fd12::10]"
 
 
 def test_staging_compose_uses_postgres_healthchecks_env_file_and_no_embedded_secrets():
