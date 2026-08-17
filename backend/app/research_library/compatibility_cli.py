@@ -9,11 +9,14 @@ from uuid import UUID
 
 import typer
 from sqlalchemy.engine import make_url
+from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.database import create_database_engine, create_session_factory
 from app.research_library.compatibility import (
     LegacyRegistrationError,
+    RegistrationResult,
+    lock_postgresql_registration_scope,
     register_legacy_sources,
 )
 
@@ -33,6 +36,19 @@ def _fail(code: str, message: str) -> NoReturn:
         'message': message,
     }, sort_keys=True), err=True)
     raise typer.Exit(code=1)
+
+
+def _register_in_transaction(
+    session: Session, dialect: str, actor_id: UUID
+) -> RegistrationResult:
+    if dialect == 'sqlite':
+        session.connection().exec_driver_sql('BEGIN IMMEDIATE')
+        result = register_legacy_sources(session, actor_id)
+        session.commit()
+        return result
+    with session.begin():
+        lock_postgresql_registration_scope(session)
+        return register_legacy_sources(session, actor_id)
 
 
 @app.command('register')
@@ -71,13 +87,9 @@ def register(
             )
         factory = create_session_factory(engine)
         with factory() as session:
-            if engine.dialect.name == 'sqlite':
-                session.connection().exec_driver_sql('BEGIN IMMEDIATE')
-                result = register_legacy_sources(session, parsed_actor_id)
-                session.commit()
-            else:
-                with session.begin():
-                    result = register_legacy_sources(session, parsed_actor_id)
+            result = _register_in_transaction(
+                session, engine.dialect.name, parsed_actor_id
+            )
             committed = True
         result_counts = asdict(result)
         payload = {

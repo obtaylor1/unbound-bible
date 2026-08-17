@@ -1,9 +1,15 @@
 import json
+import os
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from threading import Barrier
 from uuid import UUID, uuid4
 
+import psycopg2
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import create_engine, delete, func, select
+from sqlalchemy.engine import make_url
 from typer.testing import CliRunner
 
 from app.auth.models import User
@@ -331,7 +337,7 @@ def test_resumes_deterministic_rows_missing_links(compatibility_database):
         assert result.created_sources == 0
         assert result.existing_sources == 2
         assert result.created_legacy_links == 2
-        assert result.created_audit_events == 0
+        assert result.created_audit_events == 1
         restored_primary = session.scalar(select(LegacySourceLink).where(
             LegacySourceLink.legacy_type == 'text_edition'))
         source_id = restored_primary.source_edition_id
@@ -344,6 +350,69 @@ def test_resumes_deterministic_rows_missing_links(compatibility_database):
         session.flush()
         compatible_existing_link = register_legacy_sources(session, actor.id)
         assert compatible_existing_link.created_legacy_links == 0
+        assert compatible_existing_link.created_audit_events == 0
+        assert session.scalar(select(func.count()).select_from(SourceAuditEvent)) == 3
+        recovery_events = session.scalars(select(SourceAuditEvent).where(
+            SourceAuditEvent.source_edition_id == source_id,
+            SourceAuditEvent.action == 'legacy_source_registered',
+        )).all()
+        recovery = next(
+            event for event in recovery_events
+            if event.resulting_state['counts']['publication_shells'] == 0
+        )
+        assert recovery.prior_state is None
+        assert recovery.source_edition_id == source_id
+        assert recovery.resulting_state['counts'] == {
+            'publication_shells': 0,
+            'work_links': 0,
+            'legacy_links': 2,
+        }
+
+
+def test_rerun_preserves_valid_active_publication_pointer(compatibility_database):
+    _, factory = compatibility_database
+    with factory.begin() as session:
+        actor = _seed(session)
+        register_legacy_sources(session, actor.id)
+        scripture_link = session.scalar(select(LegacySourceLink).where(
+            LegacySourceLink.legacy_type == 'text_edition'
+        ))
+        source = session.get(SourceEdition, scripture_link.source_edition_id)
+        license_record = LicenseRecord(
+            source_edition_id=source.id,
+            license_name='Explicitly reviewed rights',
+            commercial_use_allowed=True,
+            display_allowed=True,
+            redistribution_allowed=True,
+            attribution_required=False,
+            reviewer_id=actor.id,
+            verification_date=datetime.now(UTC),
+        )
+        session.add(license_record)
+        session.flush()
+        active_publication = SourcePublication(
+            source_edition_id=source.id,
+            license_record_id=license_record.id,
+            version=2,
+            status='active',
+            validation_approved=True,
+            public_visibility=True,
+            source_checksum=source.checksum,
+            content_checksum='reviewed-content-sha256:' + '4' * 64,
+            published_at=datetime.now(UTC),
+            published_by_user_id=actor.id,
+            reviewed_by_user_id=actor.id,
+        )
+        session.add(active_publication)
+        session.flush()
+        source.active_publication_id = active_publication.id
+        session.flush()
+
+        result = register_legacy_sources(session, actor.id)
+
+        assert result.created_sources == 0
+        assert result.created_audit_events == 0
+        assert source.active_publication_id == active_publication.id
 
 
 @pytest.mark.parametrize('role,active,code', [
@@ -534,12 +603,17 @@ def test_cli_changed_reports_every_recovery_write(
     assert recovered.exit_code == 0, recovered.output
     payload = json.loads(recovered.stdout)
     assert payload['changed'] is True
+    assert payload['created_audit_events'] == 1
     expected_count = (
         payload['created_publication_shells']
         if missing_artifact == 'publication_shell'
         else payload['created_work_links']
     )
     assert expected_count == 1
+    with factory() as session:
+        audit_count_after_recovery = session.scalar(
+            select(func.count()).select_from(SourceAuditEvent)
+        )
 
     unchanged = runner.invoke(app, [
         'register', '--database-url', url, '--actor-id', str(actor_id),
@@ -556,6 +630,117 @@ def test_cli_changed_reports_every_recovery_write(
             'created_audit_events',
         )
     )
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(SourceAuditEvent)) == (
+            audit_count_after_recovery
+        )
+
+
+def test_postgresql_registration_lock_is_command_wide_and_actor_independent():
+    from app.research_library.compatibility import (
+        POSTGRES_REGISTRATION_ADVISORY_LOCK_ID,
+        lock_postgresql_registration_scope,
+    )
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, parameters=None):
+            self.calls.append((str(statement), parameters))
+
+    session = RecordingSession()
+    lock_postgresql_registration_scope(session)
+
+    assert session.calls == [
+        ('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', None),
+        (
+            'SELECT pg_advisory_xact_lock(:lock_id)',
+            {'lock_id': POSTGRES_REGISTRATION_ADVISORY_LOCK_ID},
+        ),
+        (
+            'LOCK TABLE library_works, text_editions, edition_work_sources, '
+            'edition_coverage, commentary_sources, commentary_editions IN SHARE MODE',
+            None,
+        ),
+        (
+            'LOCK TABLE source_editions, source_publications, source_edition_works, '
+            'legacy_source_links, source_audit_events IN SHARE ROW EXCLUSIVE MODE',
+            None,
+        ),
+    ]
+
+
+def _postgres_connect(url, database=None):
+    parsed = make_url(url)
+    return psycopg2.connect(
+        host=parsed.host,
+        port=parsed.port,
+        user=parsed.username,
+        password=parsed.password,
+        dbname=database or parsed.database,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get('TEST_POSTGRES_DATABASE_URL'),
+    reason='TEST_POSTGRES_DATABASE_URL is not configured for live PostgreSQL tests.',
+)
+def test_live_postgresql_two_administrators_serialize_registration():
+    from app.research_library.compatibility_cli import _register_in_transaction
+
+    service_url = os.environ['TEST_POSTGRES_DATABASE_URL']
+    parsed = make_url(service_url)
+    database_name = f'unbound_compatibility_{uuid4().hex}'
+    admin = _postgres_connect(service_url)
+    admin.autocommit = True
+    engine = None
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(f'CREATE DATABASE "{database_name}"')
+        isolated_url = parsed.set(database=database_name).render_as_string(
+            hide_password=False
+        )
+        engine = create_engine(isolated_url)
+        Base.metadata.create_all(engine)
+        factory = create_session_factory(engine)
+        with factory.begin() as session:
+            first = _seed(session)
+            second = _user()
+            session.add(second)
+            session.flush()
+            actor_ids = (first.id, second.id)
+
+        barrier = Barrier(2)
+
+        def attempt(actor_id):
+            barrier.wait()
+            with factory() as session:
+                return _register_in_transaction(session, 'postgresql', actor_id)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(attempt, actor_ids))
+
+        assert sorted(result.created_sources for result in results) == [0, 2]
+        assert sorted(result.existing_sources for result in results) == [0, 2]
+        with factory() as session:
+            counts = _counts(session)
+            assert counts[SourceEdition] == 2
+            assert counts[SourcePublication] == 2
+            assert counts[SourceEditionWork] == 2
+            assert counts[LegacySourceLink] == 3
+            assert counts[SourceAuditEvent] == 2
+    finally:
+        if engine is not None:
+            engine.dispose()
+        with admin.cursor() as cursor:
+            cursor.execute(
+                'SELECT pg_terminate_backend(pid) FROM pg_stat_activity '
+                'WHERE datname = %s',
+                (database_name,),
+            )
+            cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+        admin.close()
 
 
 def test_actor_lock_query_compiles_for_postgresql():

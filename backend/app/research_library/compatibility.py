@@ -8,7 +8,7 @@ import json
 from typing import Any
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
@@ -26,6 +26,24 @@ from app.research_library.models import (
 IDENTITY_NAMESPACE = UUID('46252634-4b6b-5b7f-a74f-c806ce5ebf8f')
 UNVERIFIED_PREFIX = 'unverified-metadata-sha256:'
 METADATA_PREFIX = 'legacy-metadata-sha256:'
+POSTGRES_REGISTRATION_ADVISORY_LOCK_ID = 731150016
+
+
+def lock_postgresql_registration_scope(session: Session) -> None:
+    """Serialize the command and hold its legacy/catalog read-write scope stable."""
+    session.execute(text('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'))
+    session.execute(
+        text('SELECT pg_advisory_xact_lock(:lock_id)'),
+        {'lock_id': POSTGRES_REGISTRATION_ADVISORY_LOCK_ID},
+    )
+    session.execute(text(
+        'LOCK TABLE library_works, text_editions, edition_work_sources, '
+        'edition_coverage, commentary_sources, commentary_editions IN SHARE MODE'
+    ))
+    session.execute(text(
+        'LOCK TABLE source_editions, source_publications, source_edition_works, '
+        'legacy_source_links, source_audit_events IN SHARE ROW EXCLUSIVE MODE'
+    ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +149,7 @@ def _add_or_verify_source(
         session.add(source)
         session.flush()
         return source, True
-    _verify(source, {'id': source_id, 'active_publication_id': None, **values})
+    _verify(source, {'id': source_id, **values})
     return source, False
 
 
@@ -317,7 +335,7 @@ def _register_scripture(
             ))
 
     audit_created = 0
-    if source_created:
+    if source_created or publication_created or created_work_links or legacy_links:
         counts = {
             'publication_shells': int(publication_created),
             'work_links': created_work_links,
@@ -429,7 +447,7 @@ def _register_commentary(
         source_edition_id=source.id,
     )
     audit_created = 0
-    if source_created:
+    if source_created or publication_created or legacy_link_created:
         append_source_audit_event(
             session,
             actor_id=actor_id,
