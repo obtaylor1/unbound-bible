@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, select
-from sqlalchemy.orm import Session, raiseload
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session, aliased, defer, raiseload
 
 from app.auth.models import User
 from app.database import Base, create_database_engine, create_session_factory
@@ -44,6 +45,20 @@ REASON_CASES = (
 )
 
 ASCII_WHITESPACE_ONLY = (' ', '\t', '\n', '\r', '\f', '\v', ' \t\n\r\f\v ')
+
+ALL_UNAVAILABLE_REASONS = (
+    'publication_not_active',
+    'publication_not_selected',
+    'edition_mismatch',
+    'validation_not_approved',
+    'not_public',
+    'license_mismatch',
+    'rights_not_reviewed',
+    'commercial_use_not_allowed',
+    'display_not_allowed',
+    'redistribution_not_allowed',
+    'attribution_requirement_unknown',
+)
 
 
 @pytest.fixture
@@ -378,6 +393,136 @@ def test_evaluator_does_not_issue_lazy_database_queries(
     finally:
         event.remove(session.bind, 'before_cursor_execute', record_statement)
     assert statements == []
+
+
+def test_attached_fully_expired_objects_fail_closed_without_refreshing(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    publication, edition, license_record = _persist_graph(
+        session, 'attached-expired'
+    )
+    session.expire(publication)
+    session.expire(edition)
+    session.expire(license_record)
+    statements: list[str] = []
+
+    def record_statement(*_args) -> None:
+        statements.append(_args[2])
+
+    event.listen(session.bind, 'before_cursor_execute', record_statement)
+    try:
+        decision = evaluate_publication(publication, edition, license_record)
+    finally:
+        event.remove(session.bind, 'before_cursor_execute', record_statement)
+
+    assert statements == []
+    assert decision == EligibilityDecision(False, ALL_UNAVAILABLE_REASONS)
+
+
+def test_selected_deferred_required_columns_fail_closed_without_loading(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    publication, edition, license_record = _persist_graph(session, 'deferred')
+    publication_id = publication.id
+    edition_id = edition.id
+    license_id = license_record.id
+    session.expunge_all()
+    publication = session.scalars(
+        select(SourcePublication)
+        .options(defer(SourcePublication.status))
+        .where(SourcePublication.id == publication_id)
+    ).one()
+    edition = session.get(SourceEdition, edition_id)
+    license_record = session.scalars(
+        select(LicenseRecord)
+        .options(
+            defer(LicenseRecord.display_allowed),
+            defer(LicenseRecord.attribution_required),
+        )
+        .where(LicenseRecord.id == license_id)
+    ).one()
+    statements: list[str] = []
+
+    def record_statement(*_args) -> None:
+        statements.append(_args[2])
+
+    event.listen(session.bind, 'before_cursor_execute', record_statement)
+    try:
+        decision = evaluate_publication(publication, edition, license_record)
+    finally:
+        event.remove(session.bind, 'before_cursor_execute', record_statement)
+
+    assert statements == []
+    assert decision.reasons == (
+        'publication_not_active',
+        'display_not_allowed',
+        'attribution_requirement_unknown',
+    )
+
+
+def test_detached_expired_objects_fail_closed_without_detached_instance_error(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    publication, edition, license_record = _persist_graph(
+        session, 'detached-expired'
+    )
+    session.expire(publication)
+    session.expire(edition)
+    session.expire(license_record)
+    session.expunge_all()
+
+    decision = evaluate_publication(publication, edition, license_record)
+
+    assert decision == EligibilityDecision(False, ALL_UNAVAILABLE_REASONS)
+
+
+def test_public_predicate_uses_only_passed_aliased_entities(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    eligible, _, _ = _persist_graph(session, 'aliased-eligible')
+    _persist_graph(session, 'aliased-ineligible', public_visibility=False)
+    publication_alias = aliased(SourcePublication)
+    edition_alias = aliased(SourceEdition)
+    license_alias = aliased(LicenseRecord)
+    statement = (
+        select(publication_alias.id)
+        .join(
+            edition_alias,
+            edition_alias.id == publication_alias.source_edition_id,
+        )
+        .outerjoin(
+            license_alias,
+            license_alias.id == publication_alias.license_record_id,
+        )
+        .where(
+            public_eligibility_predicate(
+                publication_alias,
+                edition_alias,
+                license_alias,
+            )
+        )
+    )
+
+    assert set(session.scalars(statement)) == {eligible.id}
+    assert len(statement.get_final_froms()) == 1
+    sqlite_sql = str(statement.compile(compile_kwargs={'literal_binds': True}))
+    postgres_sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={'literal_binds': True},
+        )
+    )
+    for compiled in (sqlite_sql, postgres_sql):
+        assert 'FROM source_publications AS source_publications_1' in compiled
+        assert 'JOIN source_editions AS source_editions_1' in compiled
+        assert 'JOIN license_records AS license_records_1' in compiled
+        assert ', source_publications' not in compiled
+        assert ', source_editions' not in compiled
+        assert ', license_records' not in compiled
 
 
 def test_sql_predicate_matches_python_evaluator_and_outer_join_excludes_missing_license(
