@@ -1,10 +1,13 @@
+from io import StringIO
 from pathlib import Path
+import re
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -13,7 +16,7 @@ from app.research_library import models as research_library_models  # noqa: F401
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-TABLES = {
+TABLE_ORDER = (
     "research_work_profiles",
     "work_divisions",
     "source_editions",
@@ -26,7 +29,8 @@ TABLES = {
     "legacy_source_links",
     "legacy_content_links",
     "source_audit_events",
-}
+)
+TABLES = set(TABLE_ORDER)
 IMMUTABLE_TABLES = {
     "source_publications",
     "content_units",
@@ -41,6 +45,32 @@ def _config(url: str) -> Config:
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", url)
     return config
+
+
+def _normalize_sql(value) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r'[\s"`\[\]]+', "", str(value)).lower()
+
+
+def _type_sql(type_, dialect) -> str:
+    return re.sub(r"\s+", " ", type_.compile(dialect=dialect).upper()).strip()
+
+
+def _model_default(column, dialect) -> str | None:
+    if column.server_default is None:
+        return None
+    return _normalize_sql(column.server_default.arg.compile(dialect=dialect))
+
+
+def _offline_sql(config: Config, revision_range: str, *, downgrade: bool = False) -> str:
+    buffer = StringIO()
+    config.output_buffer = buffer
+    if downgrade:
+        command.downgrade(config, revision_range, sql=True)
+    else:
+        command.upgrade(config, revision_range, sql=True)
+    return buffer.getvalue()
 
 
 @pytest.fixture
@@ -152,46 +182,101 @@ def test_revision_is_head_and_upgrade_adds_exact_catalog(tmp_path, monkeypatch):
     assert TABLES <= set(inspector.get_table_names())
 
     for table_name in TABLES:
-        actual_columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         model_table = Base.metadata.tables[table_name]
+        reflected_columns = inspector.get_columns(table_name)
+        actual_columns = {column["name"]: column for column in reflected_columns}
+        expected_pk = tuple(column.name for column in model_table.primary_key.columns)
+        assert tuple(inspector.get_pk_constraint(table_name)["constrained_columns"]) == expected_pk
         assert set(actual_columns) == {column.name for column in model_table.columns}
         for column in model_table.columns:
-            assert actual_columns[column.name]["nullable"] == column.nullable
-        actual_unique = {constraint["name"] for constraint in inspector.get_unique_constraints(table_name)}
-        expected_unique = {constraint.name for constraint in model_table.constraints if constraint.__class__.__name__ == "UniqueConstraint" and constraint.name}
-        assert expected_unique <= actual_unique
-        actual_checks = {
-            constraint["name"] for constraint in inspector.get_check_constraints(table_name)
+            reflected = actual_columns[column.name]
+            assert _type_sql(reflected["type"], engine.dialect) == _type_sql(
+                column.type, engine.dialect
+            )
+            assert reflected["nullable"] == column.nullable
+            assert _normalize_sql(reflected["default"]) == _model_default(
+                column, engine.dialect
+            )
+            expected_pk_position = (
+                expected_pk.index(column.name) + 1 if column.name in expected_pk else 0
+            )
+            assert reflected["primary_key"] == expected_pk_position
+
+        actual_unique = {
+            constraint["name"]: tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints(table_name)
         }
-        expected_checks = {
-            constraint.name
+        expected_unique = {
+            constraint.name: tuple(column.name for column in constraint.columns)
             for constraint in model_table.constraints
-            if constraint.__class__.__name__ == "CheckConstraint" and constraint.name
+            if isinstance(constraint, UniqueConstraint) and constraint.name
         }
-        assert expected_checks == actual_checks
+        assert actual_unique == expected_unique
+
         actual_fks = {
-            constraint["name"] for constraint in inspector.get_foreign_keys(table_name)
+            constraint["name"]: (
+                tuple(constraint["constrained_columns"]),
+                constraint["referred_table"],
+                tuple(constraint["referred_columns"]),
+                constraint["options"].get("ondelete"),
+            )
+            for constraint in inspector.get_foreign_keys(table_name)
         }
         expected_fks = {
-            constraint.name
+            constraint.name: (
+                tuple(element.parent.name for element in constraint.elements),
+                constraint.referred_table.name,
+                tuple(element.column.name for element in constraint.elements),
+                constraint.ondelete,
+            )
             for constraint in model_table.constraints
-            if constraint.__class__.__name__ == "ForeignKeyConstraint" and constraint.name
+            if isinstance(constraint, ForeignKeyConstraint)
         }
-        assert expected_fks == actual_fks
-        assert {index.name for index in model_table.indexes} == {index["name"] for index in inspector.get_indexes(table_name)}
+        assert actual_fks == expected_fks
+
+        actual_checks = {
+            constraint["name"]: _normalize_sql(constraint["sqltext"])
+            for constraint in inspector.get_check_constraints(table_name)
+        }
+        expected_checks = {
+            constraint.name: _normalize_sql(constraint.sqltext)
+            for constraint in model_table.constraints
+            if isinstance(constraint, CheckConstraint) and constraint.name
+        }
+        assert actual_checks == expected_checks
+
+        actual_indexes = {
+            index["name"]: (tuple(index["column_names"]), index["unique"])
+            for index in inspector.get_indexes(table_name)
+        }
+        expected_indexes = {
+            index.name: (
+                tuple(expression.name for expression in index.expressions),
+                index.unique,
+            )
+            for index in model_table.indexes
+        }
+        assert actual_indexes == expected_indexes
+
+    with engine.connect() as connection:
+        partial_index_sql = dict(
+            connection.execute(
+                text(
+                    "SELECT name, sql FROM sqlite_master WHERE type='index' "
+                    "AND name IN ('uq_work_divisions_root_ordinal', "
+                    "'uq_work_divisions_child_ordinal')"
+                )
+            ).all()
+        )
+    assert _normalize_sql(partial_index_sql["uq_work_divisions_root_ordinal"].split("WHERE", 1)[1]) == "parent_idisnull"
+    assert _normalize_sql(partial_index_sql["uq_work_divisions_child_ordinal"].split("WHERE", 1)[1]) == "parent_idisnotnull"
     engine.dispose()
 
 
-def test_composite_scope_constraints_and_active_pointer(migrated):
+def test_composite_scope_constraints_reject_cross_edition_references(migrated):
     _, engine = migrated
     with engine.begin() as connection:
         ids = _insert_snapshot_graph(connection)
-        # Historical snapshots may both remain active; only the pointer changes.
-        connection.execute(text("UPDATE source_editions SET active_publication_id=:publication WHERE id=:edition"), {"publication": ids["source_publications"], "edition": ids["edition_1"]})
-        connection.execute(text("UPDATE source_editions SET active_publication_id=:publication WHERE id=:edition"), {"publication": ids["publication_2"], "edition": ids["edition_1"]})
-        connection.execute(text("UPDATE source_editions SET active_publication_id=:publication WHERE id=:edition"), {"publication": ids["source_publications"], "edition": ids["edition_1"]})
-        statuses = connection.execute(text("SELECT status FROM source_publications WHERE source_edition_id=:edition ORDER BY version"), {"edition": ids["edition_1"]}).scalars().all()
-        assert statuses == ["active", "active"]
 
     with engine.connect() as connection:
         connection.execute(text("PRAGMA foreign_keys=ON"))
@@ -200,14 +285,73 @@ def test_composite_scope_constraints_and_active_pointer(migrated):
         connection.rollback()
         connection.execute(text("PRAGMA foreign_keys=ON"))
         with pytest.raises(IntegrityError):
-            connection.execute(text("UPDATE source_editions SET active_publication_id=:publication WHERE id=:edition"), {"publication": ids["source_publications"], "edition": ids["edition_2"]})
+            connection.execute(
+                text(
+                    "UPDATE source_editions SET active_publication_id=:publication "
+                    "WHERE id=:edition"
+                ),
+                {
+                    "publication": ids["source_publications"],
+                    "edition": ids["edition_2"],
+                },
+            )
         connection.rollback()
         with pytest.raises(IntegrityError):
             connection.execute(
-                text("INSERT INTO work_divisions (id, work_id, division_type, label, normalized_locator, canonical_key, ordinal) VALUES (:id, 'gen', 'invalid', 'Bad', 'bad', 'bad', 0)"),
+                text(
+                    "INSERT INTO work_divisions "
+                    "(id, work_id, division_type, label, normalized_locator, "
+                    "canonical_key, ordinal) VALUES "
+                    "(:id, 'gen', 'invalid', 'Bad', 'bad', 'bad', 0)"
+                ),
                 {"id": uuid4().hex},
             )
         connection.rollback()
+
+
+def test_active_pointer_replacement_and_rollback_are_transactional(migrated):
+    _, engine = migrated
+    with engine.begin() as connection:
+        ids = _insert_snapshot_graph(connection)
+
+    pointer_sql = text(
+        "UPDATE source_editions SET active_publication_id=:publication WHERE id=:edition"
+    )
+    pointer_value_sql = text(
+        "SELECT active_publication_id FROM source_editions WHERE id=:edition"
+    )
+    params = {"edition": ids["edition_1"]}
+    publication_a = ids["source_publications"]
+    publication_b = ids["publication_2"]
+
+    with engine.connect() as connection:
+        connection.execute(pointer_sql, params | {"publication": publication_a})
+        connection.commit()
+        assert connection.scalar(pointer_value_sql, params) == publication_a
+
+        connection.execute(pointer_sql, params | {"publication": publication_b})
+        connection.commit()
+        assert connection.scalar(pointer_value_sql, params) == publication_b
+
+        connection.execute(pointer_sql, params | {"publication": publication_a})
+        connection.rollback()
+        assert connection.scalar(pointer_value_sql, params) == publication_b
+
+        connection.execute(pointer_sql, params | {"publication": publication_a})
+        connection.commit()
+        assert connection.scalar(pointer_value_sql, params) == publication_a
+
+        publications = connection.execute(
+            text(
+                "SELECT id, status, source_checksum, content_checksum "
+                "FROM source_publications WHERE source_edition_id=:edition ORDER BY version"
+            ),
+            params,
+        ).all()
+        assert publications == [
+            (publication_a, "active", "s1", "c1"),
+            (publication_b, "active", "s2", "c2"),
+        ]
 
 
 def test_database_triggers_make_snapshot_tables_immutable(migrated):
@@ -246,18 +390,54 @@ def test_downgrade_removes_catalog_and_triggers_but_preserves_legacy(migrated):
     engine.dispose()
 
 
-def test_postgresql_ddl_helpers_cover_cycle_partial_indexes_and_triggers():
+def test_postgresql_offline_upgrade_and_downgrade_execute_real_revision_paths():
     config = _config("postgresql://unused")
-    migration = ScriptDirectory.from_config(config).get_revision(
-        "0014_research_library_core"
-    ).module
-    upgrade_sql = migration._postgresql_upgrade_sql()
-    downgrade_sql = migration._postgresql_downgrade_sql()
-    assert "fk_source_editions_active_publication_same_edition" in upgrade_sql
-    assert "ALTER TABLE source_editions" in upgrade_sql
-    assert "WHERE parent_id IS NULL" in upgrade_sql
-    assert "WHERE parent_id IS NOT NULL" in upgrade_sql
+    upgrade_sql = _offline_sql(
+        config, "0013_scripture_compatibility:0014_research_library_core"
+    )
+    downgrade_sql = _offline_sql(
+        config,
+        "0014_research_library_core:0013_scripture_compatibility",
+        downgrade=True,
+    )
+    normalized_upgrade = _normalize_sql(upgrade_sql)
+    normalized_downgrade = _normalize_sql(downgrade_sql)
+
+    create_positions = [
+        normalized_upgrade.index(f"createtable{table_name}") for table_name in TABLE_ORDER
+    ]
+    assert create_positions == sorted(create_positions)
+    active_fk = "fk_source_editions_active_publication_same_edition"
+    assert normalized_upgrade.index("createtablesource_editions") < normalized_upgrade.index(active_fk)
+    assert normalized_upgrade.index("createtablesource_publications") < normalized_upgrade.index(active_fk)
+    assert "whereparent_idisnull" in normalized_upgrade
+    assert "whereparent_idisnotnull" in normalized_upgrade
+
+    function_position = normalized_upgrade.index(
+        "createfunctionresearch_library_reject_immutable_dml"
+    )
+    assert "usingerrcode='55000'" in normalized_upgrade
     for table_name in IMMUTABLE_TABLES:
-        assert table_name in upgrade_sql
-    assert upgrade_sql.index("CREATE TABLE source_publications") < upgrade_sql.index("fk_source_editions_active_publication_same_edition")
-    assert downgrade_sql.index("DROP TRIGGER") < downgrade_sql.index("DROP TABLE source_publications")
+        trigger = (
+            f"createtriggertrg_rl_immutable_{table_name}beforeupdateordelete"
+            f"on{table_name}"
+        )
+        assert function_position < normalized_upgrade.index(trigger)
+
+    trigger_drop_positions = [
+        normalized_downgrade.index(f"droptriggerifexiststrg_rl_immutable_{table_name}")
+        for table_name in IMMUTABLE_TABLES
+    ]
+    function_drop_position = normalized_downgrade.index(
+        "dropfunctionifexistsresearch_library_reject_immutable_dml"
+    )
+    assert all(position < function_drop_position for position in trigger_drop_positions)
+    active_fk_drop_position = normalized_downgrade.index(
+        "dropconstraintfk_source_editions_active_publication_same_edition"
+    )
+    table_drop_positions = [
+        normalized_downgrade.index(f"droptable{table_name}")
+        for table_name in reversed(TABLE_ORDER)
+    ]
+    assert active_fk_drop_position < min(table_drop_positions)
+    assert table_drop_positions == sorted(table_drop_positions)
