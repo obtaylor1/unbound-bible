@@ -1,21 +1,31 @@
 from io import StringIO
+import hashlib
+import os
 from pathlib import Path
 import re
 from uuid import uuid4
 
+import psycopg2
 import pytest
+import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.database import Base
 from app.research_library import models as research_library_models  # noqa: F401
+from tests.migrations.research_library_0014_manifest import (
+    ACTIVE_POINTER,
+    SQLITE_OBJECT_DIGESTS,
+)
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+MIGRATION_PATH = BACKEND_ROOT / "alembic/versions/0014_research_library_core.py"
 TABLE_ORDER = (
     "research_work_profiles",
     "work_divisions",
@@ -73,6 +83,40 @@ def _offline_sql(config: Config, revision_range: str, *, downgrade: bool = False
     return buffer.getvalue()
 
 
+def test_revision_is_frozen_from_application_metadata():
+    source = MIGRATION_PATH.read_text()
+    assert "from app" not in source
+    assert "Base.metadata" not in source
+
+
+def test_migrated_schema_matches_frozen_0014_snapshot(migrated):
+    _, engine = migrated
+    with engine.connect() as connection:
+        objects = connection.execute(
+            text(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "WHERE sql IS NOT NULL AND tbl_name IN :tables"
+            ).bindparams(sa.bindparam("tables", expanding=True)),
+            {"tables": tuple(TABLES)},
+        ).all()
+    actual = {
+        f"{object_type}:{name}": hashlib.sha256(
+            _normalize_sql(sql).encode()
+        ).hexdigest()
+        for object_type, name, _table_name, sql in objects
+    }
+    assert actual == SQLITE_OBJECT_DIGESTS
+    active_pointer = next(
+        foreign_key
+        for foreign_key in inspect(engine).get_foreign_keys(ACTIVE_POINTER['table'])
+        if foreign_key['name'] == 'fk_source_editions_active_publication_same_edition'
+    )
+    assert tuple(active_pointer['constrained_columns']) == ACTIVE_POINTER['local_columns']
+    assert active_pointer['referred_table'] == ACTIVE_POINTER['remote_table']
+    assert tuple(active_pointer['referred_columns']) == ACTIVE_POINTER['remote_columns']
+    assert active_pointer['options']['ondelete'] == ACTIVE_POINTER['ondelete']
+
+
 @pytest.fixture
 def migrated(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -95,9 +139,9 @@ def _insert_foundations(connection):
             "INSERT INTO users "
             "(id, email, email_normalized, username, password_hash, role, is_active) "
             "VALUES (:id, 'owner@example.test', 'owner@example.test', 'owner', 'x', "
-            "'member', 1)"
+            "'member', :is_active)"
         ),
-        {"id": user_id},
+        {"id": user_id, "is_active": True},
     )
     connection.execute(text("INSERT INTO library_works (id, title) VALUES ('gen', 'Genesis')"))
     return user_id
@@ -131,10 +175,12 @@ def _insert_snapshot_graph(connection):
         "INSERT INTO source_publications "
         "(id, source_edition_id, license_record_id, version, status, validation_approved, "
         "public_visibility, source_checksum, content_checksum) "
-        "VALUES (:id, :edition, :license, :version, 'active', 1, 1, :source, :content)"
+        "VALUES (:id, :edition, :license, :version, 'active', :approved, "
+        ":visible, :source, :content)"
     )
-    connection.execute(publication_sql, {"id": publication_1, "edition": edition_1, "license": license_1, "version": 1, "source": "s1", "content": "c1"})
-    connection.execute(publication_sql, {"id": publication_2, "edition": edition_1, "license": license_1, "version": 2, "source": "s2", "content": "c2"})
+    defaults = {"approved": True, "visible": True}
+    connection.execute(publication_sql, defaults | {"id": publication_1, "edition": edition_1, "license": license_1, "version": 1, "source": "s1", "content": "c1"})
+    connection.execute(publication_sql, defaults | {"id": publication_2, "edition": edition_1, "license": license_1, "version": 2, "source": "s2", "content": "c2"})
     connection.execute(
         text("INSERT INTO work_divisions (id, work_id, division_type, label, normalized_locator, canonical_key, ordinal) VALUES (:id, 'gen', 'verse', 'Genesis 1:1', 'gen.1.1', 'gen-1-1', 1)"),
         {"id": division_id},
@@ -460,3 +506,157 @@ def test_postgresql_offline_upgrade_and_downgrade_execute_real_revision_paths():
     ]
     assert active_fk_drop_position < min(table_drop_positions)
     assert table_drop_positions == sorted(table_drop_positions)
+
+
+def _postgres_connect(url, database=None):
+    parsed = make_url(url)
+    return psycopg2.connect(
+        host=parsed.host,
+        port=parsed.port,
+        user=parsed.username,
+        password=parsed.password,
+        dbname=database or parsed.database,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get('TEST_POSTGRES_DATABASE_URL'),
+    reason='TEST_POSTGRES_DATABASE_URL is not configured for live PostgreSQL tests.',
+)
+def test_postgresql_live_research_library_migration_is_reversible_and_enforced():
+    service_url = os.environ['TEST_POSTGRES_DATABASE_URL']
+    database_name = f"unbound_rl_{uuid4().hex}"
+    admin = _postgres_connect(service_url)
+    admin.autocommit = True
+    engine = None
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(f'CREATE DATABASE "{database_name}"')
+        isolated_url = make_url(service_url).set(database=database_name).render_as_string(
+            hide_password=False
+        )
+        config = _config(isolated_url)
+        command.upgrade(config, '0013_scripture_compatibility')
+        engine = create_engine(isolated_url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO biblical_texts (book, chapter, verse, text) "
+                    "VALUES ('Genesis', 1, 1, 'In the beginning')"
+                )
+            )
+        engine.dispose()
+        command.upgrade(config, '0014_research_library_core')
+        engine = create_engine(isolated_url)
+
+        inspector = inspect(engine)
+        assert TABLES <= set(inspector.get_table_names())
+        active_pointer = next(
+            foreign_key
+            for foreign_key in inspector.get_foreign_keys('source_editions')
+            if foreign_key['name'] == 'fk_source_editions_active_publication_same_edition'
+        )
+        assert tuple(active_pointer['constrained_columns']) == ACTIVE_POINTER['local_columns']
+        assert tuple(active_pointer['referred_columns']) == ACTIVE_POINTER['remote_columns']
+        assert active_pointer['options']['ondelete'] == 'RESTRICT'
+        with engine.connect() as connection:
+            trigger_names = set(
+                connection.execute(
+                    text(
+                        "SELECT tgname FROM pg_trigger "
+                        "WHERE NOT tgisinternal AND tgname LIKE 'trg_rl_immutable_%'"
+                    )
+                ).scalars()
+            )
+        assert trigger_names == {
+            f'trg_rl_immutable_{table_name}' for table_name in IMMUTABLE_TABLES
+        }
+
+        with engine.begin() as connection:
+            ids = _insert_snapshot_graph(connection)
+
+        with engine.connect() as connection:
+            with pytest.raises(IntegrityError):
+                connection.execute(
+                    text(
+                        "INSERT INTO source_publications "
+                        "(id, source_edition_id, license_record_id, version, status, "
+                        "validation_approved, public_visibility, source_checksum, "
+                        "content_checksum) VALUES "
+                        "(:id, :edition, :license, 3, 'verified', :approved, "
+                        ":visible, 's3', 'c3')"
+                    ),
+                    {
+                        'id': uuid4().hex,
+                        'edition': ids['edition_1'],
+                        'license': ids['license_2'],
+                        'approved': True,
+                        'visible': False,
+                    },
+                )
+            connection.rollback()
+
+        for table_name in IMMUTABLE_TABLES:
+            for verb in ('UPDATE', 'DELETE'):
+                with engine.connect() as connection:
+                    statement = (
+                        f'UPDATE {table_name} SET id=id WHERE id=:id'
+                        if verb == 'UPDATE'
+                        else f'DELETE FROM {table_name} WHERE id=:id'
+                    )
+                    with pytest.raises(DBAPIError, match='immutable'):
+                        connection.execute(text(statement), {'id': ids[table_name]})
+                    connection.rollback()
+
+        pointer_sql = text(
+            "UPDATE source_editions SET active_publication_id=:publication "
+            "WHERE id=:edition"
+        )
+        pointer_value = text(
+            "SELECT active_publication_id FROM source_editions WHERE id=:edition"
+        )
+        params = {'edition': ids['edition_1']}
+        with engine.connect() as connection:
+            connection.execute(
+                pointer_sql, params | {'publication': ids['source_publications']}
+            )
+            connection.commit()
+            connection.execute(pointer_sql, params | {'publication': ids['publication_2']})
+            connection.commit()
+            connection.execute(
+                pointer_sql, params | {'publication': ids['source_publications']}
+            )
+            connection.rollback()
+            selected = connection.scalar(pointer_value, params)
+            assert str(selected).replace('-', '') == ids['publication_2']
+            statuses = connection.execute(
+                text(
+                    "SELECT status, source_checksum, content_checksum "
+                    "FROM source_publications WHERE source_edition_id=:edition "
+                    "ORDER BY version"
+                ),
+                params,
+            ).all()
+            assert statuses == [('active', 's1', 'c1'), ('active', 's2', 'c2')]
+
+        engine.dispose()
+        command.downgrade(config, '0013_scripture_compatibility')
+        engine = create_engine(isolated_url)
+        assert not TABLES.intersection(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            assert connection.scalar(text('SELECT count(*) FROM biblical_texts')) == 1
+        engine.dispose()
+        command.upgrade(config, '0014_research_library_core')
+        engine = create_engine(isolated_url)
+        assert TABLES <= set(inspect(engine).get_table_names())
+    finally:
+        if engine is not None:
+            engine.dispose()
+        with admin.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname=%s AND pid <> pg_backend_pid()",
+                (database_name,),
+            )
+            cursor.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+        admin.close()

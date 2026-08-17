@@ -9,6 +9,8 @@ from app.auth import models  # noqa: F401
 from app.library import models as library_models  # noqa: F401
 from app.library.ingest import models as ingest_models  # noqa: F401
 from app.commentary import models as commentary_models  # noqa: F401
+# This model import registers Session listeners, but Alembic only opens a raw
+# Connection and never constructs an ORM Session while running migrations.
 from app.research_library import models as research_library_models  # noqa: F401
 
 
