@@ -184,9 +184,10 @@ Stored status codes are:
 - `restricted`;
 - `internal_research_only`.
 
-At most one publication per source edition is active. Publication rows are
-immutable snapshots of a validated import, and replacement or rollback changes
-the active pointer transactionally rather than rewriting prior content.
+At most one publication per source edition is selected as current by the
+edition's active pointer. Multiple immutable historical snapshots may retain
+the `active` status classification; replacement or rollback changes only the
+active pointer transactionally rather than rewriting prior content.
 
 Public retrieval eligibility is enforced by one server-side policy service.
 An evidence record is eligible only when:

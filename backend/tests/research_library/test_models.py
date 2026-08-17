@@ -6,7 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.database import Base, create_database_engine, create_session_factory
+from app.database import (
+    Base,
+    create_database_engine,
+    create_session_factory,
+)
 from app.library.models import LibraryWork
 from app.research_library.models import (
     PUBLICATION_STATUSES,
@@ -54,7 +58,13 @@ def research_library_session(test_settings) -> Generator[Session, None, None]:
     engine.dispose()
 
 
-def _make_scope_graph(session: Session, suffix: str) -> dict:
+def _make_scope_graph(
+    session: Session,
+    suffix: str,
+    *,
+    publication_status: str = 'verified',
+    public_visibility: bool = False,
+) -> dict:
     work = LibraryWork(id=f'scope-work-{suffix}', title=f'Scope Work {suffix}')
     edition = SourceEdition(
         title=f'Scope Edition {suffix}',
@@ -89,9 +99,9 @@ def _make_scope_graph(session: Session, suffix: str) -> dict:
         source_edition_id=edition.id,
         license_record_id=license_record.id,
         version=1,
-        status='verified',
+        status=publication_status,
         validation_approved=True,
-        public_visibility=False,
+        public_visibility=public_visibility,
         source_checksum=suffix[0] * 64,
         content_checksum=suffix[-1] * 64,
     )
@@ -790,6 +800,60 @@ def test_bulk_dml_allows_unrelated_model_updates(
     assert work.title == 'After'
 
 
+def test_bulk_update_mappings_rejects_immutable_publication_before_sql(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'bulk-mappings-publication')
+    publication = graph['publication']
+    original_status = publication.status
+
+    with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable'):
+        session.bulk_update_mappings(
+            SourcePublication,
+            [{'id': publication.id, 'status': 'disabled'}],
+        )
+
+    session.expire(publication)
+    assert publication.status == original_status
+
+
+def test_bulk_save_objects_rejects_updates_to_persistent_immutable_records(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'bulk-save-publication')
+    publication = graph['publication']
+    original_status = publication.status
+    publication.status = 'disabled'
+
+    with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable'):
+        session.bulk_save_objects([publication])
+
+    session.expire(publication)
+    assert publication.status == original_status
+
+
+def test_legacy_bulk_operations_remain_available_for_mutable_models(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = LibraryWork(id='bulk-mutable-first', title='Before')
+    session.add(first)
+    session.flush()
+
+    session.bulk_update_mappings(
+        LibraryWork,
+        [{'id': first.id, 'title': 'After'}],
+    )
+    second = LibraryWork(id='bulk-mutable-second', title='Bulk insert')
+    session.bulk_save_objects([second])
+    session.expire(first)
+
+    assert first.title == 'After'
+    assert session.get(LibraryWork, second.id).title == 'Bulk insert'
+
+
 def test_legacy_links_use_typed_compatibility_identity() -> None:
     for model in (LegacySourceLink, LegacyContentLink):
         assert 'legacy_type' in model.__table__.c
@@ -896,7 +960,12 @@ def test_edition_active_pointer_supports_replacement_and_rollback(
 ) -> None:
     assert 'active_publication_id' in SourceEdition.__table__.c
     session = research_library_session
-    graph = _make_scope_graph(session, 'active-lifecycle')
+    graph = _make_scope_graph(
+        session,
+        'active-lifecycle',
+        publication_status='active',
+        public_visibility=True,
+    )
     replacement = SourcePublication(
         source_edition_id=graph['edition'].id,
         license_record_id=graph['license'].id,
@@ -921,6 +990,14 @@ def test_edition_active_pointer_supports_replacement_and_rollback(
     assert graph['edition'].active_publication_id == graph['publication'].id
     assert graph['publication'].version == 1
     assert replacement.version == 2
+    assert graph['publication'].status == replacement.status == 'active'
+    assert graph['publication'].validation_approved is replacement.validation_approved is True
+    assert graph['publication'].public_visibility is replacement.public_visibility is True
+
+
+def test_model_documents_the_active_pointer_as_current_activation_authority() -> None:
+    assert 'sole current-activation authority' in (SourceEdition.__doc__ or '')
+    assert "status='active'" in (SourcePublication.__doc__ or '')
 
 
 def test_content_unit_position_is_unique_within_publication_division(

@@ -102,7 +102,7 @@ from app.research_library import models as research_library_models  # noqa: F401
 - Create: `backend/alembic/versions/0014_research_library_core.py`
 - Create: `backend/tests/migrations/test_research_library_core.py`
 
-- [ ] Write a migration test that upgrades from `0013_scripture_compatibility` to `0014_research_library_core`, inspects every new table/index/check constraint, and downgrades back to `0013_scripture_compatibility`.
+- [ ] Write a migration test that upgrades from `0013_scripture_compatibility` to `0014_research_library_core`, inspects every new table/index/check constraint/trigger, and downgrades back to `0013_scripture_compatibility`.
 
 ```python
 def test_research_library_upgrade_creates_catalog_tables(migrated_connection):
@@ -118,18 +118,11 @@ def test_research_library_upgrade_creates_catalog_tables(migrated_connection):
 
 - [ ] Run `uv run pytest backend/tests/migrations/test_research_library_core.py -q` and confirm the missing revision failure.
 
-- [ ] Implement the migration with `down_revision = "0013_scripture_compatibility"`. Create tables in foreign-key order and drop them in reverse order. Add a PostgreSQL partial unique index enforcing one active publication per edition:
+- [ ] Implement the migration with `down_revision = "0013_scripture_compatibility"`. Create tables in foreign-key order and drop them in reverse order. Make `source_editions.active_publication_id` the sole current-activation authority with a composite foreign key from `(active_publication_id, id)` to `(source_publications.id, source_edition_id)`. Do **not** add a status-based one-active partial unique index: multiple immutable historical snapshots for one edition may retain `status = 'active'`, and Task 3 eligibility must additionally require `source_editions.active_publication_id = source_publications.id`.
 
-```python
-op.create_index(
-    "uq_source_publications_one_active",
-    "source_publications",
-    ["source_edition_id"],
-    unique=True,
-    postgresql_where=sa.text("status = 'active'"),
-    sqlite_where=sa.text("status = 'active'"),
-)
-```
+- [ ] Add migration-level PostgreSQL and SQLite `UPDATE`/`DELETE` immutability triggers for `source_publications`, `content_units`, `citation_anchors`, `research_chunks`, and `source_audit_events`. Application session guards do not cover raw SQL or direct connection writes.
+
+- [ ] Add migration tests proving that the active pointer rejects a publication from another edition, replacement and rollback update only the pointer, multiple snapshots for one edition may retain `status = 'active'`, and raw SQL `UPDATE`/`DELETE` attempts fail on all five immutable tables while normal inserts succeed.
 
 - [ ] Run the migration test and `uv run pytest backend/tests/migrations -q`; confirm all pass.
 
@@ -161,7 +154,7 @@ def test_publication_eligibility_fails_closed(publication_bundle, change, reason
 
 - [ ] Run `uv run pytest backend/tests/research_library/test_eligibility.py -q` and confirm the import failure.
 
-- [ ] Implement a pure `evaluate_publication()` policy returning an immutable `EligibilityDecision`. It must require active status, approved validation, public visibility, permitted commercial display, permitted redistribution, displayable nonblank attribution, and no restricted/internal flags. Unknown or null rights values fail closed.
+- [ ] Implement a pure `evaluate_publication()` policy returning an immutable `EligibilityDecision`. It must require active status, selection by `source_edition.active_publication_id`, approved validation, public visibility, permitted commercial display, permitted redistribution, displayable nonblank attribution, and no restricted/internal flags. Unknown or null rights values fail closed.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -173,6 +166,8 @@ def evaluate_publication(publication: SourcePublication) -> EligibilityDecision:
     reasons: list[str] = []
     license_record = publication.license_record
     if publication.status != "active": reasons.append("publication_not_active")
+    if publication.source_edition.active_publication_id != publication.id:
+        reasons.append("publication_not_selected")
     if not publication.validation_approved: reasons.append("validation_not_approved")
     if not publication.public_visibility: reasons.append("not_public")
     if license_record is None: reasons.append("license_missing")

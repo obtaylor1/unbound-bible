@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, ImmutableRecordError
 
 
 PUBLICATION_STATUSES = (
@@ -74,12 +74,15 @@ def _sql_values(values: tuple[str, ...]) -> str:
     return ', '.join(f"'{value}'" for value in values)
 
 
+class ImmutableResearchLibraryRecordError(ImmutableRecordError):
+    pass
+
+
 class ImmutableResearchLibraryRecord:
     """Marker for publication snapshot and append-only records."""
 
-
-class ImmutableResearchLibraryRecordError(RuntimeError):
-    pass
+    __immutable_record__ = True
+    __immutable_record_error__ = ImmutableResearchLibraryRecordError
 
 
 class ResearchWorkProfile(Base):
@@ -198,6 +201,12 @@ class WorkDivision(Base):
 
 
 class SourceEdition(Base):
+    """Edition whose active pointer is the sole current-activation authority.
+
+    Historical publications can share ``status='active'``; eligibility must also
+    require ``active_publication_id`` to identify the selected snapshot.
+    """
+
     __tablename__ = 'source_editions'
     __table_args__ = (
         ForeignKeyConstraint(
@@ -334,6 +343,8 @@ class LicenseRecord(Base):
 
 
 class SourcePublication(ImmutableResearchLibraryRecord, Base):
+    """Immutable snapshot; ``status='active'`` does not make it current by itself."""
+
     __tablename__ = 'source_publications'
     __table_args__ = (
         UniqueConstraint(
