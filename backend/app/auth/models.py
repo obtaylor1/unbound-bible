@@ -1,10 +1,13 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Uuid, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+ROLES = frozenset({'reader', 'administrator'})
 
 
 class User(Base):
@@ -12,6 +15,7 @@ class User(Base):
     __table_args__ = (
         Index("ux_users_email_normalized", "email_normalized", unique=True),
         Index("ux_users_username", "username", unique=True),
+        CheckConstraint("role IN ('reader', 'administrator')", name='ck_users_role'),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -19,7 +23,9 @@ class User(Base):
     email_normalized: Mapped[str] = mapped_column(String(320))
     username: Mapped[str] = mapped_column(String(50))
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(20), default="member")
+    role: Mapped[str] = mapped_column(
+        String(20), default='reader', server_default='reader', nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

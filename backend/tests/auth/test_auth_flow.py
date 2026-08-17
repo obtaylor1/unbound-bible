@@ -20,6 +20,7 @@ def test_registration_login_and_me(test_settings):
         me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
         assert me.status_code == 200
         assert me.json()["email"] == "reader@example.com"
+        assert me.json()["role"] == "reader"
         assert "password_hash" not in me.json()
 
         login = client.post(
