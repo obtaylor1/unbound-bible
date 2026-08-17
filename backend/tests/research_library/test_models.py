@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 import pytest
+from sqlalchemy import delete, event, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -98,6 +99,8 @@ def _make_scope_graph(session: Session, suffix: str) -> dict:
     session.flush()
     unit = ContentUnit(
         source_publication_id=publication.id,
+        source_edition_id=edition.id,
+        work_id=work.id,
         work_division_id=division.id,
         language='eng',
         script='Latn',
@@ -113,6 +116,7 @@ def _make_scope_graph(session: Session, suffix: str) -> dict:
     citation = CitationAnchor(
         source_publication_id=publication.id,
         content_unit_id=unit.id,
+        work_division_id=division.id,
         anchor_key=f'{work.id}.1.1',
         human_locator=f'{work.title} 1:1',
         inspector_route=f'/source-inspector/{work.id}/1/1',
@@ -280,6 +284,8 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
 
     unit = ContentUnit(
         source_publication_id=publication.id,
+        source_edition_id=edition.id,
+        work_id=work.id,
         work_division_id=chapter.id,
         language='eng',
         script='Latn',
@@ -296,6 +302,7 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
     citation = CitationAnchor(
         source_publication_id=publication.id,
         content_unit_id=unit.id,
+        work_division_id=chapter.id,
         anchor_key='1-enoch.1.1',
         human_locator='1 Enoch 1:1',
         inspector_route='/source-inspector/1-enoch/1/1',
@@ -395,6 +402,8 @@ def test_research_library_models_reject_invalid_controlled_values(
     elif case.startswith('content_') or case == 'textual_certainty':
         record = ContentUnit(
             source_publication_id=graph['publication'].id,
+            source_edition_id=graph['edition'].id,
+            work_id=graph['work'].id,
             work_division_id=graph['division'].id,
             language='eng',
             script='Latn',
@@ -541,6 +550,8 @@ def test_content_unit_division_work_must_be_covered_by_the_publication_edition(
     second = _make_scope_graph(session, 'ff')
     session.add(ContentUnit(
         source_publication_id=first['publication'].id,
+        source_edition_id=first['edition'].id,
+        work_id=second['work'].id,
         work_division_id=second['division'].id,
         language='eng',
         script='Latn',
@@ -565,6 +576,7 @@ def test_citation_publication_must_match_its_content_unit_publication(
     session.add(CitationAnchor(
         source_publication_id=first['publication'].id,
         content_unit_id=second['unit'].id,
+        work_division_id=second['division'].id,
         anchor_key='cross-publication-anchor',
         human_locator='Cross publication',
         inspector_route='/source-inspector/cross',
@@ -598,6 +610,65 @@ def test_chunk_links_must_describe_one_consistent_source_chain(
 
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_audit_publication_must_match_its_source_edition(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'audit-first')
+    second = _make_scope_graph(session, 'audit-second')
+    actor = User(
+        email='audit-mismatch@example.test',
+        email_normalized='audit-mismatch@example.test',
+        username='audit-mismatch',
+        password_hash='test-hash',
+    )
+    session.add(actor)
+    session.flush()
+    session.add(SourceAuditEvent(
+        actor_id=actor.id,
+        source_edition_id=first['edition'].id,
+        source_publication_id=second['publication'].id,
+        action='invalid_cross_edition_event',
+        resulting_state={},
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_audit_allows_edition_only_and_matching_publication_provenance(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'audit-valid')
+    actor = User(
+        email='audit-valid@example.test',
+        email_normalized='audit-valid@example.test',
+        username='audit-valid',
+        password_hash='test-hash',
+    )
+    session.add(actor)
+    session.flush()
+    edition_event = SourceAuditEvent(
+        actor_id=actor.id,
+        source_edition_id=graph['edition'].id,
+        action='edition_reviewed',
+        resulting_state={'reviewed': True},
+    )
+    publication_event = SourceAuditEvent(
+        actor_id=actor.id,
+        source_edition_id=graph['edition'].id,
+        source_publication_id=graph['publication'].id,
+        action='publication_reviewed',
+        resulting_state={'reviewed': True},
+    )
+    session.add_all([edition_event, publication_event])
+    session.flush()
+
+    assert edition_event.source_publication_id is None
+    assert publication_event.source_publication_id == graph['publication'].id
 
 
 def _make_immutable_record(session: Session, record_kind: str):
@@ -678,6 +749,45 @@ def test_publication_snapshot_and_audit_records_reject_deletes(
 
     with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable|append-only'):
         session.flush()
+
+
+@pytest.mark.parametrize(
+    'record_kind',
+    ['publication', 'content_unit', 'citation_anchor', 'research_chunk', 'audit_event'],
+)
+@pytest.mark.parametrize('operation', ['update', 'delete'])
+def test_bulk_dml_rejects_immutable_snapshot_and_audit_mutations(
+    research_library_session: Session,
+    record_kind: str,
+    operation: str,
+) -> None:
+    session = research_library_session
+    record, attribute, changed_value = _make_immutable_record(session, record_kind)
+    model = type(record)
+    statement = (
+        update(model).where(model.id == record.id).values({attribute: changed_value})
+        if operation == 'update'
+        else delete(model).where(model.id == record.id)
+    )
+
+    with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable|append-only'):
+        session.execute(statement)
+
+
+def test_bulk_dml_allows_unrelated_model_updates(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    work = LibraryWork(id='bulk-update-work', title='Before')
+    session.add(work)
+    session.flush()
+
+    session.execute(
+        update(LibraryWork).where(LibraryWork.id == work.id).values(title='After')
+    )
+    session.expire(work)
+
+    assert work.title == 'After'
 
 
 def test_legacy_links_use_typed_compatibility_identity() -> None:
@@ -769,6 +879,50 @@ def test_publication_version_is_unique_per_edition(
         session.flush()
 
 
+def test_edition_active_pointer_rejects_a_publication_from_another_edition(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'active-pointer-first')
+    second = _make_scope_graph(session, 'active-pointer-second')
+    first['edition'].active_publication_id = second['publication'].id
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_edition_active_pointer_supports_replacement_and_rollback(
+    research_library_session: Session,
+) -> None:
+    assert 'active_publication_id' in SourceEdition.__table__.c
+    session = research_library_session
+    graph = _make_scope_graph(session, 'active-lifecycle')
+    replacement = SourcePublication(
+        source_edition_id=graph['edition'].id,
+        license_record_id=graph['license'].id,
+        version=2,
+        status='active',
+        validation_approved=True,
+        public_visibility=True,
+        source_checksum='a' * 64,
+        content_checksum='b' * 64,
+    )
+    session.add(replacement)
+    session.flush()
+
+    graph['edition'].active_publication_id = graph['publication'].id
+    session.flush()
+    graph['edition'].active_publication_id = replacement.id
+    session.flush()
+    graph['edition'].active_publication_id = graph['publication'].id
+    session.flush()
+    session.expire(graph['edition'])
+
+    assert graph['edition'].active_publication_id == graph['publication'].id
+    assert graph['publication'].version == 1
+    assert replacement.version == 2
+
+
 def test_content_unit_position_is_unique_within_publication_division(
     research_library_session: Session,
 ) -> None:
@@ -776,6 +930,8 @@ def test_content_unit_position_is_unique_within_publication_division(
     graph = _make_scope_graph(session, 'content-position')
     session.add(ContentUnit(
         source_publication_id=graph['publication'].id,
+        source_edition_id=graph['edition'].id,
+        work_id=graph['work'].id,
         work_division_id=graph['division'].id,
         language='eng',
         direction='ltr',
@@ -790,6 +946,59 @@ def test_content_unit_position_is_unique_within_publication_division(
         session.flush()
 
 
+def test_bulk_content_inserts_with_explicit_scope_require_no_lookup_queries(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'explicit-bulk-scope')
+    publication_id = graph['publication'].id
+    edition_id = graph['edition'].id
+    work_id = graph['work'].id
+    division_id = graph['division'].id
+    session.expire_all()
+    statements: list[str] = []
+
+    def record_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(session.bind, 'before_cursor_execute', record_statement)
+    try:
+        session.add_all([
+            ContentUnit(
+                source_publication_id=publication_id,
+                source_edition_id=edition_id,
+                work_id=work_id,
+                work_division_id=division_id,
+                language='eng',
+                direction='ltr',
+                ordinal=2,
+                normalized_text='Bulk text 2',
+                source_locator='1:2',
+                textual_certainty='visible_text',
+                checksum='4' * 64,
+            ),
+            ContentUnit(
+                source_publication_id=publication_id,
+                source_edition_id=edition_id,
+                work_id=work_id,
+                work_division_id=division_id,
+                language='eng',
+                direction='ltr',
+                ordinal=3,
+                normalized_text='Bulk text 3',
+                source_locator='1:3',
+                textual_certainty='visible_text',
+                checksum='5' * 64,
+            ),
+        ])
+        session.flush()
+    finally:
+        event.remove(session.bind, 'before_cursor_execute', record_statement)
+
+    assert statements
+    assert not [statement for statement in statements if statement.lstrip().upper().startswith('SELECT')]
+
+
 def test_citation_anchor_key_is_stable_within_publication(
     research_library_session: Session,
 ) -> None:
@@ -798,6 +1007,7 @@ def test_citation_anchor_key_is_stable_within_publication(
     session.add(CitationAnchor(
         source_publication_id=graph['publication'].id,
         content_unit_id=graph['unit'].id,
+        work_division_id=graph['division'].id,
         anchor_key=graph['citation'].anchor_key,
         human_locator='Duplicate anchor key',
         inspector_route='/source-inspector/duplicate',
@@ -921,3 +1131,82 @@ def test_research_library_models_enforce_stable_uniqueness(
     ])
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_division_position_uses_null_safe_root_and_child_partial_indexes() -> None:
+    indexes = {index.name: index for index in WorkDivision.__table__.indexes}
+    root = indexes['uq_work_divisions_root_ordinal']
+    child = indexes['uq_work_divisions_child_ordinal']
+
+    assert root.dialect_options['sqlite']['where'] is not None
+    assert root.dialect_options['postgresql']['where'] is not None
+    assert child.dialect_options['sqlite']['where'] is not None
+    assert child.dialect_options['postgresql']['where'] is not None
+
+
+def test_child_division_ordinal_is_unique_within_parent(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'child-ordinal-unique')
+    session.add_all([
+        WorkDivision(
+            work_id=graph['work'].id,
+            parent_id=graph['division'].id,
+            division_type='verse',
+            label='Verse 1',
+            normalized_locator='1:1',
+            canonical_key=f"{graph['work'].id}.1.1",
+            ordinal=1,
+        ),
+        WorkDivision(
+            work_id=graph['work'].id,
+            parent_id=graph['division'].id,
+            division_type='verse',
+            label='Duplicate child ordinal',
+            normalized_locator='1:01',
+            canonical_key=f"{graph['work'].id}.1.01",
+            ordinal=1,
+        ),
+    ])
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_same_child_ordinal_is_allowed_under_different_parents(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'child-ordinal-scope')
+    other_parent = WorkDivision(
+        work_id=graph['work'].id,
+        division_type='chapter',
+        label='Chapter 2',
+        normalized_locator='2',
+        canonical_key=f"{graph['work'].id}.2",
+        ordinal=2,
+    )
+    session.add(other_parent)
+    session.flush()
+    session.add_all([
+        WorkDivision(
+            work_id=graph['work'].id,
+            parent_id=graph['division'].id,
+            division_type='verse',
+            label='Chapter 1 Verse 1',
+            normalized_locator='1:1',
+            canonical_key=f"{graph['work'].id}.1.1",
+            ordinal=1,
+        ),
+        WorkDivision(
+            work_id=graph['work'].id,
+            parent_id=other_parent.id,
+            division_type='verse',
+            label='Chapter 2 Verse 1',
+            normalized_locator='2:1',
+            canonical_key=f"{graph['work'].id}.2.1",
+            ordinal=1,
+        ),
+    ])
+    session.flush()

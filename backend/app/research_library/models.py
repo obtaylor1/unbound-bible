@@ -17,7 +17,6 @@ from sqlalchemy import (
     Uuid,
     column,
     func,
-    literal_column,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
@@ -144,14 +143,21 @@ class WorkDivision(Base):
             ondelete='RESTRICT',
         ),
         Index(
-            'uq_work_divisions_work_parent_ordinal',
+            'uq_work_divisions_root_ordinal',
             'work_id',
-            func.coalesce(
-                column('parent_id'),
-                literal_column("'00000000-0000-0000-0000-000000000000'"),
-            ),
             'ordinal',
             unique=True,
+            sqlite_where=column('parent_id').is_(None),
+            postgresql_where=column('parent_id').is_(None),
+        ),
+        Index(
+            'uq_work_divisions_child_ordinal',
+            'work_id',
+            'parent_id',
+            'ordinal',
+            unique=True,
+            sqlite_where=column('parent_id').is_not(None),
+            postgresql_where=column('parent_id').is_not(None),
         ),
         Index('ix_work_divisions_parent_id', 'parent_id'),
         Index('ix_work_divisions_work_type', 'work_id', 'division_type'),
@@ -194,6 +200,13 @@ class WorkDivision(Base):
 class SourceEdition(Base):
     __tablename__ = 'source_editions'
     __table_args__ = (
+        ForeignKeyConstraint(
+            ['active_publication_id', 'id'],
+            ['source_publications.id', 'source_publications.source_edition_id'],
+            name='fk_source_editions_active_publication_same_edition',
+            ondelete='RESTRICT',
+            use_alter=True,
+        ),
         Index('ix_source_editions_checksum', 'checksum'),
         Index('ix_source_editions_language', 'language'),
         CheckConstraint("length(trim(title)) > 0", name='ck_source_editions_title_nonblank'),
@@ -207,6 +220,9 @@ class SourceEdition(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    active_publication_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     edition_label: Mapped[str] = mapped_column(String(500), nullable=False)
     translator: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -653,6 +669,12 @@ class LegacyContentLink(Base):
 class SourceAuditEvent(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'source_audit_events'
     __table_args__ = (
+        ForeignKeyConstraint(
+            ['source_publication_id', 'source_edition_id'],
+            ['source_publications.id', 'source_publications.source_edition_id'],
+            name='fk_source_audit_events_publication_same_edition',
+            ondelete='RESTRICT',
+        ),
         Index('ix_source_audit_events_edition_created', 'source_edition_id', 'created_at'),
         Index(
             'ix_source_audit_events_publication_created', 'source_publication_id', 'created_at'
@@ -660,6 +682,10 @@ class SourceAuditEvent(ImmutableResearchLibraryRecord, Base):
         Index('ix_source_audit_events_actor_id', 'actor_id'),
         CheckConstraint(
             "length(trim(action)) > 0", name='ck_source_audit_events_action_nonblank'
+        ),
+        CheckConstraint(
+            'source_publication_id IS NULL OR source_edition_id IS NOT NULL',
+            name='ck_source_audit_events_publication_requires_edition',
         ),
     )
 
@@ -682,11 +708,6 @@ class SourceAuditEvent(ImmutableResearchLibraryRecord, Base):
     )
     source_publication_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'source_publications.id',
-            name='fk_source_audit_events_publication_id_source_publications',
-            ondelete='RESTRICT',
-        ),
         nullable=True,
     )
     action: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -698,6 +719,26 @@ class SourceAuditEvent(ImmutableResearchLibraryRecord, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+IMMUTABLE_RESEARCH_LIBRARY_TABLES = frozenset({
+    'source_publications',
+    'content_units',
+    'citation_anchors',
+    'research_chunks',
+    'source_audit_events',
+})
+
+
+@event.listens_for(Session, 'do_orm_execute')
+def _protect_immutable_research_library_bulk_dml(orm_execute_state) -> None:
+    if not (orm_execute_state.is_update or orm_execute_state.is_delete):
+        return
+    target_table = getattr(orm_execute_state.statement, 'table', None)
+    if target_table is not None and target_table.name in IMMUTABLE_RESEARCH_LIBRARY_TABLES:
+        raise ImmutableResearchLibraryRecordError(
+            f'{target_table.name} records are immutable and cannot be updated or deleted'
+        )
 
 
 @event.listens_for(Session, 'before_flush')
@@ -717,19 +758,3 @@ def _protect_immutable_research_library_records(
             raise ImmutableResearchLibraryRecordError(
                 f'{type(record).__name__} is immutable and cannot be updated'
             )
-
-
-@event.listens_for(Session, 'before_flush')
-def _populate_research_library_scope(session: Session, _flush_context, _instances) -> None:
-    for record in session.new:
-        if isinstance(record, ContentUnit):
-            publication = session.get(SourcePublication, record.source_publication_id)
-            division = session.get(WorkDivision, record.work_division_id)
-            if publication is not None and record.source_edition_id is None:
-                record.source_edition_id = publication.source_edition_id
-            if division is not None and record.work_id is None:
-                record.work_id = division.work_id
-        elif isinstance(record, CitationAnchor) and record.work_division_id is None:
-            content_unit = session.get(ContentUnit, record.content_unit_id)
-            if content_unit is not None:
-                record.work_division_id = content_unit.work_division_id
