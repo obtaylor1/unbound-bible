@@ -124,7 +124,12 @@ def test_cli_rejects_ineligible_targets(admin_database, kind):
             session.add(target); session.flush(); target_id = target.id
     result = _invoke(url, target_id)
     assert result.exit_code != 0
-    assert kind.split('-')[0] in result.stderr.lower()
+    expected_codes = {
+        'missing': 'target_not_found',
+        'inactive': 'target_inactive',
+        'invalid-role': 'target_not_reader',
+    }
+    assert json.loads(result.stderr)['error_code'] == expected_codes[kind]
     with factory() as session:
         assert session.scalar(select(SourceAuditEvent)) is None
 
@@ -164,7 +169,8 @@ def test_cli_is_idempotent_for_sole_administrator_and_refuses_another(admin_data
     rerun = _invoke(url, first_id)
     refusal = _invoke(url, second_id)
     assert rerun.exit_code == 0 and json.loads(rerun.stdout)['changed'] is False
-    assert refusal.exit_code != 0 and 'one-time' in refusal.stderr.lower()
+    assert refusal.exit_code != 0
+    assert json.loads(refusal.stderr)['error_code'] == 'bootstrap_already_completed'
     with factory() as session:
         assert len(session.scalars(select(SourceAuditEvent)).all()) == 1
         assert session.get(User, second_id).role == 'reader'
@@ -175,10 +181,18 @@ def test_cli_rolls_back_role_when_audit_flush_fails(admin_database, monkeypatch)
     with factory.begin() as session:
         target = _user(); session.add(target); session.flush(); target_id = target.id
     def fail(*args, **kwargs):
-        raise RuntimeError('audit unavailable')
+        raise RuntimeError('audit unavailable secret-token@example.test')
     monkeypatch.setattr('app.research_library.admin_cli.append_source_audit_event', fail)
     result = _invoke(url, target_id)
-    assert result.exit_code != 0 and 'audit unavailable' in result.stderr
+    assert result.exit_code != 0
+    error = json.loads(result.stderr)
+    assert error == {
+        'changed': False,
+        'error_code': 'operator_failure',
+        'message': 'Administrator assignment failed safely',
+    }
+    assert 'audit unavailable' not in result.output
+    assert 'secret-token@example.test' not in result.output
     with factory() as session:
         assert session.get(User, target_id).role == 'reader'
 
@@ -221,3 +235,103 @@ def test_cli_source_has_no_email_targeting():
     source = inspect.getsource(admin_cli)
     assert '--email' not in source
     assert 'User.email' not in source
+
+
+def test_malformed_user_id_is_fixed_json_and_never_echoed(monkeypatch):
+    secret = 'postgresql://admin:hunter2@db.test/prod?owner=secret@example.test'
+    engine_called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal engine_called
+        engine_called = True
+        raise AssertionError('engine must not be called')
+
+    monkeypatch.setattr(
+        'app.research_library.admin_cli.create_database_engine', fail_if_called
+    )
+    result = runner.invoke(app, [
+        'assign-initial-administrator', '--database-url', 'sqlite:///unused.db',
+        '--user-id', secret, '--confirmation', 'GRANT-ADMINISTRATOR',
+    ])
+    assert result.exit_code != 0
+    assert json.loads(result.stderr) == {
+        'changed': False,
+        'error_code': 'invalid_user_id',
+        'message': 'User ID must be a valid UUID',
+    }
+    assert secret not in result.output
+    assert not engine_called
+
+
+def test_unsupported_stored_role_is_not_interpolated(admin_database):
+    url, factory = admin_database
+    target = _user()
+    with factory.begin() as session:
+        session.add(target); session.flush(); target_id = target.id
+    secret_role = 'credential-hunter2-secret@example.test'
+    with factory.kw['bind'].begin() as connection:
+        connection.exec_driver_sql('PRAGMA ignore_check_constraints=ON')
+        connection.execute(
+            User.__table__.update().where(User.id == target_id).values(role=secret_role)
+        )
+        connection.exec_driver_sql('PRAGMA ignore_check_constraints=OFF')
+    result = _invoke(url, target_id)
+    assert result.exit_code != 0
+    assert json.loads(result.stderr)['error_code'] == 'target_not_reader'
+    assert secret_role not in result.output
+
+
+def test_database_setup_failure_is_generic_and_does_not_expose_url(monkeypatch):
+    supplied_url = 'postgresql://operator:hunter2@private.example/prod'
+    injected = 'engine failed for token=abc123 and owner@example.test'
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(injected)
+
+    monkeypatch.setattr('app.research_library.admin_cli.create_database_engine', fail)
+    result = _invoke(supplied_url, uuid4())
+    assert result.exit_code != 0
+    assert json.loads(result.stderr) == {
+        'changed': False,
+        'error_code': 'operator_failure',
+        'message': 'Administrator assignment failed safely',
+    }
+    combined = result.output
+    assert supplied_url not in combined
+    assert injected not in combined
+    assert 'hunter2' not in combined
+    assert 'owner@example.test' not in combined
+
+
+def test_engine_disposal_failure_is_generic_and_never_echoes_exception(
+    admin_database, monkeypatch
+):
+    _, factory = admin_database
+    engine = factory.kw['bind']
+    with factory.begin() as session:
+        target = _user(); session.add(target); session.flush(); target_id = target.id
+    injected = 'dispose failed postgresql://admin:hunter2@private/prod'
+    monkeypatch.setattr(
+        'app.research_library.admin_cli.create_database_engine', lambda settings: engine
+    )
+    monkeypatch.setattr(engine, 'dispose', lambda: (_ for _ in ()).throw(RuntimeError(injected)))
+    result = _invoke('sqlite:///not-used.db', target_id)
+    assert result.exit_code != 0
+    assert json.loads(result.stderr) == {
+        'changed': False,
+        'error_code': 'operator_failure',
+        'message': 'Administrator assignment failed safely',
+    }
+    assert injected not in result.output
+
+
+def test_success_output_is_still_machine_readable_and_secret_free(admin_database):
+    url, factory = admin_database
+    with factory.begin() as session:
+        target = _user(); session.add(target); session.flush(); target_id = target.id
+    result = _invoke(url, target_id)
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert payload['changed'] is True
+    assert payload['target_user_id'] == str(target_id)
+    assert result.stderr == ''

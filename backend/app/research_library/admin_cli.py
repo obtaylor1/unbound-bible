@@ -24,8 +24,19 @@ def _root() -> None:
     """Protected research-library operator commands."""
 
 
-def _fail(message: str) -> NoReturn:
-    typer.echo(json.dumps({'error': message, 'changed': False}), err=True)
+class AdministratorAssignmentError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
+
+
+def _fail(code: str, message: str) -> NoReturn:
+    typer.echo(json.dumps({
+        'changed': False,
+        'error_code': code,
+        'message': message,
+    }, sort_keys=True), err=True)
     raise typer.Exit(code=1)
 
 
@@ -46,15 +57,24 @@ def _assign(session: Session, target_id: UUID):
     target = next((user for user in users if user.id == target_id), None)
     administrators = [user for user in users if user.role == 'administrator']
     if target is None:
-        raise ValueError('missing target user')
+        raise AdministratorAssignmentError(
+            'target_not_found', 'Target user was not found'
+        )
     if not target.is_active:
-        raise ValueError('inactive target user')
+        raise AdministratorAssignmentError(
+            'target_inactive', 'Target user is inactive'
+        )
     if len(administrators) == 1 and administrators[0].id == target.id:
         return None
     if administrators:
-        raise ValueError('one-time bootstrap refused: another administrator exists')
+        raise AdministratorAssignmentError(
+            'bootstrap_already_completed',
+            'Initial administrator has already been assigned',
+        )
     if target.role != 'reader':
-        raise ValueError(f'invalid target role: {target.role}')
+        raise AdministratorAssignmentError(
+            'target_not_reader', 'Target user must have the reader role'
+        )
     prior = {'target_user_id': str(target.id), 'role': 'reader'}
     resulting = {
         'target_user_id': str(target.id),
@@ -75,14 +95,23 @@ def _assign(session: Session, target_id: UUID):
 @app.command('assign-initial-administrator')
 def assign_initial_administrator(
     database_url: Annotated[str, typer.Option('--database-url')],
-    user_id: Annotated[UUID, typer.Option('--user-id')],
+    user_id: Annotated[str, typer.Option('--user-id')],
     confirmation: Annotated[str, typer.Option('--confirmation')],
 ) -> None:
     if not database_url or not database_url.strip():
-        _fail('An explicit nonblank database URL is required')
+        _fail('missing_database_url', 'An explicit nonblank database URL is required')
     if confirmation != 'GRANT-ADMINISTRATOR':
-        _fail('confirmation must exactly equal GRANT-ADMINISTRATOR')
+        _fail(
+            'invalid_confirmation',
+            'Confirmation must exactly equal GRANT-ADMINISTRATOR',
+        )
+    try:
+        target_id = UUID(user_id)
+    except (ValueError, TypeError, AttributeError):
+        _fail('invalid_user_id', 'User ID must be a valid UUID')
     engine = None
+    failure: tuple[str, str] | None = None
+    payload: dict[str, object] | None = None
     try:
         engine = create_database_engine(Settings(
             environment='development', database_url=database_url.strip()
@@ -91,24 +120,31 @@ def assign_initial_administrator(
         with factory() as session:
             if engine.dialect.name == 'sqlite':
                 session.connection().exec_driver_sql('BEGIN IMMEDIATE')
-                event = _assign(session, user_id)
+                event = _assign(session, target_id)
                 session.commit()
             else:
                 with session.begin():
-                    event = _assign(session, user_id)
-        typer.echo(json.dumps({
-            'target_user_id': str(user_id),
+                    event = _assign(session, target_id)
+        payload = {
+            'target_user_id': str(target_id),
             'changed': event is not None,
             'audit_event_id': str(event.id) if event is not None else None,
             'next_action': 'administrator_ready',
-        }, sort_keys=True))
-    except typer.Exit:
-        raise
-    except Exception as error:
-        _fail(str(error))
+        }
+    except AdministratorAssignmentError as error:
+        failure = (error.code, error.safe_message)
+    except Exception:
+        failure = ('operator_failure', 'Administrator assignment failed safely')
     finally:
         if engine is not None:
-            engine.dispose()
+            try:
+                engine.dispose()
+            except Exception:
+                failure = ('operator_failure', 'Administrator assignment failed safely')
+                payload = None
+    if failure is not None:
+        _fail(*failure)
+    typer.echo(json.dumps(payload, sort_keys=True))
 
 
 if __name__ == '__main__':
