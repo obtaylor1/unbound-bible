@@ -25,11 +25,11 @@ def test_post_comment_crud_permissions_and_public_privacy(test_settings):
         assert client.delete(f"/api/v1/community/posts/{post['id']}", headers=owner).status_code == 204
 
 
-def test_moderator_can_manage_others_content(test_settings):
+def test_administrator_can_manage_others_content(test_settings):
     app = create_application(test_settings)
     with TestClient(app) as client:
         author, _ = account(client, 'author@example.com', 'author'); moderator, moderator_id = account(client, 'mod@example.com', 'moderator')
         with app.state.session_factory() as session:
-            user = session.get(User, uuid.UUID(moderator_id)); user.role = 'moderator'; session.commit()
+            user = session.get(User, uuid.UUID(moderator_id)); user.role = 'administrator'; session.commit()
         post = client.post('/api/v1/community/posts', headers=author, json={'title': 'Post', 'content': 'Content'}).json()
         assert client.delete(f"/api/v1/community/posts/{post['id']}", headers=moderator).status_code == 204

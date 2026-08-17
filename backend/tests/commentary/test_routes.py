@@ -63,7 +63,7 @@ def test_admin_probe_allows_registered_administrator(test_settings):
         tokens = _register(client, email="admin@example.com", username="admin")
         with application.state.session_factory() as session:
             user = session.query(User).filter_by(email="admin@example.com").one()
-            user.role = "admin"
+            user.role = "administrator"
             session.commit()
 
         response = client.get(
@@ -607,7 +607,7 @@ def test_compare_rejects_duplicate_or_more_than_two_sources(
 def _override_admin(application):
     application.dependency_overrides[require_admin] = lambda: User(
         id=uuid4(), email='admin@example.test', email_normalized='admin@example.test',
-        username='admin', password_hash='unused', role='admin', is_active=True,
+        username='admin', password_hash='unused', role='administrator', is_active=True,
     )
 
 

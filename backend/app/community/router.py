@@ -42,7 +42,7 @@ def find_post(post_id: uuid.UUID, session: Session) -> CommunityPost:
 def get_post(post_id: uuid.UUID, session: Session = Depends(get_session)): return serialize_post(find_post(post_id, session))
 
 
-def can_manage(owner_id, user): return owner_id == user.id or user.role in {'moderator', 'admin'}
+def can_manage(owner_id, user): return owner_id == user.id or user.role == 'administrator'
 
 
 @router.put('/posts/{post_id}')

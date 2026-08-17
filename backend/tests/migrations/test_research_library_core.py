@@ -218,7 +218,7 @@ def test_revision_is_head_and_upgrade_adds_exact_catalog(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     url = f"sqlite:///{tmp_path / 'catalog.db'}"
     config = _config(url)
-    assert [revision.revision for revision in ScriptDirectory.from_config(config).get_revisions("heads")] == ["0014_research_library_core"]
+    assert [revision.revision for revision in ScriptDirectory.from_config(config).get_revisions("heads")] == ["0015_administrator_role"]
 
     command.upgrade(config, "0013_scripture_compatibility")
     engine = create_engine(url)

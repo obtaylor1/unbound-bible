@@ -652,7 +652,7 @@ def test_research_control_mode_migration_replaces_and_restores_constraint(
     config = _alembic_config(database_url)
     scripts = ScriptDirectory.from_config(config)
     assert [head.revision for head in scripts.get_revisions('heads')] == [
-        '0013_scripture_compatibility'
+        '0015_administrator_role'
     ]
 
     command.upgrade(config, '0011_research_trail')

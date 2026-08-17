@@ -51,10 +51,14 @@ def get_optional_user(
         return None
 
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
+def require_administrator(user: User = Depends(get_current_user)) -> User:
+    if user.role != "administrator":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access required",
         )
     return user
+
+
+# Temporary compatibility name while commentary call sites are migrated.
+require_admin = require_administrator

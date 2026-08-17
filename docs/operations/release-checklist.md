@@ -47,6 +47,8 @@ Public launch is blocked until at least one real participant aged 13–17 (with 
 
 ## Sign-off
 
+- [ ] Remove the temporary `require_admin` compatibility alias only after every call site has migrated to `require_administrator` in a future release.
+
 | Role | Name | Decision (approve / block) | Date | Notes |
 | --- | --- | --- | --- | --- |
 | Engineering |  |  |  |  |

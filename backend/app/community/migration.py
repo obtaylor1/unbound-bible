@@ -10,6 +10,11 @@ from app.config import Settings
 from app.database import create_database_engine, create_session_factory
 
 
+def canonical_legacy_role(value) -> str:
+    role = str(value or '').split('.')[-1].strip().casefold()
+    return 'administrator' if role in {'admin', 'administrator'} else 'reader'
+
+
 def as_datetime(value):
     if value is None or isinstance(value, datetime):
         return value
@@ -29,7 +34,7 @@ def import_legacy_forum(source_url: str, session: Session) -> dict:
         user = session.scalar(select(User).where((User.legacy_forum_user_id == row['id']) | (User.email_normalized == row['email'].strip().casefold())))
         if user: report['users_existing'] += 1
         else:
-            user = User(email=row['email'].strip(), email_normalized=row['email'].strip().casefold(), username=row['username'], password_hash=row['hashed_password'], role=str(row['role']).split('.')[-1], is_active=bool(row['is_active']), legacy_forum_user_id=row['id'])
+            user = User(email=row['email'].strip(), email_normalized=row['email'].strip().casefold(), username=row['username'], password_hash=row['hashed_password'], role=canonical_legacy_role(row['role']), is_active=bool(row['is_active']), legacy_forum_user_id=row['id'])
             session.add(user); session.flush(); report['users_imported'] += 1
         if user.legacy_forum_user_id is None: user.legacy_forum_user_id = row['id']
         user_map[row['id']] = user.id

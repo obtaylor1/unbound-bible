@@ -2,8 +2,20 @@ from sqlalchemy import create_engine, text, select
 from app.application import create_application
 from app.auth.models import User
 from app.auth.security import hash_password, verify_password
-from app.community.migration import import_legacy_forum
+from app.community.migration import canonical_legacy_role, import_legacy_forum
 from app.community.models import CommunityComment, CommunityPost
+
+
+def test_legacy_roles_are_mapped_without_email_inference():
+    assert {
+        role: canonical_legacy_role(role)
+        for role in ('member', 'user', 'reader', 'moderator', 'unknown', None)
+    } == {
+        'member': 'reader', 'user': 'reader', 'reader': 'reader',
+        'moderator': 'reader', 'unknown': 'reader', None: 'reader',
+    }
+    assert canonical_legacy_role('admin') == 'administrator'
+    assert canonical_legacy_role('Role.ADMINISTRATOR') == 'administrator'
 
 
 def test_legacy_forum_import_is_idempotent_and_preserves_ownership(test_settings, tmp_path):
@@ -24,4 +36,5 @@ def test_legacy_forum_import_is_idempotent_and_preserves_ownership(test_settings
         assert first['users_imported'] == first['posts_imported'] == first['comments_imported'] == 1
         assert second['posts_imported'] == second['comments_imported'] == 0
         assert post.author_id == user.id and comment.author_id == user.id
+        assert user.role == 'reader'
         assert verify_password('legacy-password', user.password_hash)
