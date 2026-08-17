@@ -525,7 +525,11 @@ Required automated coverage includes:
 ## 17. Rollout
 
 1. Deploy additive schema and compatibility services behind feature flags.
-2. Assign the verified initial administrator through the protected command.
+2. Assign the verified initial administrator through the protected command,
+   explicitly supplying both the deployment operator account ID and target
+   account ID. The audit actor is always the supplied operator; the target is
+   recorded separately as a deployment-bootstrap target, even when both IDs
+   intentionally identify the same account.
 3. Register existing sources and create findings for incomplete rights records.
 4. Import, validate, and review WEB, 1 Enoch, and Jubilees.
 5. Generate citation anchors, natural chunks, and embeddings for eligible

@@ -1,6 +1,8 @@
 from io import StringIO
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import psycopg2
@@ -167,6 +169,56 @@ def test_live_postgresql_role_migration():
                     "VALUES (:id,'bad@x','bad@x','bad','x','admin',true)"
                 ), {'id': uuid4()})
             connection.rollback()
+
+        from app.database import create_session_factory
+        from app.research_library.admin_cli import (
+            AdministratorAssignmentError,
+            _assign,
+        )
+
+        attempts = []
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM users WHERE username='admin'"))
+            for name in ('operator-one', 'target-one', 'operator-two', 'target-two'):
+                user_id = uuid4(); attempts.append((name, user_id))
+                connection.execute(text(
+                    "INSERT INTO users "
+                    "(id,email,email_normalized,username,password_hash,is_active) "
+                    "VALUES (:id,:email,:email,:name,'x',true)"
+                ), {'id': user_id, 'email': f'{name}@example.test', 'name': name})
+        ids_by_name = dict(attempts)
+        barrier = Barrier(2)
+        factory = create_session_factory(engine)
+
+        def bootstrap(operator_name, target_name):
+            barrier.wait()
+            try:
+                with factory.begin() as session:
+                    event = _assign(
+                        session, ids_by_name[target_name], ids_by_name[operator_name]
+                    )
+                    return ('changed', str(event.id))
+            except AdministratorAssignmentError as error:
+                return ('refused', error.code)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(
+                lambda names: bootstrap(*names),
+                (('operator-one', 'target-one'), ('operator-two', 'target-two')),
+            ))
+        assert sorted(result[0] for result in results) == ['changed', 'refused']
+        assert ('refused', 'bootstrap_already_completed') in results
+        with engine.connect() as connection:
+            assert connection.scalar(text(
+                "SELECT count(*) FROM users WHERE role='administrator'"
+            )) == 1
+            assert connection.scalar(text('SELECT count(*) FROM source_audit_events')) == 1
+            audit_actor, resulting_state = connection.execute(text(
+                'SELECT actor_id, resulting_state FROM source_audit_events'
+            )).one()
+            state = resulting_state if isinstance(resulting_state, dict) else __import__('json').loads(resulting_state)
+            assert str(audit_actor) == state['operator_user_id']
+            assert state['operation'] == 'deployment_bootstrap'
         engine.dispose(); engine = None
 
         command.downgrade(config, '0014_research_library_core')

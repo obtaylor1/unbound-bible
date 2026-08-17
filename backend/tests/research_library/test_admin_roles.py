@@ -41,10 +41,14 @@ def admin_database(tmp_path):
         engine.dispose()
 
 
-def _invoke(url: str, user_id, confirmation='GRANT-ADMINISTRATOR'):
+def _invoke(
+    url: str, user_id, confirmation='GRANT-ADMINISTRATOR', *, operator_user_id=None
+):
+    operator_user_id = user_id if operator_user_id is None else operator_user_id
     return runner.invoke(app, [
         'assign-initial-administrator', '--database-url', url,
-        '--user-id', str(user_id), '--confirmation', confirmation,
+        '--user-id', str(user_id), '--operator-user-id', str(operator_user_id),
+        '--confirmation', confirmation,
     ])
 
 
@@ -95,7 +99,8 @@ def test_cli_requires_explicit_database_and_exact_confirmation(admin_database):
         target = _user(); session.add(target); session.flush(); target_id = target.id
     missing = runner.invoke(app, [
         'assign-initial-administrator', '--database-url', ' ',
-        '--user-id', str(target_id), '--confirmation', 'GRANT-ADMINISTRATOR',
+        '--user-id', str(target_id), '--operator-user-id', str(target_id),
+        '--confirmation', 'GRANT-ADMINISTRATOR',
     ])
     wrong = _invoke(url, target_id, 'grant-administrator')
     assert missing.exit_code != 0 and 'database' in missing.stderr.lower()
@@ -109,6 +114,8 @@ def test_cli_requires_explicit_database_and_exact_confirmation(admin_database):
 def test_cli_rejects_ineligible_targets(admin_database, kind):
     url, factory = admin_database
     target_id = uuid4()
+    with factory.begin() as session:
+        operator = _user(); session.add(operator); session.flush(); operator_id = operator.id
     if kind == 'invalid-role':
         target = _user(role='reader')
         with factory.begin() as session:
@@ -122,7 +129,7 @@ def test_cli_rejects_ineligible_targets(admin_database, kind):
         with factory.begin() as session:
             target = _user(active=kind != 'inactive')
             session.add(target); session.flush(); target_id = target.id
-    result = _invoke(url, target_id)
+    result = _invoke(url, target_id, operator_user_id=operator_id)
     assert result.exit_code != 0
     expected_codes = {
         'missing': 'target_not_found',
@@ -137,9 +144,10 @@ def test_cli_rejects_ineligible_targets(admin_database, kind):
 def test_cli_changes_exactly_one_role_and_writes_sanitized_audit(admin_database):
     url, factory = admin_database
     with factory.begin() as session:
-        target = _user(); other = _user(); session.add_all([target, other]); session.flush()
-        target_id, other_id = target.id, other.id
-    result = _invoke(url, target_id)
+        target = _user(); operator = _user(); other = _user()
+        session.add_all([target, operator, other]); session.flush()
+        target_id, operator_id, other_id = target.id, operator.id, other.id
+    result = _invoke(url, target_id, operator_user_id=operator_id)
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload['target_user_id'] == str(target_id)
@@ -151,13 +159,50 @@ def test_cli_changes_exactly_one_role_and_writes_sanitized_audit(admin_database)
         events = session.scalars(select(SourceAuditEvent)).all()
         assert len(events) == 1
         event = events[0]
-        assert event.actor_id == target_id
+        assert event.actor_id == operator_id
         assert event.action == 'initial_administrator_assigned'
-        assert event.prior_state == {'target_user_id': str(target_id), 'role': 'reader'}
-        assert event.resulting_state == {
-            'target_user_id': str(target_id), 'role': 'administrator',
-            'bootstrap_actor': 'target_account',
+        assert event.prior_state == {
+            'operation': 'deployment_bootstrap',
+            'operator_user_id': str(operator_id),
+            'target_user_id': str(target_id),
+            'role': 'reader',
         }
+        assert event.resulting_state == {
+            'operation': 'deployment_bootstrap',
+            'operator_user_id': str(operator_id),
+            'target_user_id': str(target_id),
+            'role': 'administrator',
+        }
+
+
+def test_cli_allows_explicit_same_operator_and_target(admin_database):
+    url, factory = admin_database
+    with factory.begin() as session:
+        target = _user(); session.add(target); session.flush(); target_id = target.id
+    result = _invoke(url, target_id, operator_user_id=target_id)
+    assert result.exit_code == 0
+    with factory() as session:
+        event = session.scalar(select(SourceAuditEvent))
+        assert event.actor_id == target_id
+        assert event.resulting_state['operator_user_id'] == str(target_id)
+
+
+@pytest.mark.parametrize('kind', ['missing', 'inactive'])
+def test_cli_rejects_missing_or_inactive_operator(admin_database, kind):
+    url, factory = admin_database
+    with factory.begin() as session:
+        target = _user(); session.add(target); session.flush(); target_id = target.id
+        if kind == 'inactive':
+            operator = _user(active=False); session.add(operator); session.flush()
+            operator_id = operator.id
+        else:
+            operator_id = uuid4()
+    result = _invoke(url, target_id, operator_user_id=operator_id)
+    assert result.exit_code != 0
+    assert json.loads(result.stderr)['error_code'] == f'operator_{kind}'
+    with factory() as session:
+        assert session.get(User, target_id).role == 'reader'
+        assert session.scalar(select(SourceAuditEvent)) is None
 
 
 def test_cli_is_idempotent_for_sole_administrator_and_refuses_another(admin_database):
@@ -209,7 +254,7 @@ def test_sqlite_bootstrap_serializes_concurrent_attempts(admin_database):
         try:
             with factory() as session:
                 session.connection().exec_driver_sql('BEGIN IMMEDIATE')
-                event = _assign(session, target_id)
+                event = _assign(session, target_id, target_id)
                 session.commit()
                 return event is not None
         except ValueError:
@@ -225,7 +270,7 @@ def test_sqlite_bootstrap_serializes_concurrent_attempts(admin_database):
 
 def test_assignment_lock_compiles_for_postgresql():
     from app.research_library.admin_cli import locked_user_query
-    sql = str(locked_user_query(uuid4()).compile(dialect=__import__('sqlalchemy').dialects.postgresql.dialect()))
+    sql = str(locked_user_query(uuid4(), uuid4()).compile(dialect=__import__('sqlalchemy').dialects.postgresql.dialect()))
     assert 'FOR UPDATE' in sql
 
 
@@ -251,7 +296,8 @@ def test_malformed_user_id_is_fixed_json_and_never_echoed(monkeypatch):
     )
     result = runner.invoke(app, [
         'assign-initial-administrator', '--database-url', 'sqlite:///unused.db',
-        '--user-id', secret, '--confirmation', 'GRANT-ADMINISTRATOR',
+        '--user-id', secret, '--operator-user-id', str(uuid4()),
+        '--confirmation', 'GRANT-ADMINISTRATOR',
     ])
     assert result.exit_code != 0
     assert json.loads(result.stderr) == {
@@ -259,6 +305,29 @@ def test_malformed_user_id_is_fixed_json_and_never_echoed(monkeypatch):
         'error_code': 'invalid_user_id',
         'message': 'User ID must be a valid UUID',
     }
+    assert secret not in result.output
+    assert not engine_called
+
+
+def test_malformed_operator_user_id_is_fixed_json_and_never_echoed(monkeypatch):
+    secret = 'operator-secret@example.test?token=hunter2'
+    engine_called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal engine_called
+        engine_called = True
+        raise AssertionError('engine must not be called')
+
+    monkeypatch.setattr(
+        'app.research_library.admin_cli.create_database_engine', fail_if_called
+    )
+    result = runner.invoke(app, [
+        'assign-initial-administrator', '--database-url', 'sqlite:///unused.db',
+        '--user-id', str(uuid4()), '--operator-user-id', secret,
+        '--confirmation', 'GRANT-ADMINISTRATOR',
+    ])
+    assert result.exit_code != 0
+    assert json.loads(result.stderr)['error_code'] == 'invalid_operator_user_id'
     assert secret not in result.output
     assert not engine_called
 
@@ -303,10 +372,10 @@ def test_database_setup_failure_is_generic_and_does_not_expose_url(monkeypatch):
     assert 'owner@example.test' not in combined
 
 
-def test_engine_disposal_failure_is_generic_and_never_echoes_exception(
+def test_post_commit_disposal_failure_reports_truthful_success_warning(
     admin_database, monkeypatch
 ):
-    _, factory = admin_database
+    url, factory = admin_database
     engine = factory.kw['bind']
     with factory.begin() as session:
         target = _user(); session.add(target); session.flush(); target_id = target.id
@@ -316,13 +385,51 @@ def test_engine_disposal_failure_is_generic_and_never_echoes_exception(
     )
     monkeypatch.setattr(engine, 'dispose', lambda: (_ for _ in ()).throw(RuntimeError(injected)))
     result = _invoke('sqlite:///not-used.db', target_id)
-    assert result.exit_code != 0
-    assert json.loads(result.stderr) == {
-        'changed': False,
-        'error_code': 'operator_failure',
-        'message': 'Administrator assignment failed safely',
-    }
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload['changed'] is True
+    assert UUID(payload['audit_event_id'])
+    assert payload['warning_code'] == 'engine_cleanup_failed'
+    assert result.stderr == ''
     assert injected not in result.output
+    clean_engine = create_engine(url)
+    clean_factory = create_session_factory(clean_engine)
+    with clean_factory() as session:
+        assert session.get(User, target_id).role == 'administrator'
+        assert len(session.scalars(select(SourceAuditEvent)).all()) == 1
+    clean_engine.dispose()
+
+
+def test_unsupported_database_dialect_is_rejected_before_session_or_mutation(
+    admin_database, monkeypatch
+):
+    url, factory = admin_database
+    engine = factory.kw['bind']
+    with factory.begin() as session:
+        target = _user(); session.add(target); session.flush(); target_id = target.id
+    monkeypatch.setattr(
+        'app.research_library.admin_cli.create_database_engine', lambda settings: engine
+    )
+    monkeypatch.setattr(engine.dialect, 'name', 'mysql')
+    session_called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal session_called
+        session_called = True
+        raise AssertionError('session factory must not be called')
+
+    monkeypatch.setattr(
+        'app.research_library.admin_cli.create_session_factory', fail_if_called
+    )
+    result = _invoke('mysql://not-used', target_id)
+    assert result.exit_code != 0
+    assert json.loads(result.stderr)['error_code'] == 'unsupported_database'
+    assert not session_called
+    clean_engine = create_engine(url)
+    with create_session_factory(clean_engine)() as session:
+        assert session.get(User, target_id).role == 'reader'
+        assert session.scalar(select(SourceAuditEvent)) is None
+    clean_engine.dispose()
 
 
 def test_success_output_is_still_machine_readable_and_secret_free(admin_database):

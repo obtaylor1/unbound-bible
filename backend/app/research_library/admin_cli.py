@@ -40,22 +40,34 @@ def _fail(code: str, message: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
-def locked_user_query(user_id: UUID):
+def locked_user_query(target_user_id: UUID, operator_user_id: UUID):
     return (
         select(User)
-        .where(or_(User.id == user_id, User.role == 'administrator'))
+        .where(or_(
+            User.id.in_((target_user_id, operator_user_id)),
+            User.role == 'administrator',
+        ))
         .order_by(User.id)
         .with_for_update()
     )
 
 
-def _assign(session: Session, target_id: UUID):
+def _assign(session: Session, target_id: UUID, operator_id: UUID):
     dialect = session.get_bind().dialect.name
     if dialect == 'postgresql':
         session.execute(text('SELECT pg_advisory_xact_lock(731150015)'))
-    users = session.scalars(locked_user_query(target_id)).all()
+    users = session.scalars(locked_user_query(target_id, operator_id)).all()
     target = next((user for user in users if user.id == target_id), None)
+    operator = next((user for user in users if user.id == operator_id), None)
     administrators = [user for user in users if user.role == 'administrator']
+    if operator is None:
+        raise AdministratorAssignmentError(
+            'operator_missing', 'Operator user was not found'
+        )
+    if not operator.is_active:
+        raise AdministratorAssignmentError(
+            'operator_inactive', 'Operator user is inactive'
+        )
     if target is None:
         raise AdministratorAssignmentError(
             'target_not_found', 'Target user was not found'
@@ -75,17 +87,21 @@ def _assign(session: Session, target_id: UUID):
         raise AdministratorAssignmentError(
             'target_not_reader', 'Target user must have the reader role'
         )
-    prior = {'target_user_id': str(target.id), 'role': 'reader'}
-    resulting = {
+    audit_identity = {
+        'operation': 'deployment_bootstrap',
+        'operator_user_id': str(operator.id),
         'target_user_id': str(target.id),
+    }
+    prior = {**audit_identity, 'role': 'reader'}
+    resulting = {
+        **audit_identity,
         'role': 'administrator',
-        'bootstrap_actor': 'target_account',
     }
     target.role = 'administrator'
     session.flush()
     return append_source_audit_event(
         session,
-        actor_id=target.id,
+        actor_id=operator.id,
         action='initial_administrator_assigned',
         prior_state=prior,
         resulting_state=resulting,
@@ -96,6 +112,7 @@ def _assign(session: Session, target_id: UUID):
 def assign_initial_administrator(
     database_url: Annotated[str, typer.Option('--database-url')],
     user_id: Annotated[str, typer.Option('--user-id')],
+    operator_user_id: Annotated[str, typer.Option('--operator-user-id')],
     confirmation: Annotated[str, typer.Option('--confirmation')],
 ) -> None:
     if not database_url or not database_url.strip():
@@ -109,24 +126,36 @@ def assign_initial_administrator(
         target_id = UUID(user_id)
     except (ValueError, TypeError, AttributeError):
         _fail('invalid_user_id', 'User ID must be a valid UUID')
+    try:
+        operator_id = UUID(operator_user_id)
+    except (ValueError, TypeError, AttributeError):
+        _fail('invalid_operator_user_id', 'Operator user ID must be a valid UUID')
     engine = None
+    committed = False
     failure: tuple[str, str] | None = None
     payload: dict[str, object] | None = None
     try:
         engine = create_database_engine(Settings(
             environment='development', database_url=database_url.strip()
         ))
+        if engine.dialect.name not in {'sqlite', 'postgresql'}:
+            raise AdministratorAssignmentError(
+                'unsupported_database',
+                'Administrator bootstrap requires SQLite or PostgreSQL',
+            )
         factory = create_session_factory(engine)
         with factory() as session:
             if engine.dialect.name == 'sqlite':
                 session.connection().exec_driver_sql('BEGIN IMMEDIATE')
-                event = _assign(session, target_id)
+                event = _assign(session, target_id, operator_id)
                 session.commit()
             else:
                 with session.begin():
-                    event = _assign(session, target_id)
+                    event = _assign(session, target_id, operator_id)
+            committed = True
         payload = {
             'target_user_id': str(target_id),
+            'operator_user_id': str(operator_id),
             'changed': event is not None,
             'audit_event_id': str(event.id) if event is not None else None,
             'next_action': 'administrator_ready',
@@ -140,8 +169,13 @@ def assign_initial_administrator(
             try:
                 engine.dispose()
             except Exception:
-                failure = ('operator_failure', 'Administrator assignment failed safely')
-                payload = None
+                if committed and payload is not None:
+                    payload['warning_code'] = 'engine_cleanup_failed'
+                elif failure is None:
+                    failure = (
+                        'operator_failure',
+                        'Administrator assignment failed safely',
+                    )
     if failure is not None:
         _fail(*failure)
     typer.echo(json.dumps(payload, sort_keys=True))

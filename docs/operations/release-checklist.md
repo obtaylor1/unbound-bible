@@ -47,6 +47,7 @@ Public launch is blocked until at least one real participant aged 13–17 (with 
 
 ## Sign-off
 
+- [ ] Record and independently verify both explicit account IDs before running `assign-initial-administrator`: `--operator-user-id` identifies the audit actor and `--user-id` identifies the role-assignment target.
 - [ ] Remove the temporary `require_admin` compatibility alias only after every call site has migrated to `require_administrator` in a future release.
 
 | Role | Name | Decision (approve / block) | Date | Notes |
