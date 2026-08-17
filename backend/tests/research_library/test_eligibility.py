@@ -43,6 +43,8 @@ REASON_CASES = (
     ('attribution_missing', 'license', 'required_attribution_text', '   '),
 )
 
+ASCII_WHITESPACE_ONLY = (' ', '\t', '\n', '\r', '\f', '\v', ' \t\n\r\f\v ')
+
 
 @pytest.fixture
 def research_library_session(test_settings) -> Generator[Session, None, None]:
@@ -173,6 +175,69 @@ def test_fully_eligible_selected_publication_passes() -> None:
     )
 
 
+def test_unset_transient_identities_fail_closed_in_stable_order() -> None:
+    publication = SourcePublication(
+        version=1,
+        status='active',
+        validation_approved=True,
+        public_visibility=True,
+        source_checksum='a' * 64,
+        content_checksum='b' * 64,
+    )
+    edition = SourceEdition(
+        title='Unpersisted edition',
+        edition_label='1',
+        language='eng',
+        checksum='a' * 64,
+        locator_scheme='chapter_verse',
+    )
+    license_record = LicenseRecord(
+        license_name='Explicit permissions',
+        commercial_use_allowed=True,
+        display_allowed=True,
+        redistribution_allowed=True,
+        attribution_required=False,
+        reviewer_id=uuid4(),
+        verification_date=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+
+    assert evaluate_publication(publication, edition, license_record).reasons == (
+        'publication_not_selected',
+        'edition_mismatch',
+        'license_mismatch',
+    )
+
+
+@pytest.mark.parametrize(
+    ('target', 'attribute', 'expected_reasons'),
+    (
+        ('publication', 'id', ('publication_not_selected',)),
+        ('edition', 'active_publication_id', ('publication_not_selected',)),
+        ('publication', 'source_edition_id', ('edition_mismatch', 'license_mismatch')),
+        ('edition', 'id', ('edition_mismatch', 'license_mismatch')),
+        ('publication', 'license_record_id', ('license_mismatch',)),
+        ('license', 'id', ('license_mismatch',)),
+        ('license', 'source_edition_id', ('license_mismatch',)),
+    ),
+)
+def test_each_partial_null_identity_fails_closed(
+    target: str,
+    attribute: str,
+    expected_reasons: tuple[str, ...],
+) -> None:
+    publication, edition, license_record = _eligible_transient_graph()
+    selected_record = {
+        'publication': publication,
+        'edition': edition,
+        'license': license_record,
+    }[target]
+    setattr(selected_record, attribute, None)
+
+    assert evaluate_publication(
+        publication, edition, license_record
+    ).reasons == expected_reasons
+
+
 @pytest.mark.parametrize(
     ('reason', 'target', 'attribute', 'value'),
     REASON_CASES,
@@ -191,8 +256,13 @@ def test_each_failed_gate_has_its_stable_reason(
         }[target]
         setattr(selected_record, attribute, value)
 
+    expected_reasons = (
+        ('edition_mismatch', 'license_mismatch')
+        if reason == 'edition_mismatch'
+        else (reason,)
+    )
     assert evaluate_publication(publication, edition, license_record) == EligibilityDecision(
-        eligible=False, reasons=(reason,)
+        eligible=False, reasons=expected_reasons
     )
 
 
@@ -201,6 +271,28 @@ def test_attribution_not_required_needs_no_text_and_public_domain_is_irrelevant(
     license_record.attribution_required = False
     license_record.required_attribution_text = None
     license_record.is_public_domain = None
+
+    assert evaluate_publication(publication, edition, license_record).eligible is True
+
+
+@pytest.mark.parametrize('attribution_text', ASCII_WHITESPACE_ONLY)
+def test_each_ascii_whitespace_character_is_blank_attribution(
+    attribution_text: str,
+) -> None:
+    publication, edition, license_record = _eligible_transient_graph()
+    license_record.required_attribution_text = attribution_text
+
+    assert evaluate_publication(publication, edition, license_record).reasons == (
+        'attribution_missing',
+    )
+
+
+@pytest.mark.parametrize('attribution_text', (' \tReal text\n ', '\u00a0'))
+def test_attribution_with_text_after_ascii_whitespace_stripping_is_allowed(
+    attribution_text: str,
+) -> None:
+    publication, edition, license_record = _eligible_transient_graph()
+    license_record.required_attribution_text = attribution_text
 
     assert evaluate_publication(publication, edition, license_record).eligible is True
 
@@ -314,6 +406,21 @@ def test_sql_predicate_matches_python_evaluator_and_outer_join_excludes_missing_
             attribution_required=True,
             required_attribution_text='   ',
         ),
+        *[
+            _persist_graph(
+                session,
+                f'attribution-ascii-{index}',
+                attribution_required=True,
+                required_attribution_text=attribution_text,
+            )
+            for index, attribution_text in enumerate(ASCII_WHITESPACE_ONLY)
+        ],
+        _persist_graph(
+            session,
+            'attribution-text',
+            attribution_required=True,
+            required_attribution_text=' \tReal text\n\r\f\v ',
+        ),
     ]
     expected_ids = {
         publication.id
@@ -333,7 +440,7 @@ def test_sql_predicate_matches_python_evaluator_and_outer_join_excludes_missing_
         )
     )
 
-    assert actual_ids == expected_ids == {graphs[0][0].id}
+    assert actual_ids == expected_ids == {graphs[0][0].id, graphs[-1][0].id}
 
 
 def test_sql_predicate_contains_license_and_edition_identity_gates() -> None:

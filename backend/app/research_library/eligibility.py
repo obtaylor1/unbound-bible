@@ -8,6 +8,9 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.research_library.models import LicenseRecord, SourceEdition, SourcePublication
 
 
+ASCII_WHITESPACE = ' \t\n\r\f\v'
+
+
 @dataclass(frozen=True, slots=True)
 class EligibilityDecision:
     eligible: bool
@@ -28,9 +31,17 @@ def evaluate_publication(
 
     if publication.status != 'active':
         reasons.append('publication_not_active')
-    if source_edition.active_publication_id != publication.id:
+    if (
+        publication.id is None
+        or source_edition.active_publication_id is None
+        or source_edition.active_publication_id != publication.id
+    ):
         reasons.append('publication_not_selected')
-    if publication.source_edition_id != source_edition.id:
+    if (
+        publication.source_edition_id is None
+        or source_edition.id is None
+        or publication.source_edition_id != source_edition.id
+    ):
         reasons.append('edition_mismatch')
     if publication.validation_approved is not True:
         reasons.append('validation_not_approved')
@@ -41,8 +52,14 @@ def evaluate_publication(
         reasons.append('license_missing')
     else:
         if (
-            publication.license_record_id != license_record.id
+            publication.license_record_id is None
+            or license_record.id is None
+            or license_record.source_edition_id is None
+            or source_edition.id is None
+            or publication.source_edition_id is None
+            or publication.license_record_id != license_record.id
             or license_record.source_edition_id != source_edition.id
+            or license_record.source_edition_id != publication.source_edition_id
         ):
             reasons.append('license_mismatch')
         if license_record.reviewer_id is None or license_record.verification_date is None:
@@ -60,7 +77,9 @@ def evaluate_publication(
             reasons.append('attribution_requirement_unknown')
         elif (
             license_record.attribution_required is True
-            and not (license_record.required_attribution_text or '').strip()
+            and not (license_record.required_attribution_text or '').strip(
+                ASCII_WHITESPACE
+            )
         ):
             reasons.append('attribution_missing')
 
@@ -69,15 +88,32 @@ def evaluate_publication(
 
 def public_eligibility_predicate() -> ColumnElement[bool]:
     """Return the evaluator-equivalent gate for explicitly joined model tables."""
+    attribution_without_ascii_control_whitespace = (
+        LicenseRecord.required_attribution_text
+    )
+    for whitespace in ASCII_WHITESPACE[1:]:
+        attribution_without_ascii_control_whitespace = func.replace(
+            attribution_without_ascii_control_whitespace,
+            whitespace,
+            '',
+        )
+
     return and_(
         SourcePublication.status == 'active',
+        SourcePublication.id.is_not(None),
+        SourceEdition.active_publication_id.is_not(None),
         SourceEdition.active_publication_id == SourcePublication.id,
+        SourcePublication.source_edition_id.is_not(None),
+        SourceEdition.id.is_not(None),
         SourcePublication.source_edition_id == SourceEdition.id,
         SourcePublication.validation_approved.is_(True),
         SourcePublication.public_visibility.is_(True),
         SourcePublication.license_record_id.is_not(None),
+        LicenseRecord.id.is_not(None),
         SourcePublication.license_record_id == LicenseRecord.id,
+        LicenseRecord.source_edition_id.is_not(None),
         LicenseRecord.source_edition_id == SourceEdition.id,
+        LicenseRecord.source_edition_id == SourcePublication.source_edition_id,
         LicenseRecord.reviewer_id.is_not(None),
         LicenseRecord.verification_date.is_not(None),
         LicenseRecord.commercial_use_allowed.is_(True),
@@ -89,7 +125,10 @@ def public_eligibility_predicate() -> ColumnElement[bool]:
             and_(
                 LicenseRecord.attribution_required.is_(True),
                 LicenseRecord.required_attribution_text.is_not(None),
-                func.length(func.trim(LicenseRecord.required_attribution_text)) > 0,
+                func.length(
+                    func.trim(attribution_without_ascii_control_whitespace)
+                )
+                > 0,
             ),
         ),
     )
