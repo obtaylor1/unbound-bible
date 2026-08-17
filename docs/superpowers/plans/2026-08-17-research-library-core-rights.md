@@ -218,7 +218,7 @@ Keep `require_admin = require_administrator` temporarily for compatibility and a
 
 - [ ] Implement migration `0015_administrator_role.py`, revising `member -> reader` and `admin -> administrator`, setting the server default to `reader`, and adding a role check constraint.
 
-- [ ] Add a protected one-time operator command. It accepts `--user-id` and `--confirmation`, requires confirmation text `GRANT-ADMINISTRATOR`, refuses inactive/missing users, refuses to demote, and appends a `SourceAuditEvent` with actor, target user ID, previous role, and new role. It must not accept or inspect email addresses.
+- [ ] Add a protected one-time operator command. It accepts explicit `--operator-user-id`, `--user-id` (the target), `--database-url`, and `--confirmation`; requires confirmation text `GRANT-ADMINISTRATOR`; refuses inactive/missing users and unsupported database dialects; and never demotes an account. The audit actor is the supplied active operator, while prior/resulting state identifies the target and role transition. It must not accept or inspect email addresses.
 
 - [ ] Run `uv run pytest backend/tests/research_library/test_admin_roles.py backend/tests/auth -q` and confirm all pass.
 
