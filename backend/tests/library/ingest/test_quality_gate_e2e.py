@@ -70,16 +70,6 @@ def test_clean_migrated_database_supports_full_fixture_publication_lifecycle(
     try:
         with engine.begin() as connection:
             connection.execute(text('''
-                CREATE TABLE biblical_texts (
-                    id INTEGER PRIMARY KEY,
-                    book TEXT NOT NULL,
-                    chapter INTEGER NOT NULL,
-                    verse INTEGER NOT NULL,
-                    text TEXT NOT NULL,
-                    translation TEXT
-                )
-            '''))
-            connection.execute(text('''
                 INSERT INTO biblical_texts (book, chapter, verse, text, translation)
                 VALUES ('Genesis', 1, 1, 'Existing KJV text.', 'KJV')
             '''))
