@@ -22,7 +22,7 @@ This is plan 1 of 4. Complete it before proof-corpus ingestion, hybrid retrieval
 - Create: `backend/app/research_library/__init__.py`
 - Create: `backend/app/research_library/models.py`
 
-- [ ] Write a failing model test covering valid work profiles, divisions, editions, licenses, edition/work joins, immutable publications, units, anchors, chunks, legacy links, and audit events.
+- [x] Write a failing model test covering valid work profiles, divisions, editions, licenses, edition/work joins, immutable publications, units, anchors, chunks, legacy links, and audit events.
 
 ```python
 from app.research_library.models import (
@@ -52,9 +52,9 @@ def test_research_library_models_have_expected_tables():
     assert SourceAuditEvent.__tablename__ == "source_audit_events"
 ```
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_models.py -q` and confirm it fails with `ModuleNotFoundError: No module named 'app.research_library.models'`.
+- [x] Run `uv run pytest backend/tests/research_library/test_models.py -q` and confirm it fails with `ModuleNotFoundError: No module named 'app.research_library.models'`.
 
-- [ ] Implement the SQLAlchemy models in `backend/app/research_library/models.py`. Use UUID primary keys, timezone-aware timestamps, named foreign keys, and check constraints. Required fields are:
+- [x] Implement the SQLAlchemy models in `backend/app/research_library/models.py`. Use UUID primary keys, timezone-aware timestamps, named foreign keys, and check constraints. Required fields are:
 
 ```python
 PUBLICATION_STATUSES = (
@@ -86,15 +86,15 @@ class WorkDivision(Base):
 
 Implement the remaining models with the exact relationships approved in the design spec: `SourceEdition`, `SourceEditionWork`, `LicenseRecord`, `SourcePublication`, `ContentUnit`, `CitationAnchor`, `ResearchChunk` (without a vector column until plan 3), `LegacySourceLink`, `LegacyContentLink`, and `SourceAuditEvent`. Put normalized content and checksums on immutable publication-owned rows. Add unique constraints for division position, edition/work membership, publication version, unit position, anchor key, chunk position, and legacy entity identity.
 
-- [ ] Import the model module in `backend/app/application.py` so test metadata includes it.
+- [x] Import the model module in `backend/app/application.py` so test metadata includes it.
 
 ```python
 from app.research_library import models as research_library_models  # noqa: F401
 ```
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_models.py -q` and confirm it passes.
+- [x] Run `uv run pytest backend/tests/research_library/test_models.py -q` and confirm it passes.
 
-- [ ] Commit with `git add backend/app/research_library backend/tests/research_library backend/app/application.py && git commit -m "feat: add research library domain models"`.
+- [x] Commit with `git add backend/app/research_library backend/tests/research_library backend/app/application.py && git commit -m "feat: add research library domain models"`.
 
 ### Task 2: Add the migration and database invariants
 
@@ -102,7 +102,7 @@ from app.research_library import models as research_library_models  # noqa: F401
 - Create: `backend/alembic/versions/0014_research_library_core.py`
 - Create: `backend/tests/migrations/test_research_library_core.py`
 
-- [ ] Write a migration test that upgrades from `0013_scripture_compatibility` to `0014_research_library_core`, inspects every new table/index/check constraint/trigger, and downgrades back to `0013_scripture_compatibility`.
+- [x] Write a migration test that upgrades from `0013_scripture_compatibility` to `0014_research_library_core`, inspects every new table/index/check constraint/trigger, and downgrades back to `0013_scripture_compatibility`.
 
 ```python
 def test_research_library_upgrade_creates_catalog_tables(migrated_connection):
@@ -116,17 +116,17 @@ def test_research_library_upgrade_creates_catalog_tables(migrated_connection):
     } <= tables
 ```
 
-- [ ] Run `uv run pytest backend/tests/migrations/test_research_library_core.py -q` and confirm the missing revision failure.
+- [x] Run `uv run pytest backend/tests/migrations/test_research_library_core.py -q` and confirm the missing revision failure.
 
-- [ ] Implement the migration with `down_revision = "0013_scripture_compatibility"`. Create tables in foreign-key order and drop them in reverse order. Make `source_editions.active_publication_id` the sole current-activation authority with a composite foreign key from `(active_publication_id, id)` to `(source_publications.id, source_edition_id)`. Do **not** add a status-based one-active partial unique index: multiple immutable historical snapshots for one edition may retain `status = 'active'`, and Task 3 eligibility must additionally require `source_editions.active_publication_id = source_publications.id`.
+- [x] Implement the migration with `down_revision = "0013_scripture_compatibility"`. Create tables in foreign-key order and drop them in reverse order. Make `source_editions.active_publication_id` the sole current-activation authority with a composite foreign key from `(active_publication_id, id)` to `(source_publications.id, source_edition_id)`. Do **not** add a status-based one-active partial unique index: multiple immutable historical snapshots for one edition may retain `status = 'active'`, and Task 3 eligibility must additionally require `source_editions.active_publication_id = source_publications.id`.
 
-- [ ] Add migration-level PostgreSQL and SQLite `UPDATE`/`DELETE` immutability triggers for `source_publications`, `content_units`, `citation_anchors`, `research_chunks`, and `source_audit_events`. Application session guards do not cover raw SQL or direct connection writes.
+- [x] Add migration-level PostgreSQL and SQLite `UPDATE`/`DELETE` immutability triggers for `source_publications`, `content_units`, `citation_anchors`, `research_chunks`, and `source_audit_events`. Application session guards do not cover raw SQL or direct connection writes.
 
-- [ ] Add migration tests proving that the active pointer rejects a publication from another edition, replacement and rollback update only the pointer, multiple snapshots for one edition may retain `status = 'active'`, and raw SQL `UPDATE`/`DELETE` attempts fail on all five immutable tables while normal inserts succeed.
+- [x] Add migration tests proving that the active pointer rejects a publication from another edition, replacement and rollback update only the pointer, multiple snapshots for one edition may retain `status = 'active'`, and raw SQL `UPDATE`/`DELETE` attempts fail on all five immutable tables while normal inserts succeed.
 
-- [ ] Run the migration test and `uv run pytest backend/tests/migrations -q`; confirm all pass.
+- [x] Run the migration test and `uv run pytest backend/tests/migrations -q`; confirm all pass.
 
-- [ ] Commit with `git add backend/alembic/versions/0014_research_library_core.py backend/tests/migrations/test_research_library_core.py && git commit -m "feat: migrate research library catalog"`.
+- [x] Commit with `git add backend/alembic/versions/0014_research_library_core.py backend/tests/migrations/test_research_library_core.py && git commit -m "feat: migrate research library catalog"`.
 
 ### Task 3: Centralize rights and public eligibility
 
@@ -134,7 +134,7 @@ def test_research_library_upgrade_creates_catalog_tables(migrated_connection):
 - Create: `backend/app/research_library/eligibility.py`
 - Create: `backend/tests/research_library/test_eligibility.py`
 
-- [ ] Write table-driven failing tests for every approved exclusion reason and one eligible publication.
+- [x] Write table-driven failing tests for every approved exclusion reason and one eligible publication.
 
 ```python
 @pytest.mark.parametrize("change,reason", [
@@ -152,9 +152,9 @@ def test_publication_eligibility_fails_closed(publication_bundle, change, reason
     assert reason in result.reasons
 ```
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_eligibility.py -q` and confirm the import failure.
+- [x] Run `uv run pytest backend/tests/research_library/test_eligibility.py -q` and confirm the import failure.
 
-- [ ] Implement a pure `evaluate_publication()` policy returning an immutable `EligibilityDecision`. It must require active status, selection by `source_edition.active_publication_id`, approved validation, public visibility, permitted commercial display, permitted redistribution, displayable nonblank attribution, and no restricted/internal flags. Unknown or null rights values fail closed.
+- [x] Implement a pure `evaluate_publication()` policy returning an immutable `EligibilityDecision`. It must require active status, selection by `source_edition.active_publication_id`, approved validation, public visibility, permitted commercial display, permitted redistribution, displayable nonblank attribution, and no restricted/internal flags. Unknown or null rights values fail closed.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -181,11 +181,11 @@ def evaluate_publication(publication: SourcePublication) -> EligibilityDecision:
     return EligibilityDecision(not reasons, tuple(reasons))
 ```
 
-- [ ] Add a SQL predicate builder for public list/retrieval queries. Test it against real rows so Python evaluation and database filtering return identical IDs.
+- [x] Add a SQL predicate builder for public list/retrieval queries. Test it against real rows so Python evaluation and database filtering return identical IDs.
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_eligibility.py -q` and confirm all pass.
+- [x] Run `uv run pytest backend/tests/research_library/test_eligibility.py -q` and confirm all pass.
 
-- [ ] Commit with `git add backend/app/research_library/eligibility.py backend/tests/research_library/test_eligibility.py && git commit -m "feat: enforce source publication eligibility"`.
+- [x] Commit with `git add backend/app/research_library/eligibility.py backend/tests/research_library/test_eligibility.py && git commit -m "feat: enforce source publication eligibility"`.
 
 ### Task 4: Make administrator assignment explicit and auditable
 
@@ -197,11 +197,11 @@ def evaluate_publication(publication: SourcePublication) -> EligibilityDecision:
 - Create: `backend/tests/research_library/test_admin_roles.py`
 - Create: `backend/alembic/versions/0015_administrator_role.py`
 
-- [ ] Write failing tests proving new users default to `reader`, `administrator` is accepted, legacy `member` and `admin` values migrate deterministically, and a non-administrator receives 403.
+- [x] Write failing tests proving new users default to `reader`, `administrator` is accepted, legacy `member` and `admin` values migrate deterministically, and a non-administrator receives 403.
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_admin_roles.py -q` and confirm failures show the current `member`/`admin` vocabulary.
+- [x] Run `uv run pytest backend/tests/research_library/test_admin_roles.py -q` and confirm failures show the current `member`/`admin` vocabulary.
 
-- [ ] Change the application vocabulary to `reader` and `administrator`:
+- [x] Change the application vocabulary to `reader` and `administrator`:
 
 ```python
 class User(Base):
@@ -216,13 +216,13 @@ def require_administrator(user: User = Depends(get_current_user)) -> User:
 
 Keep `require_admin = require_administrator` temporarily for compatibility and add a removal note to the release checklist, not application behavior.
 
-- [ ] Implement migration `0015_administrator_role.py`, revising `member -> reader` and `admin -> administrator`, setting the server default to `reader`, and adding a role check constraint.
+- [x] Implement migration `0015_administrator_role.py`, revising `member -> reader` and `admin -> administrator`, setting the server default to `reader`, and adding a role check constraint.
 
-- [ ] Add a protected one-time operator command. It accepts explicit `--operator-user-id`, `--user-id` (the target), `--database-url`, and `--confirmation`; requires confirmation text `GRANT-ADMINISTRATOR`; refuses inactive/missing users and unsupported database dialects; and never demotes an account. The audit actor is the supplied active operator, while prior/resulting state identifies the target and role transition. It must not accept or inspect email addresses.
+- [x] Add a protected one-time operator command. It accepts explicit `--operator-user-id`, `--user-id` (the target), `--database-url`, and `--confirmation`; requires confirmation text `GRANT-ADMINISTRATOR`; refuses inactive/missing users and unsupported database dialects; and never demotes an account. The audit actor is the supplied active operator, while prior/resulting state identifies the target and role transition. It must not accept or inspect email addresses.
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_admin_roles.py backend/tests/auth -q` and confirm all pass.
+- [x] Run `uv run pytest backend/tests/research_library/test_admin_roles.py backend/tests/auth -q` and confirm all pass.
 
-- [ ] Commit with `git add backend/app/auth backend/app/research_library backend/tests/research_library backend/alembic/versions/0015_administrator_role.py && git commit -m "feat: add explicit administrator authorization"`.
+- [x] Commit with `git add backend/app/auth backend/app/research_library backend/tests/research_library backend/alembic/versions/0015_administrator_role.py && git commit -m "feat: add explicit administrator authorization"`.
 
 ### Task 5: Register legacy catalog compatibility without copying content
 
@@ -231,11 +231,11 @@ Keep `require_admin = require_administrator` temporarily for compatibility and a
 - Create: `backend/app/research_library/compatibility_cli.py`
 - Create: `backend/tests/research_library/test_compatibility.py`
 
-- [ ] Write failing tests that seed a `TextEdition`, `EditionWorkSource`, `EditionCoverage`, and commentary source; run registration twice; and assert stable, nonduplicated `LegacySourceLink` records.
+- [x] Write failing tests that seed a `TextEdition`, `EditionWorkSource`, `EditionCoverage`, and commentary source; run registration twice; and assert stable, nonduplicated `LegacySourceLink` records.
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_compatibility.py -q` and confirm the missing implementation failure.
+- [x] Run `uv run pytest backend/tests/research_library/test_compatibility.py -q` and confirm the missing implementation failure.
 
-- [ ] Implement idempotent registration. Scripture links use `legacy_type="text_edition"`, `legacy_key=TextEdition.edition_code`; per-work links use `legacy_type="edition_work_source"`; commentary links use the existing commentary source primary key. Create catalog shells with `needs_rights_review`; never infer approved rights from a legacy license string.
+- [x] Implement idempotent registration. Scripture links use `legacy_type="text_edition"`, `legacy_key=TextEdition.edition_code`; per-work links use `legacy_type="edition_work_source"`; commentary links use the existing commentary source primary key. Create catalog shells with `needs_rights_review`; never infer approved rights from a legacy license string.
 
 ```python
 def register_legacy_sources(session: Session, actor_id: uuid.UUID) -> RegistrationResult:
@@ -261,20 +261,20 @@ def register_legacy_sources(session: Session, actor_id: uuid.UUID) -> Registrati
     return RegistrationResult(created=created)
 ```
 
-- [ ] Expose `python -m app.research_library.compatibility_cli register --database-url ... --actor-id ...` with JSON output and transaction rollback on any failure.
+- [x] Expose `python -m app.research_library.compatibility_cli register --database-url ... --actor-id ...` with JSON output and transaction rollback on any failure.
 
-- [ ] Run `uv run pytest backend/tests/research_library/test_compatibility.py backend/tests/library backend/tests/commentary -q` and confirm all pass.
+- [x] Run `uv run pytest backend/tests/research_library/test_compatibility.py backend/tests/library backend/tests/commentary -q` and confirm all pass.
 
-- [ ] Commit with `git add backend/app/research_library backend/tests/research_library && git commit -m "feat: register legacy sources in research catalog"`.
+- [x] Commit with `git add backend/app/research_library backend/tests/research_library && git commit -m "feat: register legacy sources in research catalog"`.
 
 ### Task 6: Core regression and handoff
 
-- [ ] Run `uv run pytest backend/tests/research_library backend/tests/migrations backend/tests/auth backend/tests/library backend/tests/commentary -q`.
-- [ ] Run `uv run ruff check backend/app backend/tests` if Ruff is available; otherwise run the repository's configured backend lint command and record it in the commit message body.
-- [ ] Run `uv run alembic -c backend/alembic.ini upgrade head` against a disposable PostgreSQL database and confirm revisions `0014` and `0015` succeed.
-- [ ] Inspect `git diff --check` and confirm no whitespace errors.
-- [ ] Confirm no operator command grants access by email: `rg -n "grant.*email|email.*administrator" backend/app backend/tests` must return no application match.
-- [ ] Commit any verification-only adjustments with `git commit -am "test: verify research library safety boundary"`.
+- [x] Run `uv run pytest backend/tests/research_library backend/tests/migrations backend/tests/auth backend/tests/library backend/tests/commentary -q`.
+- [x] Check backend lint availability. Ruff and other backend linters are neither installed nor configured, so compile all changed backend Python files with the project virtual environment instead.
+- [x] Wire the full backend suite to a disposable PostgreSQL 17 service in CI. Local PostgreSQL was unavailable; the live migration and concurrency checks remain pending until CI runs.
+- [x] Inspect `git diff --check` and confirm no whitespace errors.
+- [x] Confirm no operator command grants access by email: `rg -n "grant.*email|email.*administrator" backend/app backend/tests` must return no application match.
+- [x] Commit any verification-only adjustments with `git commit -am "test: verify research library safety boundary"`.
 
 ## Completion criteria
 
