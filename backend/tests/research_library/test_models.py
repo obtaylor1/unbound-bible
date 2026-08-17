@@ -9,6 +9,7 @@ from app.database import Base, create_database_engine, create_session_factory
 from app.library.models import LibraryWork
 from app.research_library.models import (
     PUBLICATION_STATUSES,
+    STORED_SOURCE_CLASSIFICATIONS,
     CitationAnchor,
     ContentUnit,
     ImmutableResearchLibraryRecordError,
@@ -22,6 +23,22 @@ from app.research_library.models import (
     SourceEditionWork,
     SourcePublication,
     WorkDivision,
+)
+
+
+APPROVED_STORED_CLASSIFICATIONS = (
+    'canonical_scripture',
+    'ethiopian_canon',
+    'deuterocanonical_scripture',
+    'ancient_biblical_translation',
+    'ancient_jewish_literature',
+    'dead_sea_scroll_manuscript',
+    'ancient_historical_source',
+    'early_christian_writing',
+    'jewish_tradition',
+    'church_tradition',
+    'archaeology',
+    'modern_scholarship',
 )
 
 
@@ -170,7 +187,7 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
         work_id=work.id,
         short_title='1 En.',
         short_description='Ancient Jewish apocalyptic work.',
-        source_classification='primary_text',
+        source_classification='ancient_jewish_literature',
         hierarchy_level='work',
         traditions=['Ethiopian Orthodox', 'Second Temple Jewish'],
         canonical_statuses=['canonical', 'noncanonical_in_other_traditions'],
@@ -295,7 +312,7 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
         citation_anchor_id=citation.id,
         ordinal=1,
         boundary_type='verse',
-        classification='primary_text',
+        classification='ancient_jewish_literature',
         hierarchy_level='verse',
         language='eng',
         content_digest='d' * 64,
@@ -334,103 +351,73 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
 
 
 @pytest.mark.parametrize(
-    ('model', 'values'),
+    ('case', 'constraint_name'),
     [
-        (WorkDivision, {'division_type': 'page'}),
-        (WorkDivision, {'ordinal': 0}),
-        (SourcePublication, {'status': 'draft'}),
-        (SourcePublication, {'version': 0}),
-        (ContentUnit, {'direction': 'sideways'}),
-        (ContentUnit, {'textual_certainty': 'ai_guess'}),
-        (ResearchChunk, {'classification': 'ai_synthesis'}),
-        (ResearchChunk, {'ordinal': 0}),
+        ('division_type', 'ck_work_divisions_division_type'),
+        ('division_ordinal', 'ck_work_divisions_ordinal_positive'),
+        ('publication_status', 'ck_source_publications_status'),
+        ('publication_version', 'ck_source_publications_version_positive'),
+        ('content_direction', 'ck_content_units_direction'),
+        ('textual_certainty', 'ck_content_units_textual_certainty'),
+        ('chunk_classification', 'ck_research_chunks_classification'),
+        ('chunk_ordinal', 'ck_research_chunks_ordinal_positive'),
     ],
 )
 def test_research_library_models_reject_invalid_controlled_values(
     research_library_session: Session,
-    model: type,
-    values: dict,
+    case: str,
+    constraint_name: str,
 ) -> None:
     session = research_library_session
-    work = LibraryWork(id='constraint-work', title='Constraint Work')
-    edition = SourceEdition(
-        title='Constraint Edition',
-        edition_label='1',
-        language='eng',
-        checksum='e' * 64,
-        locator_scheme='chapter_verse',
-    )
-    session.add_all([work, edition])
-    session.flush()
-    division = WorkDivision(
-        work_id=work.id,
-        division_type='chapter',
-        label='Chapter 1',
-        normalized_locator='1',
-        canonical_key='constraint-work.1',
-        ordinal=1,
-    )
-    session.add(division)
-    session.flush()
-    publication = SourcePublication(
-        source_edition_id=edition.id,
-        version=1,
-        status='verified',
-        validation_approved=True,
-        public_visibility=False,
-        source_checksum='e' * 64,
-        content_checksum='f' * 64,
-    )
-    session.add(publication)
-    session.flush()
+    graph = _make_scope_graph(session, f'controlled-{case}')
 
-    defaults = {
-        WorkDivision: {
-            'work_id': work.id,
-            'division_type': 'verse',
-            'label': 'Verse 1',
-            'normalized_locator': '1:1',
-            'canonical_key': 'constraint-work.1.1',
-            'ordinal': 1,
-        },
-        SourcePublication: {
-            'source_edition_id': edition.id,
-            'version': 2,
-            'status': 'verified',
-            'validation_approved': True,
-            'public_visibility': False,
-            'source_checksum': 'e' * 64,
-            'content_checksum': 'f' * 64,
-        },
-        ContentUnit: {
-            'source_publication_id': publication.id,
-            'work_division_id': division.id,
-            'language': 'eng',
-            'script': 'Latn',
-            'direction': 'ltr',
-            'ordinal': 1,
-            'normalized_text': 'Text',
-            'source_locator': '1:1',
-            'textual_certainty': 'visible_text',
-            'checksum': '1' * 64,
-        },
-        ResearchChunk: {
-            'source_edition_id': edition.id,
-            'source_publication_id': publication.id,
-            'work_id': work.id,
-            'work_division_id': division.id,
-            'ordinal': 1,
-            'boundary_type': 'verse',
-            'classification': 'primary_text',
-            'hierarchy_level': 'verse',
-            'language': 'eng',
-            'content_digest': '2' * 64,
-            'text_content': 'Text',
-        },
-    }
-    invalid = {**defaults[model], **values}
-    session.add(model(**invalid))
-    with pytest.raises(IntegrityError):
+    if case.startswith('division_'):
+        record = WorkDivision(
+            work_id=graph['work'].id,
+            parent_id=graph['division'].id,
+            division_type='page' if case == 'division_type' else 'verse',
+            label='Invalid division',
+            normalized_locator=f'invalid-{case}',
+            canonical_key=f"{graph['work'].id}.invalid-{case}",
+            ordinal=0 if case == 'division_ordinal' else 1,
+        )
+    elif case.startswith('publication_'):
+        record = SourcePublication(
+            source_edition_id=graph['edition'].id,
+            license_record_id=graph['license'].id,
+            version=0 if case == 'publication_version' else 2,
+            status='draft' if case == 'publication_status' else 'verified',
+            validation_approved=True,
+            public_visibility=False,
+            source_checksum='1' * 64,
+            content_checksum='2' * 64,
+        )
+    elif case.startswith('content_') or case == 'textual_certainty':
+        record = ContentUnit(
+            source_publication_id=graph['publication'].id,
+            work_division_id=graph['division'].id,
+            language='eng',
+            script='Latn',
+            direction='sideways' if case == 'content_direction' else 'ltr',
+            ordinal=2,
+            normalized_text='Otherwise valid text',
+            source_locator='1:2',
+            textual_certainty='ai_guess' if case == 'textual_certainty' else 'visible_text',
+            checksum='3' * 64,
+        )
+    else:
+        record = _chunk_for_graph(
+            graph,
+            classification=(
+                'ai_synthesis'
+                if case == 'chunk_classification'
+                else 'ancient_jewish_literature'
+            ),
+            ordinal=0 if case == 'chunk_ordinal' else 1,
+        )
+    session.add(record)
+
+    with pytest.raises(IntegrityError, match=constraint_name):
         session.flush()
 
 
@@ -449,8 +436,60 @@ def test_work_profile_rejects_ai_synthesis_as_a_stored_classification(
         original_languages=[],
     ))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match='ck_research_work_profiles_source_classification'):
         session.flush()
+
+
+@pytest.mark.parametrize('classification', APPROVED_STORED_CLASSIFICATIONS)
+def test_work_profile_accepts_each_approved_stored_classification(
+    research_library_session: Session,
+    classification: str,
+) -> None:
+    session = research_library_session
+    work = LibraryWork(id=f'profile-{classification}', title=classification)
+    session.add(work)
+    session.flush()
+    profile = ResearchWorkProfile(
+        work_id=work.id,
+        source_classification=classification,
+        hierarchy_level='work',
+        traditions=[],
+        canonical_statuses=[],
+        original_languages=[],
+    )
+    session.add(profile)
+    session.flush()
+
+    assert profile.source_classification == classification
+
+
+@pytest.mark.parametrize('classification', APPROVED_STORED_CLASSIFICATIONS)
+def test_chunk_accepts_each_approved_stored_classification(
+    research_library_session: Session,
+    classification: str,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, f'chunk-{classification}')
+    chunk = _chunk_for_graph(graph, classification=classification)
+    session.add(chunk)
+    session.flush()
+
+    assert chunk.classification == classification
+
+
+def test_chunk_rejects_ai_synthesis_as_a_stored_classification(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'chunk-ai-synthesis')
+    session.add(_chunk_for_graph(graph, classification='ai_synthesis'))
+
+    with pytest.raises(IntegrityError, match='ck_research_chunks_classification'):
+        session.flush()
+
+
+def test_stored_classification_vocabulary_matches_the_approved_design() -> None:
+    assert STORED_SOURCE_CLASSIFICATIONS == APPROVED_STORED_CLASSIFICATIONS
 
 
 def test_division_parent_must_belong_to_the_same_work(
@@ -550,7 +589,7 @@ def test_chunk_links_must_describe_one_consistent_source_chain(
         citation_anchor_id=second['citation'].id,
         ordinal=1,
         boundary_type='verse',
-        classification='primary_text',
+        classification='ancient_jewish_literature',
         hierarchy_level='verse',
         language='eng',
         content_digest='4' * 64,
@@ -578,7 +617,7 @@ def _make_immutable_record(session: Session, record_kind: str):
             citation_anchor_id=graph['citation'].id,
             ordinal=1,
             boundary_type='verse',
-            classification='primary_text',
+            classification='ancient_jewish_literature',
             hierarchy_level='verse',
             language='eng',
             content_digest='6' * 64,
@@ -656,7 +695,7 @@ def _chunk_for_graph(graph: dict, **overrides) -> ResearchChunk:
         'citation_anchor_id': graph['citation'].id,
         'ordinal': 1,
         'boundary_type': 'verse',
-        'classification': 'primary_text',
+        'classification': 'ancient_jewish_literature',
         'hierarchy_level': 'verse',
         'language': 'eng',
         'content_digest': '7' * 64,
@@ -675,7 +714,7 @@ def test_work_profile_is_one_to_one_with_library_work(
     session.add_all([
         ResearchWorkProfile(
             work_id='one-profile',
-            source_classification='primary_text',
+            source_classification='canonical_scripture',
             hierarchy_level='work',
             traditions=[],
             canonical_statuses=[],
@@ -683,7 +722,7 @@ def test_work_profile_is_one_to_one_with_library_work(
         ),
         ResearchWorkProfile(
             work_id='one-profile',
-            source_classification='translation',
+            source_classification='ethiopian_canon',
             hierarchy_level='work',
             traditions=[],
             canonical_statuses=[],

@@ -56,15 +56,18 @@ TEXTUAL_CERTAINTIES = (
 )
 
 STORED_SOURCE_CLASSIFICATIONS = (
-    'primary_text',
-    'translation',
-    'commentary',
-    'critical_edition',
-    'manuscript',
-    'reference_work',
-    'secondary_source',
-    'dataset',
-    'image',
+    'canonical_scripture',
+    'ethiopian_canon',
+    'deuterocanonical_scripture',
+    'ancient_biblical_translation',
+    'ancient_jewish_literature',
+    'dead_sea_scroll_manuscript',
+    'ancient_historical_source',
+    'early_christian_writing',
+    'jewish_tradition',
+    'church_tradition',
+    'archaeology',
+    'modern_scholarship',
 )
 
 
