@@ -407,9 +407,24 @@ def test_postgresql_offline_upgrade_and_downgrade_execute_real_revision_paths():
         normalized_upgrade.index(f"createtable{table_name}") for table_name in TABLE_ORDER
     ]
     assert create_positions == sorted(create_positions)
-    active_fk = "fk_source_editions_active_publication_same_edition"
-    assert normalized_upgrade.index("createtablesource_editions") < normalized_upgrade.index(active_fk)
-    assert normalized_upgrade.index("createtablesource_publications") < normalized_upgrade.index(active_fk)
+    active_fk_statement = (
+        "altertablesource_editionsaddconstraint"
+        "fk_source_editions_active_publication_same_edition"
+        "foreignkey(active_publication_id,id)"
+        "referencessource_publications(id,source_edition_id)ondeleterestrict"
+    )
+    active_fk_position = normalized_upgrade.index(active_fk_statement)
+    assert normalized_upgrade.index("createtablesource_editions") < active_fk_position
+    assert normalized_upgrade.index("createtablesource_publications") < active_fk_position
+    for dependent_table in (
+        "content_units",
+        "citation_anchors",
+        "research_chunks",
+        "source_audit_events",
+    ):
+        assert active_fk_position < normalized_upgrade.index(
+            f"createtable{dependent_table}"
+        )
     assert "whereparent_idisnull" in normalized_upgrade
     assert "whereparent_idisnotnull" in normalized_upgrade
 
@@ -418,11 +433,15 @@ def test_postgresql_offline_upgrade_and_downgrade_execute_real_revision_paths():
     )
     assert "usingerrcode='55000'" in normalized_upgrade
     for table_name in IMMUTABLE_TABLES:
-        trigger = (
+        complete_trigger = (
             f"createtriggertrg_rl_immutable_{table_name}beforeupdateordelete"
-            f"on{table_name}"
+            f"on{table_name}foreachrowexecutefunction"
+            "research_library_reject_immutable_dml()"
         )
-        assert function_position < normalized_upgrade.index(trigger)
+        trigger_position = normalized_upgrade.index(complete_trigger)
+        assert normalized_upgrade.index(f"createtable{table_name}") < trigger_position
+        assert function_position < trigger_position
+        assert active_fk_position < trigger_position
 
     trigger_drop_positions = [
         normalized_downgrade.index(f"droptriggerifexiststrg_rl_immutable_{table_name}")

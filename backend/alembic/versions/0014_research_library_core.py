@@ -94,15 +94,16 @@ def upgrade() -> None:
     dialect_name = bind.dialect.name
     for table_name in TABLE_ORDER:
         _table(table_name).create(bind)
+        if dialect_name == "postgresql" and table_name == "source_publications":
+            op.create_foreign_key(
+                ACTIVE_POINTER_FK,
+                "source_editions",
+                "source_publications",
+                ["active_publication_id", "id"],
+                ["id", "source_edition_id"],
+                ondelete="RESTRICT",
+            )
     if dialect_name == "postgresql":
-        op.create_foreign_key(
-            ACTIVE_POINTER_FK,
-            "source_editions",
-            "source_publications",
-            ["active_publication_id", "id"],
-            ["id", "source_edition_id"],
-            ondelete="RESTRICT",
-        )
         _postgres_create_triggers()
     elif dialect_name == "sqlite":
         _sqlite_create_triggers()
