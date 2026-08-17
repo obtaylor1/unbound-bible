@@ -1,8 +1,9 @@
 import json
+from copy import deepcopy
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from typer.testing import CliRunner
 
 from app.auth.models import User
@@ -134,6 +135,20 @@ def _seed(session):
     session.flush()
     session.add_all([explicit, coverage_duplicate, coverage_only, older, newer])
     session.flush()
+    session.add(CommentaryEntry(
+        edition_id=newer.id,
+        work_id='genesis',
+        chapter=1,
+        verse_start=1,
+        verse_end=1,
+        entry_type='verse',
+        heading='Legacy heading',
+        body='Legacy commentary body that must never be copied.',
+        source_locator='legacy://ancient-notes/genesis/1/1',
+        row_checksum='3' * 64,
+        position=0,
+    ))
+    session.flush()
     return administrator
 
 
@@ -146,20 +161,33 @@ def _counts(session):
     return {model: session.scalar(select(func.count()).select_from(model)) for model in models}
 
 
+def _legacy_snapshot(session):
+    models = (
+        TextEdition,
+        EditionWorkSource,
+        EditionCoverage,
+        CommentarySource,
+        CommentaryEdition,
+        CommentaryEntry,
+    )
+    snapshot = {}
+    for model in models:
+        primary_key = model.__mapper__.primary_key
+        rows = session.scalars(select(model).order_by(*primary_key)).all()
+        snapshot[model.__tablename__] = tuple(
+            tuple(deepcopy(getattr(row, column.key)) for column in model.__table__.columns)
+            for row in rows
+        )
+    return snapshot
+
+
 def test_registers_scripture_commentary_and_work_union_without_rights_or_content(
     compatibility_database,
 ):
     _, factory = compatibility_database
     with factory.begin() as session:
         actor = _seed(session)
-        legacy_before = {
-            TextEdition: session.scalar(select(func.count()).select_from(TextEdition)),
-            EditionWorkSource: session.scalar(select(func.count()).select_from(EditionWorkSource)),
-            EditionCoverage: session.scalar(select(func.count()).select_from(EditionCoverage)),
-            CommentarySource: session.scalar(select(func.count()).select_from(CommentarySource)),
-            CommentaryEdition: session.scalar(select(func.count()).select_from(CommentaryEdition)),
-            CommentaryEntry: session.scalar(select(func.count()).select_from(CommentaryEntry)),
-        }
+        legacy_before = _legacy_snapshot(session)
         result = register_legacy_sources(session, actor.id)
 
         assert result.created_sources == 2
@@ -243,10 +271,7 @@ def test_registers_scripture_commentary_and_work_union_without_rights_or_content
         counts = _counts(session)
         assert counts[LicenseRecord] == counts[ContentUnit] == counts[CitationAnchor] == 0
         assert counts[ResearchChunk] == counts[LegacyContentLink] == 0
-        assert legacy_before == {
-            model: session.scalar(select(func.count()).select_from(model))
-            for model in legacy_before
-        }
+        assert legacy_before == _legacy_snapshot(session)
         audits = session.scalars(select(SourceAuditEvent).order_by(SourceAuditEvent.source_edition_id)).all()
         assert {event.action for event in audits} == {'legacy_source_registered'}
         for event in audits:
@@ -473,6 +498,64 @@ def test_cli_rolls_back_everything_when_audit_creation_fails(
         assert counts[SourcePublication] == 0
         assert counts[LegacySourceLink] == 0
         assert counts[SourceAuditEvent] == 0
+
+
+@pytest.mark.parametrize('missing_artifact', ['publication_shell', 'work_link'])
+def test_cli_changed_reports_every_recovery_write(
+    compatibility_database, missing_artifact
+):
+    url, factory = compatibility_database
+    with factory.begin() as session:
+        actor = _seed(session); actor_id = actor.id
+        register_legacy_sources(session, actor_id)
+        scripture_link = session.scalar(select(LegacySourceLink).where(
+            LegacySourceLink.legacy_type == 'text_edition'
+        ))
+        source_id = scripture_link.source_edition_id
+        if missing_artifact == 'publication_shell':
+            publication = session.scalar(select(SourcePublication).where(
+                SourcePublication.source_edition_id == source_id
+            ))
+            session.connection().execute(delete(SourceAuditEvent).where(
+                SourceAuditEvent.source_publication_id == publication.id
+            ))
+            session.connection().execute(delete(SourcePublication).where(
+                SourcePublication.id == publication.id
+            ))
+        else:
+            work_link = session.scalar(select(SourceEditionWork).where(
+                SourceEditionWork.source_edition_id == source_id
+            ).order_by(SourceEditionWork.work_id))
+            session.delete(work_link)
+
+    recovered = runner.invoke(app, [
+        'register', '--database-url', url, '--actor-id', str(actor_id),
+    ])
+    assert recovered.exit_code == 0, recovered.output
+    payload = json.loads(recovered.stdout)
+    assert payload['changed'] is True
+    expected_count = (
+        payload['created_publication_shells']
+        if missing_artifact == 'publication_shell'
+        else payload['created_work_links']
+    )
+    assert expected_count == 1
+
+    unchanged = runner.invoke(app, [
+        'register', '--database-url', url, '--actor-id', str(actor_id),
+    ])
+    assert unchanged.exit_code == 0, unchanged.output
+    unchanged_payload = json.loads(unchanged.stdout)
+    assert unchanged_payload['changed'] is False
+    assert all(
+        unchanged_payload[key] == 0 for key in (
+            'created_sources',
+            'created_publication_shells',
+            'created_work_links',
+            'created_legacy_links',
+            'created_audit_events',
+        )
+    )
 
 
 def test_actor_lock_query_compiles_for_postgresql():

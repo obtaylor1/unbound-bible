@@ -79,9 +79,14 @@ def register(
                 with session.begin():
                     result = register_legacy_sources(session, parsed_actor_id)
             committed = True
+        result_counts = asdict(result)
         payload = {
-            **asdict(result),
-            'changed': result.created_sources > 0 or result.created_legacy_links > 0,
+            **result_counts,
+            'changed': any(
+                value
+                for field, value in result_counts.items()
+                if field.startswith('created_')
+            ),
             'next_action': 'review_source_rights',
         }
     except LegacyRegistrationError as error:
