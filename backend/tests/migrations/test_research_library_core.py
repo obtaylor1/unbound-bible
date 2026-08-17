@@ -595,6 +595,18 @@ def test_postgresql_live_research_library_migration_is_reversible_and_enforced()
                     },
                 )
             connection.rollback()
+            with pytest.raises(IntegrityError):
+                connection.execute(
+                    text(
+                        "UPDATE source_editions SET active_publication_id=:publication "
+                        "WHERE id=:edition"
+                    ),
+                    {
+                        'publication': ids['source_publications'],
+                        'edition': ids['edition_2'],
+                    },
+                )
+            connection.rollback()
 
         for table_name in IMMUTABLE_TABLES:
             for verb in ('UPDATE', 'DELETE'):
