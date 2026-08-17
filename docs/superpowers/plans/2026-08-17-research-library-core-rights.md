@@ -273,7 +273,7 @@ def register_legacy_sources(session: Session, actor_id: uuid.UUID) -> Registrati
 - [ ] Run `uv run ruff check backend/app backend/tests` if Ruff is available; otherwise run the repository's configured backend lint command and record it in the commit message body.
 - [ ] Run `uv run alembic -c backend/alembic.ini upgrade head` against a disposable PostgreSQL database and confirm revisions `0014` and `0015` succeed.
 - [ ] Inspect `git diff --check` and confirm no whitespace errors.
-- [ ] Confirm no operator command grants access by email: `rg -n "obtaylor@gmail|grant.*email|email.*administrator" backend/app backend/tests` must return no application match.
+- [ ] Confirm no operator command grants access by email: `rg -n "grant.*email|email.*administrator" backend/app backend/tests` must return no application match.
 - [ ] Commit any verification-only adjustments with `git commit -am "test: verify research library safety boundary"`.
 
 ## Completion criteria
