@@ -11,6 +11,7 @@ from app.research_library.models import (
     PUBLICATION_STATUSES,
     CitationAnchor,
     ContentUnit,
+    ImmutableResearchLibraryRecordError,
     LegacyContentLink,
     LegacySourceLink,
     LicenseRecord,
@@ -33,6 +34,85 @@ def research_library_session(test_settings) -> Generator[Session, None, None]:
         yield session
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+def _make_scope_graph(session: Session, suffix: str) -> dict:
+    work = LibraryWork(id=f'scope-work-{suffix}', title=f'Scope Work {suffix}')
+    edition = SourceEdition(
+        title=f'Scope Edition {suffix}',
+        edition_label='1',
+        language='eng',
+        checksum=suffix[0] * 64,
+        locator_scheme='chapter_verse',
+    )
+    session.add_all([work, edition])
+    session.flush()
+    division = WorkDivision(
+        work_id=work.id,
+        division_type='chapter',
+        label='Chapter 1',
+        normalized_locator='1',
+        canonical_key=f'{work.id}.1',
+        ordinal=1,
+    )
+    edition_work = SourceEditionWork(
+        source_edition_id=edition.id,
+        work_id=work.id,
+        source_label=work.title,
+        locator_scheme='chapter_verse',
+    )
+    license_record = LicenseRecord(
+        source_edition_id=edition.id,
+        license_name=f'License {suffix}',
+    )
+    session.add_all([division, edition_work, license_record])
+    session.flush()
+    publication = SourcePublication(
+        source_edition_id=edition.id,
+        license_record_id=license_record.id,
+        version=1,
+        status='verified',
+        validation_approved=True,
+        public_visibility=False,
+        source_checksum=suffix[0] * 64,
+        content_checksum=suffix[-1] * 64,
+    )
+    session.add(publication)
+    session.flush()
+    unit = ContentUnit(
+        source_publication_id=publication.id,
+        work_division_id=division.id,
+        language='eng',
+        script='Latn',
+        direction='ltr',
+        ordinal=1,
+        normalized_text=f'Text {suffix}',
+        source_locator='1:1',
+        textual_certainty='visible_text',
+        checksum=suffix[-1] * 64,
+    )
+    session.add(unit)
+    session.flush()
+    citation = CitationAnchor(
+        source_publication_id=publication.id,
+        content_unit_id=unit.id,
+        anchor_key=f'{work.id}.1.1',
+        human_locator=f'{work.title} 1:1',
+        inspector_route=f'/source-inspector/{work.id}/1/1',
+        open_target={'division': f'{work.id}.1'},
+    )
+    session.add(citation)
+    session.flush()
+    return {
+        'work': work,
+        'edition': edition,
+        'division': division,
+        'edition_work': edition_work,
+        'license': license_record,
+        'publication': publication,
+        'unit': unit,
+        'citation': citation,
+    }
 
 
 def test_research_library_models_persist_the_approved_domain_vocabulary(
@@ -223,12 +303,12 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
         search_document=None,
     )
     legacy_source = LegacySourceLink(
-        legacy_table='text_editions',
+        legacy_type='text_editions',
         legacy_key='charles-1912',
         source_edition_id=edition.id,
     )
     legacy_content = LegacyContentLink(
-        legacy_table='biblical_texts',
+        legacy_type='biblical_texts',
         legacy_key='1-enoch:1:1',
         content_unit_id=unit.id,
     )
@@ -262,6 +342,7 @@ def test_research_library_models_persist_the_approved_domain_vocabulary(
         (SourcePublication, {'version': 0}),
         (ContentUnit, {'direction': 'sideways'}),
         (ContentUnit, {'textual_certainty': 'ai_guess'}),
+        (ResearchChunk, {'classification': 'ai_synthesis'}),
         (ResearchChunk, {'ordinal': 0}),
     ],
 )
@@ -349,6 +430,427 @@ def test_research_library_models_reject_invalid_controlled_values(
     }
     invalid = {**defaults[model], **values}
     session.add(model(**invalid))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_work_profile_rejects_ai_synthesis_as_a_stored_classification(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    session.add(LibraryWork(id='classification-work', title='Classification Work'))
+    session.flush()
+    session.add(ResearchWorkProfile(
+        work_id='classification-work',
+        source_classification='ai_synthesis',
+        hierarchy_level='work',
+        traditions=[],
+        canonical_statuses=[],
+        original_languages=[],
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_division_parent_must_belong_to_the_same_work(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'aa')
+    second = _make_scope_graph(session, 'bb')
+    session.add(WorkDivision(
+        work_id=second['work'].id,
+        parent_id=first['division'].id,
+        division_type='verse',
+        label='Cross-work child',
+        normalized_locator='1:2',
+        canonical_key=f"{second['work'].id}.1.2",
+        ordinal=2,
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_publication_license_must_belong_to_the_same_edition(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'cc')
+    second = _make_scope_graph(session, 'dd')
+    session.add(SourcePublication(
+        source_edition_id=first['edition'].id,
+        license_record_id=second['license'].id,
+        version=2,
+        status='verified',
+        validation_approved=True,
+        public_visibility=False,
+        source_checksum='c' * 64,
+        content_checksum='d' * 64,
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_content_unit_division_work_must_be_covered_by_the_publication_edition(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'ee')
+    second = _make_scope_graph(session, 'ff')
+    session.add(ContentUnit(
+        source_publication_id=first['publication'].id,
+        work_division_id=second['division'].id,
+        language='eng',
+        script='Latn',
+        direction='ltr',
+        ordinal=2,
+        normalized_text='Cross-scope text',
+        source_locator='1:2',
+        textual_certainty='visible_text',
+        checksum='3' * 64,
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_citation_publication_must_match_its_content_unit_publication(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'gg')
+    second = _make_scope_graph(session, 'hh')
+    session.add(CitationAnchor(
+        source_publication_id=first['publication'].id,
+        content_unit_id=second['unit'].id,
+        anchor_key='cross-publication-anchor',
+        human_locator='Cross publication',
+        inspector_route='/source-inspector/cross',
+        open_target={'division': 'cross'},
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_chunk_links_must_describe_one_consistent_source_chain(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    first = _make_scope_graph(session, 'ii')
+    second = _make_scope_graph(session, 'jj')
+    session.add(ResearchChunk(
+        source_edition_id=first['edition'].id,
+        source_publication_id=first['publication'].id,
+        work_id=second['work'].id,
+        work_division_id=second['division'].id,
+        citation_anchor_id=second['citation'].id,
+        ordinal=1,
+        boundary_type='verse',
+        classification='primary_text',
+        hierarchy_level='verse',
+        language='eng',
+        content_digest='4' * 64,
+        text_content='Cross-scope chunk',
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def _make_immutable_record(session: Session, record_kind: str):
+    graph = _make_scope_graph(session, f'immutable-{record_kind}')
+    if record_kind == 'publication':
+        return graph['publication'], 'status', 'disabled'
+    if record_kind == 'content_unit':
+        return graph['unit'], 'normalized_text', 'Changed text'
+    if record_kind == 'citation_anchor':
+        return graph['citation'], 'human_locator', 'Changed locator'
+    if record_kind == 'research_chunk':
+        chunk = ResearchChunk(
+            source_edition_id=graph['edition'].id,
+            source_publication_id=graph['publication'].id,
+            work_id=graph['work'].id,
+            work_division_id=graph['division'].id,
+            citation_anchor_id=graph['citation'].id,
+            ordinal=1,
+            boundary_type='verse',
+            classification='primary_text',
+            hierarchy_level='verse',
+            language='eng',
+            content_digest='6' * 64,
+            text_content='Immutable chunk',
+        )
+        session.add(chunk)
+        session.flush()
+        return chunk, 'text_content', 'Changed chunk'
+    actor = User(
+        email=f'{record_kind}@example.test',
+        email_normalized=f'{record_kind}@example.test',
+        username=f'actor-{record_kind}',
+        password_hash='test-hash',
+    )
+    session.add(actor)
+    session.flush()
+    audit = SourceAuditEvent(
+        actor_id=actor.id,
+        source_edition_id=graph['edition'].id,
+        source_publication_id=graph['publication'].id,
+        action='snapshot_created',
+        prior_state=None,
+        resulting_state={'status': 'verified'},
+        reason='Initial audit reason',
+    )
+    session.add(audit)
+    session.flush()
+    return audit, 'reason', 'Changed reason'
+
+
+@pytest.mark.parametrize(
+    'record_kind',
+    ['publication', 'content_unit', 'citation_anchor', 'research_chunk', 'audit_event'],
+)
+def test_publication_snapshot_and_audit_records_reject_updates(
+    research_library_session: Session,
+    record_kind: str,
+) -> None:
+    session = research_library_session
+    record, attribute, changed_value = _make_immutable_record(session, record_kind)
+    setattr(record, attribute, changed_value)
+
+    with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable|append-only'):
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    'record_kind',
+    ['publication', 'content_unit', 'citation_anchor', 'research_chunk', 'audit_event'],
+)
+def test_publication_snapshot_and_audit_records_reject_deletes(
+    research_library_session: Session,
+    record_kind: str,
+) -> None:
+    session = research_library_session
+    record, _, _ = _make_immutable_record(session, record_kind)
+    session.delete(record)
+
+    with pytest.raises(ImmutableResearchLibraryRecordError, match='immutable|append-only'):
+        session.flush()
+
+
+def test_legacy_links_use_typed_compatibility_identity() -> None:
+    for model in (LegacySourceLink, LegacyContentLink):
+        assert 'legacy_type' in model.__table__.c
+        assert 'legacy_table' not in model.__table__.c
+
+
+def _chunk_for_graph(graph: dict, **overrides) -> ResearchChunk:
+    values = {
+        'source_edition_id': graph['edition'].id,
+        'source_publication_id': graph['publication'].id,
+        'work_id': graph['work'].id,
+        'work_division_id': graph['division'].id,
+        'citation_anchor_id': graph['citation'].id,
+        'ordinal': 1,
+        'boundary_type': 'verse',
+        'classification': 'primary_text',
+        'hierarchy_level': 'verse',
+        'language': 'eng',
+        'content_digest': '7' * 64,
+        'text_content': 'Chunk text',
+    }
+    values.update(overrides)
+    return ResearchChunk(**values)
+
+
+def test_work_profile_is_one_to_one_with_library_work(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    session.add(LibraryWork(id='one-profile', title='One Profile'))
+    session.flush()
+    session.add_all([
+        ResearchWorkProfile(
+            work_id='one-profile',
+            source_classification='primary_text',
+            hierarchy_level='work',
+            traditions=[],
+            canonical_statuses=[],
+            original_languages=[],
+        ),
+        ResearchWorkProfile(
+            work_id='one-profile',
+            source_classification='translation',
+            hierarchy_level='work',
+            traditions=[],
+            canonical_statuses=[],
+            original_languages=[],
+        ),
+    ])
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_edition_work_link_is_unique_per_edition_and_work(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'edition-work-unique')
+    session.add(SourceEditionWork(
+        source_edition_id=graph['edition'].id,
+        work_id=graph['work'].id,
+        source_label='Duplicate coverage',
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_publication_version_is_unique_per_edition(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'publication-version')
+    session.add(SourcePublication(
+        source_edition_id=graph['edition'].id,
+        license_record_id=graph['license'].id,
+        version=1,
+        status='verified',
+        validation_approved=True,
+        public_visibility=False,
+        source_checksum='8' * 64,
+        content_checksum='9' * 64,
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_content_unit_position_is_unique_within_publication_division(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'content-position')
+    session.add(ContentUnit(
+        source_publication_id=graph['publication'].id,
+        work_division_id=graph['division'].id,
+        language='eng',
+        direction='ltr',
+        ordinal=1,
+        normalized_text='Duplicate position',
+        source_locator='1:2',
+        textual_certainty='visible_text',
+        checksum='a' * 64,
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_citation_anchor_key_is_stable_within_publication(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'anchor-key')
+    session.add(CitationAnchor(
+        source_publication_id=graph['publication'].id,
+        content_unit_id=graph['unit'].id,
+        anchor_key=graph['citation'].anchor_key,
+        human_locator='Duplicate anchor key',
+        inspector_route='/source-inspector/duplicate',
+        open_target={'division': 'duplicate'},
+    ))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize('missing_link', ['work_division_id', 'citation_anchor_id'])
+def test_chunk_requires_division_and_citation_links(
+    research_library_session: Session,
+    missing_link: str,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, f'missing-{missing_link}')
+    session.add(_chunk_for_graph(graph, **{missing_link: None}))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_chunk_deduplication_is_stable_and_not_nullable(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'chunk-dedup')
+    session.add(_chunk_for_graph(graph))
+    session.flush()
+    session.add(_chunk_for_graph(graph, ordinal=2))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_chunk_ordinal_is_unique_within_publication(
+    research_library_session: Session,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, 'chunk-ordinal')
+    session.add(_chunk_for_graph(graph))
+    session.flush()
+    session.add(_chunk_for_graph(graph, content_digest='8' * 64))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize('model', [LegacySourceLink, LegacyContentLink])
+def test_legacy_identity_is_unique(
+    research_library_session: Session,
+    model: type,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, f'legacy-{model.__tablename__}')
+    target = (
+        {'source_edition_id': graph['edition'].id}
+        if model is LegacySourceLink
+        else {'content_unit_id': graph['unit'].id}
+    )
+    session.add_all([
+        model(legacy_type='legacy_table', legacy_key='legacy-key', **target),
+        model(legacy_type='legacy_table', legacy_key='legacy-key', **target),
+    ])
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize('model', [LegacySourceLink, LegacyContentLink])
+@pytest.mark.parametrize(
+    'identity',
+    [
+        {'legacy_type': '', 'legacy_key': 'key'},
+        {'legacy_type': 'type', 'legacy_key': ''},
+    ],
+)
+def test_legacy_identity_parts_are_nonblank(
+    research_library_session: Session,
+    model: type,
+    identity: dict,
+) -> None:
+    session = research_library_session
+    graph = _make_scope_graph(session, f'legacy-nonblank-{model.__tablename__}')
+    target = (
+        {'source_edition_id': graph['edition'].id}
+        if model is LegacySourceLink
+        else {'content_unit_id': graph['unit'].id}
+    )
+    session.add(model(**identity, **target))
+
     with pytest.raises(IntegrityError):
         session.flush()
 

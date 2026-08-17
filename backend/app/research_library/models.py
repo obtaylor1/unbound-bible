@@ -5,7 +5,9 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    event,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -17,7 +19,7 @@ from sqlalchemy import (
     func,
     literal_column,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.database import Base
 
@@ -53,9 +55,29 @@ TEXTUAL_CERTAINTIES = (
     'editorial_note',
 )
 
+STORED_SOURCE_CLASSIFICATIONS = (
+    'primary_text',
+    'translation',
+    'commentary',
+    'critical_edition',
+    'manuscript',
+    'reference_work',
+    'secondary_source',
+    'dataset',
+    'image',
+)
+
 
 def _sql_values(values: tuple[str, ...]) -> str:
     return ', '.join(f"'{value}'" for value in values)
+
+
+class ImmutableResearchLibraryRecord:
+    """Marker for publication snapshot and append-only records."""
+
+
+class ImmutableResearchLibraryRecordError(RuntimeError):
+    pass
 
 
 class ResearchWorkProfile(Base):
@@ -65,6 +87,10 @@ class ResearchWorkProfile(Base):
         CheckConstraint(
             "length(trim(source_classification)) > 0",
             name='ck_research_work_profiles_source_classification_nonblank',
+        ),
+        CheckConstraint(
+            f"source_classification IN ({_sql_values(STORED_SOURCE_CLASSIFICATIONS)})",
+            name='ck_research_work_profiles_source_classification',
         ),
         CheckConstraint(
             "length(trim(hierarchy_level)) > 0",
@@ -107,6 +133,13 @@ class WorkDivision(Base):
             'work_id', 'normalized_locator', name='uq_work_divisions_work_locator'
         ),
         UniqueConstraint('work_id', 'canonical_key', name='uq_work_divisions_work_key'),
+        UniqueConstraint('id', 'work_id', name='uq_work_divisions_id_work'),
+        ForeignKeyConstraint(
+            ['parent_id', 'work_id'],
+            ['work_divisions.id', 'work_divisions.work_id'],
+            name='fk_work_divisions_parent_same_work',
+            ondelete='RESTRICT',
+        ),
         Index(
             'uq_work_divisions_work_parent_ordinal',
             'work_id',
@@ -142,11 +175,6 @@ class WorkDivision(Base):
     )
     parent_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'work_divisions.id',
-            name='fk_work_divisions_parent_id_work_divisions',
-            ondelete='RESTRICT',
-        ),
         nullable=True,
     )
     division_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -236,6 +264,7 @@ class SourceEditionWork(Base):
 class LicenseRecord(Base):
     __tablename__ = 'license_records'
     __table_args__ = (
+        UniqueConstraint('id', 'source_edition_id', name='uq_license_records_id_edition'),
         Index('ix_license_records_source_edition_id', 'source_edition_id'),
         Index('ix_license_records_verification_date', 'verification_date'),
         CheckConstraint(
@@ -285,11 +314,20 @@ class LicenseRecord(Base):
     )
 
 
-class SourcePublication(Base):
+class SourcePublication(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'source_publications'
     __table_args__ = (
         UniqueConstraint(
             'source_edition_id', 'version', name='uq_source_publications_edition_version'
+        ),
+        UniqueConstraint(
+            'id', 'source_edition_id', name='uq_source_publications_id_edition'
+        ),
+        ForeignKeyConstraint(
+            ['license_record_id', 'source_edition_id'],
+            ['license_records.id', 'license_records.source_edition_id'],
+            name='fk_source_publications_license_same_edition',
+            ondelete='RESTRICT',
         ),
         Index('ix_source_publications_edition_status', 'source_edition_id', 'status'),
         Index('ix_source_publications_license_record_id', 'license_record_id'),
@@ -313,11 +351,6 @@ class SourcePublication(Base):
     )
     license_record_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'license_records.id',
-            name='fk_source_publications_license_id_license_records',
-            ondelete='RESTRICT',
-        ),
         nullable=True,
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -347,7 +380,7 @@ class SourcePublication(Base):
     )
 
 
-class ContentUnit(Base):
+class ContentUnit(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'content_units'
     __table_args__ = (
         UniqueConstraint(
@@ -355,6 +388,30 @@ class ContentUnit(Base):
             'work_division_id',
             'ordinal',
             name='uq_content_units_publication_division_ordinal',
+        ),
+        UniqueConstraint(
+            'id',
+            'source_publication_id',
+            'work_division_id',
+            name='uq_content_units_id_publication_division',
+        ),
+        ForeignKeyConstraint(
+            ['source_publication_id', 'source_edition_id'],
+            ['source_publications.id', 'source_publications.source_edition_id'],
+            name='fk_content_units_publication_same_edition',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['work_division_id', 'work_id'],
+            ['work_divisions.id', 'work_divisions.work_id'],
+            name='fk_content_units_division_same_work',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['source_edition_id', 'work_id'],
+            ['source_edition_works.source_edition_id', 'source_edition_works.work_id'],
+            name='fk_content_units_edition_covers_work',
+            ondelete='RESTRICT',
         ),
         Index('ix_content_units_publication_checksum', 'source_publication_id', 'checksum'),
         Index('ix_content_units_division_id', 'work_division_id'),
@@ -375,20 +432,12 @@ class ContentUnit(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_publication_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'source_publications.id',
-            name='fk_content_units_publication_id_source_publications',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
+    source_edition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    work_id: Mapped[str] = mapped_column(String(100), nullable=False)
     work_division_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'work_divisions.id',
-            name='fk_content_units_division_id_work_divisions',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
     language: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -401,7 +450,7 @@ class ContentUnit(Base):
     checksum: Mapped[str] = mapped_column(String(128), nullable=False)
 
 
-class CitationAnchor(Base):
+class CitationAnchor(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'citation_anchors'
     __table_args__ = (
         UniqueConstraint(
@@ -412,6 +461,22 @@ class CitationAnchor(Base):
             'content_unit_id',
             'human_locator',
             name='uq_citation_anchors_publication_unit_locator',
+        ),
+        UniqueConstraint(
+            'id',
+            'source_publication_id',
+            'work_division_id',
+            name='uq_citation_anchors_id_publication_division',
+        ),
+        ForeignKeyConstraint(
+            ['content_unit_id', 'source_publication_id', 'work_division_id'],
+            [
+                'content_units.id',
+                'content_units.source_publication_id',
+                'content_units.work_division_id',
+            ],
+            name='fk_citation_anchors_content_same_scope',
+            ondelete='RESTRICT',
         ),
         Index('ix_citation_anchors_content_unit_id', 'content_unit_id'),
         CheckConstraint(
@@ -425,29 +490,20 @@ class CitationAnchor(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_publication_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'source_publications.id',
-            name='fk_citation_anchors_publication_id_source_publications',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
     content_unit_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'content_units.id',
-            name='fk_citation_anchors_content_unit_id_content_units',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
+    work_division_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     anchor_key: Mapped[str] = mapped_column(String(500), nullable=False)
     human_locator: Mapped[str] = mapped_column(String(500), nullable=False)
     inspector_route: Mapped[str] = mapped_column(String(2048), nullable=False)
     open_target: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
-class ResearchChunk(Base):
+class ResearchChunk(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'research_chunks'
     __table_args__ = (
         UniqueConstraint(
@@ -461,10 +517,42 @@ class ResearchChunk(Base):
         UniqueConstraint(
             'source_publication_id', 'ordinal', name='uq_research_chunks_publication_ordinal'
         ),
+        ForeignKeyConstraint(
+            ['source_publication_id', 'source_edition_id'],
+            ['source_publications.id', 'source_publications.source_edition_id'],
+            name='fk_research_chunks_publication_same_edition',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['work_division_id', 'work_id'],
+            ['work_divisions.id', 'work_divisions.work_id'],
+            name='fk_research_chunks_division_same_work',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['source_edition_id', 'work_id'],
+            ['source_edition_works.source_edition_id', 'source_edition_works.work_id'],
+            name='fk_research_chunks_edition_covers_work',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['citation_anchor_id', 'source_publication_id', 'work_division_id'],
+            [
+                'citation_anchors.id',
+                'citation_anchors.source_publication_id',
+                'citation_anchors.work_division_id',
+            ],
+            name='fk_research_chunks_citation_same_scope',
+            ondelete='RESTRICT',
+        ),
         Index('ix_research_chunks_work_division', 'work_id', 'work_division_id'),
         Index('ix_research_chunks_citation_anchor_id', 'citation_anchor_id'),
         Index('ix_research_chunks_content_digest', 'content_digest'),
         CheckConstraint('ordinal > 0', name='ck_research_chunks_ordinal_positive'),
+        CheckConstraint(
+            f"classification IN ({_sql_values(STORED_SOURCE_CLASSIFICATIONS)})",
+            name='ck_research_chunks_classification',
+        ),
         CheckConstraint(
             "length(trim(boundary_type)) > 0", name='ck_research_chunks_boundary_nonblank'
         ),
@@ -473,47 +561,23 @@ class ResearchChunk(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     source_edition_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'source_editions.id',
-            name='fk_research_chunks_edition_id_source_editions',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
     source_publication_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'source_publications.id',
-            name='fk_research_chunks_publication_id_source_publications',
-            ondelete='RESTRICT',
-        ),
         nullable=False,
     )
     work_id: Mapped[str] = mapped_column(
-        ForeignKey(
-            'library_works.id',
-            name='fk_research_chunks_work_id_library_works',
-            ondelete='RESTRICT',
-        ),
+        String(100),
         nullable=False,
     )
-    work_division_id: Mapped[UUID | None] = mapped_column(
+    work_division_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'work_divisions.id',
-            name='fk_research_chunks_division_id_work_divisions',
-            ondelete='RESTRICT',
-        ),
-        nullable=True,
+        nullable=False,
     )
-    citation_anchor_id: Mapped[UUID | None] = mapped_column(
+    citation_anchor_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey(
-            'citation_anchors.id',
-            name='fk_research_chunks_citation_id_citation_anchors',
-            ondelete='RESTRICT',
-        ),
-        nullable=True,
+        nullable=False,
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     boundary_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -529,11 +593,11 @@ class LegacySourceLink(Base):
     __tablename__ = 'legacy_source_links'
     __table_args__ = (
         UniqueConstraint(
-            'legacy_table', 'legacy_key', name='uq_legacy_source_links_table_key'
+            'legacy_type', 'legacy_key', name='uq_legacy_source_links_type_key'
         ),
         Index('ix_legacy_source_links_source_edition_id', 'source_edition_id'),
         CheckConstraint(
-            "length(trim(legacy_table)) > 0", name='ck_legacy_source_links_table_nonblank'
+            "length(trim(legacy_type)) > 0", name='ck_legacy_source_links_type_nonblank'
         ),
         CheckConstraint(
             "length(trim(legacy_key)) > 0", name='ck_legacy_source_links_key_nonblank'
@@ -541,7 +605,7 @@ class LegacySourceLink(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    legacy_table: Mapped[str] = mapped_column(String(200), nullable=False)
+    legacy_type: Mapped[str] = mapped_column(String(200), nullable=False)
     legacy_key: Mapped[str] = mapped_column(String(500), nullable=False)
     source_edition_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
@@ -558,11 +622,11 @@ class LegacyContentLink(Base):
     __tablename__ = 'legacy_content_links'
     __table_args__ = (
         UniqueConstraint(
-            'legacy_table', 'legacy_key', name='uq_legacy_content_links_table_key'
+            'legacy_type', 'legacy_key', name='uq_legacy_content_links_type_key'
         ),
         Index('ix_legacy_content_links_content_unit_id', 'content_unit_id'),
         CheckConstraint(
-            "length(trim(legacy_table)) > 0", name='ck_legacy_content_links_table_nonblank'
+            "length(trim(legacy_type)) > 0", name='ck_legacy_content_links_type_nonblank'
         ),
         CheckConstraint(
             "length(trim(legacy_key)) > 0", name='ck_legacy_content_links_key_nonblank'
@@ -570,7 +634,7 @@ class LegacyContentLink(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    legacy_table: Mapped[str] = mapped_column(String(200), nullable=False)
+    legacy_type: Mapped[str] = mapped_column(String(200), nullable=False)
     legacy_key: Mapped[str] = mapped_column(String(500), nullable=False)
     content_unit_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
@@ -583,7 +647,7 @@ class LegacyContentLink(Base):
     )
 
 
-class SourceAuditEvent(Base):
+class SourceAuditEvent(ImmutableResearchLibraryRecord, Base):
     __tablename__ = 'source_audit_events'
     __table_args__ = (
         Index('ix_source_audit_events_edition_created', 'source_edition_id', 'created_at'),
@@ -631,3 +695,38 @@ class SourceAuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+@event.listens_for(Session, 'before_flush')
+def _protect_immutable_research_library_records(
+    session: Session, _flush_context, _instances
+) -> None:
+    for record in session.deleted:
+        if isinstance(record, ImmutableResearchLibraryRecord):
+            raise ImmutableResearchLibraryRecordError(
+                f'{type(record).__name__} is immutable and cannot be deleted'
+            )
+    for record in session.dirty:
+        if (
+            isinstance(record, ImmutableResearchLibraryRecord)
+            and session.is_modified(record, include_collections=True)
+        ):
+            raise ImmutableResearchLibraryRecordError(
+                f'{type(record).__name__} is immutable and cannot be updated'
+            )
+
+
+@event.listens_for(Session, 'before_flush')
+def _populate_research_library_scope(session: Session, _flush_context, _instances) -> None:
+    for record in session.new:
+        if isinstance(record, ContentUnit):
+            publication = session.get(SourcePublication, record.source_publication_id)
+            division = session.get(WorkDivision, record.work_division_id)
+            if publication is not None and record.source_edition_id is None:
+                record.source_edition_id = publication.source_edition_id
+            if division is not None and record.work_id is None:
+                record.work_id = division.work_id
+        elif isinstance(record, CitationAnchor) and record.work_division_id is None:
+            content_unit = session.get(ContentUnit, record.content_unit_id)
+            if content_unit is not None:
+                record.work_division_id = content_unit.work_division_id
