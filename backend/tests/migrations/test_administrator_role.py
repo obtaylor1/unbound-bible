@@ -31,8 +31,14 @@ def _seed(connection, roles):
         user_id = uuid4().hex; ids[role] = user_id
         connection.execute(text(
             "INSERT INTO users (id,email,email_normalized,username,password_hash,role,is_active) "
-            "VALUES (:id,:email,:email,:username,'x',:role,1)"
-        ), {'id': user_id, 'email': f'{role}@example.test', 'username': role, 'role': role})
+            "VALUES (:id,:email,:email,:username,'x',:role,:is_active)"
+        ), {
+            'id': user_id,
+            'email': f'{role}@example.test',
+            'username': role,
+            'role': role,
+            'is_active': True,
+        })
     session_id = uuid4().hex
     connection.execute(text(
         "INSERT INTO auth_sessions (id,user_id,refresh_token_hash,expires_at) "

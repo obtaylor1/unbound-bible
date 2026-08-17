@@ -1,7 +1,7 @@
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import delete, event, update
+from sqlalchemy import ForeignKeyConstraint, delete, event, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -943,16 +943,20 @@ def test_publication_version_is_unique_per_edition(
         session.flush()
 
 
-def test_edition_active_pointer_rejects_a_publication_from_another_edition(
-    research_library_session: Session,
-) -> None:
-    session = research_library_session
-    first = _make_scope_graph(session, 'active-pointer-first')
-    second = _make_scope_graph(session, 'active-pointer-second')
-    first['edition'].active_publication_id = second['publication'].id
+def test_edition_active_pointer_declares_same_edition_foreign_key() -> None:
+    constraint = next(
+        item
+        for item in SourceEdition.__table__.constraints
+        if isinstance(item, ForeignKeyConstraint)
+        and item.name == 'fk_source_editions_active_publication_same_edition'
+    )
 
-    with pytest.raises(IntegrityError):
-        session.flush()
+    assert tuple(constraint.column_keys) == ('active_publication_id', 'id')
+    assert tuple(element.target_fullname for element in constraint.elements) == (
+        'source_publications.id',
+        'source_publications.source_edition_id',
+    )
+    assert constraint.ondelete == 'RESTRICT'
 
 
 def test_edition_active_pointer_supports_replacement_and_rollback(
