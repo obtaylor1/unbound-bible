@@ -58,14 +58,36 @@ def test_edition_work_source_model_has_required_columns_constraints_and_index():
         'id', 'edition_code', 'work_id', 'source_key', 'source_label', 'translator',
         'source_language', 'source_tradition', 'published_year', 'license_spdx',
         'attribution', 'provenance_url', 'fallback', 'modified', 'modification_note',
-        'verification_status', 'canon_scope',
+        'verification_status', 'canon_scope', 'source_edition', 'source_revision',
+        'rights_url', 'rights_jurisdiction', 'artifact_filename',
+        'artifact_retrieved_at', 'artifact_size', 'artifact_sha256', 'parser_version',
+        'transformations', 'comparison_exact', 'comparison_formatting',
+        'comparison_missing', 'comparison_extra', 'comparison_wording',
+        'comparison_report_sha256', 'reviewer', 'reviewed_at', 'review_note',
     }
     assert table.primary_key.columns.keys() == ['id']
     assert {
         column.name for column in table.columns if column.nullable
-    } == {'translator', 'published_year', 'provenance_url', 'modification_note'}
+    } == {
+        'translator', 'published_year', 'provenance_url', 'modification_note',
+        'source_edition', 'source_revision', 'rights_url', 'rights_jurisdiction',
+        'artifact_filename', 'artifact_retrieved_at', 'artifact_size',
+        'artifact_sha256', 'parser_version', 'comparison_report_sha256',
+        'reviewer', 'reviewed_at', 'review_note',
+    }
     assert table.c.fallback.default.arg is False
     assert table.c.modified.default.arg is False
+    assert callable(table.c.transformations.default.arg)
+    assert table.c.transformations.server_default.arg.text == "'[]'"
+    assert table.c.artifact_retrieved_at.type.timezone is True
+    assert table.c.reviewed_at.type.timezone is True
+    assert {
+        table.c[name].default.arg
+        for name in (
+            'comparison_exact', 'comparison_formatting', 'comparison_missing',
+            'comparison_extra', 'comparison_wording',
+        )
+    } == {0}
     assert {
         (foreign_key.parent.name, foreign_key.column.table.name, foreign_key.ondelete)
         for foreign_key in table.foreign_keys
@@ -85,9 +107,26 @@ def test_edition_work_source_model_has_required_columns_constraints_and_index():
     }
     assert checks == {
         'ck_edition_work_sources_verification_status': (
-            "verification_status IN ('provisional', 'verified')"
+            "verification_status IN ('in_progress', 'verified_exact', "
+            "'verified_formatting', 'verified_rebuilt', 'review_required')"
         ),
         'ck_edition_work_sources_canon_scope': "canon_scope IN ('ethio81', 'supplemental')",
+        'ck_edition_work_sources_comparison_exact_nonnegative': 'comparison_exact >= 0',
+        'ck_edition_work_sources_comparison_formatting_nonnegative': (
+            'comparison_formatting >= 0'
+        ),
+        'ck_edition_work_sources_comparison_missing_nonnegative': 'comparison_missing >= 0',
+        'ck_edition_work_sources_comparison_extra_nonnegative': 'comparison_extra >= 0',
+        'ck_edition_work_sources_comparison_wording_nonnegative': 'comparison_wording >= 0',
+        'ck_edition_work_sources_artifact_size_nonnegative': (
+            'artifact_size IS NULL OR artifact_size >= 0'
+        ),
+        'ck_edition_work_sources_artifact_sha256_length': (
+            'artifact_sha256 IS NULL OR length(artifact_sha256) = 64'
+        ),
+        'ck_edition_work_sources_comparison_report_sha256_length': (
+            'comparison_report_sha256 IS NULL OR length(comparison_report_sha256) = 64'
+        ),
     }
     assert {index.name: tuple(index.columns.keys()) for index in table.indexes} == {
         'ix_edition_work_sources_work_id': ('work_id',),

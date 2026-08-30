@@ -42,7 +42,7 @@ def test_reviewed_composite_bundle_matches_the_frozen_release_scope():
         "ethio81_works": 82,
         "supplemental_works": 1,
         "chapters": 1520,
-        "verses": 38938,
+        "verses": 38487,
     }
     assert report["source_groups"] == {
         "extra": 2,
@@ -53,9 +53,12 @@ def test_reviewed_composite_bundle_matches_the_frozen_release_scope():
         "wmb": 39,
     }
     assert report["undeclared_output_gaps"] == []
-    assert report["provisional_works"] == 83
+    assert report["verified_works"] == 73
+    assert report["in_progress_works"] == 10
     assert report["fallback_works"] == 6
-    assert report["provisional_source_records"]["count"] == 83
+    assert report["verification_status_records"]["verified_exact"]["count"] == 13
+    assert report["verification_status_records"]["verified_rebuilt"]["count"] == 60
+    assert report["verification_status_records"]["in_progress"]["count"] == 10
     assert report["kjv_fallback_works"] == [
         "baruch",
         "bel-and-the-dragon",
@@ -138,16 +141,16 @@ def test_audit_rejects_moved_fallback_flag_with_the_same_count(tmp_path):
         audit_composite_release(bundle)
 
 
-def test_audit_rejects_a_nonprovisional_reviewed_work(tmp_path):
+def test_audit_rejects_changed_review_status_for_a_reviewed_work(tmp_path):
     bundle = _copy_reviewed_bundle(tmp_path)
     manifest_path = bundle / "manifest.json"
     manifest = _read_json(manifest_path)
     manifest["adapter_options"]["work_sources"]["genesis"][
         "verification_status"
-    ] = "verified"
+    ] = "in_progress"
     _write_json(manifest_path, manifest)
 
-    with pytest.raises(AuditError, match="provisional"):
+    with pytest.raises(AuditError, match="verification-status|work IDs"):
         audit_composite_release(bundle)
 
 
@@ -169,10 +172,13 @@ def test_markdown_names_the_composite_scope_and_provenance_caveat():
     assert "82 ETHIO81 works" in markdown
     assert "1 supplemental work" in markdown
     assert "1,520 chapters" in markdown
-    assert "38,938 verses" in markdown
+    assert "38,487 verses" in markdown
     assert "extra: 2" in markdown
     assert "kjv_apocrypha: 6" in markdown
-    assert "83 provisional source records" in markdown
+    assert "73 verified source records" in markdown
+    assert "13 exact matches" in markdown
+    assert "60 rebuilt from verified sources" in markdown
+    assert "10 source records in progress" in markdown
     assert "KJV fallback works (6)" in markdown
     assert "Declared output gaps: 48" in markdown
     assert "Undeclared output gaps: none" in markdown

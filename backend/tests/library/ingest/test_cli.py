@@ -342,6 +342,18 @@ def test_rollback_command_restores_the_previous_published_run(
     assert rolled_back['displaced_run_id'] == run_ids[1]
     assert rolled_back['published_count'] == 1
 
+    restored_health = _json(runner.invoke(cli.app, [
+        'coverage-report', '--run-id', run_ids[0], '--database-url', cli_database,
+    ]))
+    assert restored_health['active_run_id'] == run_ids[0]
+    assert restored_health['is_active'] is True
+    displaced_health = _json(runner.invoke(cli.app, [
+        'coverage-report', '--run-id', run_ids[1], '--database-url', cli_database,
+    ]))
+    assert displaced_health['run_id'] == run_ids[1]
+    assert displaced_health['active_run_id'] == run_ids[0]
+    assert displaced_health['is_active'] is False
+
 
 def test_stage_validate_publish_and_coverage_report(cli_database, tmp_path, monkeypatch):
     from app.library.ingest import cli

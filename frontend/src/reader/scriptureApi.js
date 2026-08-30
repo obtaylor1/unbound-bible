@@ -1,3 +1,11 @@
+import {
+  boundedPublicText,
+  isVerifiedSourceStatus,
+  normalizedTransformations,
+  normalizedVerifiedAt,
+  safePublicSourceUrl,
+} from './sourceVerification'
+
 export async function requestJson(url, signal) {
   const response = await fetch(url, { signal })
   if (!response.ok) {
@@ -56,27 +64,48 @@ function normalizedOptionalText(value, { uppercase = false } = {}) {
 }
 
 function normalizedSourceText(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
+  return boundedPublicText(value, 200)
 }
 
 export function normalizeWorkSource(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
 
+  const verification = value.verification && typeof value.verification === 'object'
+    && !Array.isArray(value.verification)
+    ? value.verification
+    : {}
+
+  const verificationStatus = boundedPublicText(
+    verification.status ?? value.verification_status,
+    32,
+  )
+
   return {
-    sourceKey: normalizedSourceText(value.source_key),
+    sourceKey: boundedPublicText(value.source_key, 100),
     sourceLabel: normalizedSourceText(value.source_label) || 'Source details unavailable',
     translator: normalizedSourceText(value.translator),
-    sourceLanguage: normalizedSourceText(value.source_language),
+    sourceLanguage: boundedPublicText(value.source_language, 100),
     sourceTradition: normalizedSourceText(value.source_tradition),
-    publishedYear: Number.isSafeInteger(value.published_year) ? value.published_year : null,
-    license: normalizedSourceText(value.license),
-    attribution: normalizedSourceText(value.attribution),
-    provenanceUrl: normalizedSourceText(value.provenance_url),
+    publishedYear: Number.isSafeInteger(value.published_year)
+      && value.published_year >= 1 && value.published_year <= 9999
+      ? value.published_year
+      : null,
+    license: boundedPublicText(value.license, 100),
+    attribution: boundedPublicText(value.attribution, 2000),
+    provenanceUrl: safePublicSourceUrl(value.provenance_url),
+    rightsUrl: safePublicSourceUrl(value.rights_url),
+    rightsJurisdiction: boundedPublicText(value.rights_jurisdiction, 500),
+    sourceEdition: normalizedSourceText(value.source_edition),
+    sourceRevision: normalizedSourceText(value.source_revision),
     fallback: value.fallback === true,
     modified: value.modified === true,
-    modificationNote: normalizedSourceText(value.modification_note),
-    verificationStatus: normalizedSourceText(value.verification_status),
-    canonScope: normalizedSourceText(value.canon_scope),
+    modificationNote: boundedPublicText(value.modification_note, 2000),
+    transformations: normalizedTransformations(value.transformations),
+    verificationStatus,
+    verifiedAt: isVerifiedSourceStatus(verificationStatus)
+      ? normalizedVerifiedAt(verification.verified_at)
+      : null,
+    canonScope: boundedPublicText(value.canon_scope, 20),
   }
 }
 

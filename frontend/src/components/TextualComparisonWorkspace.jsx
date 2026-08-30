@@ -6,6 +6,8 @@ import TranslationSelector from './textualComparison/TranslationSelector'
 import ComparisonSummary from './textualComparison/ComparisonSummary'
 import TranslationComparisonCard from './textualComparison/TranslationComparisonCard'
 import ComparisonStudyDrawer from './textualComparison/ComparisonStudyDrawer'
+import { normalizeWorkSource } from '../reader/scriptureApi'
+import { SourceVerificationBadge } from '../reader/TextSourceDisclosure'
 import {
   DEFAULT_TRANSLATIONS,
   MAX_TRANSLATIONS,
@@ -70,6 +72,26 @@ function hasAvailableText(value) {
   return typeof value === 'string' && Boolean(value.trim())
 }
 
+function rowsWithSafePublicSources(rows) {
+  return rows.map((row) => {
+    const source = normalizeWorkSource(row?.work_source)
+    if (!source) return row
+    return {
+      ...row,
+      work_source: {
+        source_label: source.sourceLabel,
+        source_tradition: source.sourceTradition,
+        published_year: source.publishedYear,
+        fallback: source.fallback,
+        translator: source.translator,
+        attribution: source.attribution,
+        provenance_url: source.provenanceUrl,
+        canon_scope: source.canonScope,
+      },
+    }
+  })
+}
+
 function safeStoredList(key) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || '[]')
@@ -114,15 +136,17 @@ function ChapterComparison({
   selectedTranslations,
   baseTranslation,
   rows,
+  verificationSources,
   highlightDifferences,
 }) {
-  const getText = (key, verse) => {
+  const getRow = (key, verse) => {
     const source = TRANSLATION_BY_KEY[key]
     return rows.find((row) => (
       Number(row.verse) === Number(verse)
       && String(row.translation).toLocaleLowerCase() === source?.code.toLocaleLowerCase()
-    ))?.text ?? null
+    )) ?? null
   }
+  const getText = (key, verse) => getRow(key, verse)?.text ?? null
 
   return (
     <section className="comparison-chapter" aria-labelledby="comparison-chapter-title">
@@ -153,13 +177,26 @@ function ChapterComparison({
               <div style={{ '--chapter-columns': selectedTranslations.length }}>
                 {selectedTranslations.map((key) => {
                   const source = TRANSLATION_BY_KEY[key]
-                  const text = getText(key, verse)
+                  const sourceRow = getRow(key, verse)
+                  const text = sourceRow?.text ?? null
+                  const verificationSource = verificationSources.get(key)
                   return (
                     <article key={key} aria-label={`${source.name}, verse ${verse}`}>
                       <div className="chapter-source-heading">
                         <strong>{source.code}</strong>
                         {key === verseBaseTranslation && <span>Base reference</span>}
                       </div>
+                      {verificationSource ? (
+                        <div className="chapter-source-verification">
+                          {verificationSource.fallback ? (
+                            <span className="translation-source-badge is-fallback">KJV fallback</span>
+                          ) : null}
+                          <SourceVerificationBadge
+                            status={verificationSource.verificationStatus}
+                            className="comparison-verification-badge"
+                          />
+                        </div>
+                      ) : null}
                       {hasAvailableText(text) ? (
                         <p>{diffWords(text, highlightDifferences && baseText ? baseText : text).map((word, index) => (
                           word.differs ? <mark key={`${word.text}-${index}`}>{word.text}</mark> : word.text
@@ -332,7 +369,17 @@ export default function TextualComparisonWorkspace() {
   const reference = `${book} ${chapter}:${verse}`
   const referenceKey = `${book} ${chapter}:${verse}`
 
-  const installedSources = useMemo(() => buildInstalledSources(rows), [rows])
+  const installedSources = useMemo(() => buildInstalledSources(rowsWithSafePublicSources(rows)), [rows])
+  const verificationSources = useMemo(() => {
+    const sources = new Map()
+    rows.forEach((row) => {
+      const key = String(row?.translation ?? '').trim().toLocaleLowerCase()
+      if (!key || sources.has(key)) return
+      const source = normalizeWorkSource(row?.work_source)
+      if (source) sources.set(key, source)
+    })
+    return sources
+  }, [rows])
   const installedSourceSignature = installedSources.map(({ key }) => key).join('|')
   registerInstalledSources(requestStatus === 'ready' ? installedSources : [])
 
@@ -557,22 +604,36 @@ export default function TextualComparisonWorkspace() {
                   {activeTranslations.map((key) => {
                     const source = TRANSLATION_BY_KEY[key]
                     const text = textFor(key)
+                    const verificationSource = verificationSources.get(key)
                     return (
-                      <TranslationComparisonCard
+                      <section
+                        className="comparison-card-shell"
                         key={key}
-                        reference={reference}
-                        source={source}
-                        state={buildSourceState({ key, book, text })}
-                        baseText={baseText}
-                        isBase={key === effectiveBaseTranslation}
-                        highlightDifferences={highlightDifferences}
-                        differenceCount={summary.differenceCount}
-                        bookmarked={bookmarks.includes(referenceKey)}
-                        onBookmark={handleBookmark}
-                        onOpenNotes={() => openStudyTools('notes')}
-                        onChooseSource={handleChooseSource}
-                        onLearnMore={() => openStudyTools('insights')}
-                      />
+                        aria-label={`${source.name} source verification`}
+                      >
+                        <TranslationComparisonCard
+                          reference={reference}
+                          source={source}
+                          state={buildSourceState({ key, book, text })}
+                          baseText={baseText}
+                          isBase={key === effectiveBaseTranslation}
+                          highlightDifferences={highlightDifferences}
+                          differenceCount={summary.differenceCount}
+                          bookmarked={bookmarks.includes(referenceKey)}
+                          onBookmark={handleBookmark}
+                          onOpenNotes={() => openStudyTools('notes')}
+                          onChooseSource={handleChooseSource}
+                          onLearnMore={() => openStudyTools('insights')}
+                        />
+                        {verificationSource ? (
+                          <div className="comparison-verification-disclosure">
+                            <SourceVerificationBadge
+                              status={verificationSource.verificationStatus}
+                              className="comparison-verification-badge"
+                            />
+                          </div>
+                        ) : null}
+                      </section>
                     )
                   })}
                 </section>
@@ -585,6 +646,7 @@ export default function TextualComparisonWorkspace() {
                 selectedTranslations={activeTranslations}
                 baseTranslation={activeBaseTranslation}
                 rows={rows}
+                verificationSources={verificationSources}
                 highlightDifferences={highlightDifferences}
               />
             )

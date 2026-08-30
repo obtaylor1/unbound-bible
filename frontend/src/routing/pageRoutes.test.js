@@ -25,11 +25,14 @@ describe('page routes', () => {
   it('creates stable canonical hashes', () => {
     expect(hashForPage('chat')).toBe('#aistudy')
     expect(hashForPage('textual')).toBe('#compare')
+    expect(hashForPage('scripture-verification-admin')).toBe('#admin-scripture-verification')
+    expect(pageFromHash('#admin-scripture-verification')).toBe('scripture-verification-admin')
   })
 
   it('provides a stable accessible page title', () => {
     expect(titleForPage('chat')).toBe('Scripture Research AI')
     expect(titleForPage('textual')).toBe('Compare Scripture')
+    expect(titleForPage('scripture-verification-admin')).toBe('Scripture source verification')
     expect(titleForPage('missing')).toBe('The Unbound Bible')
   })
 })

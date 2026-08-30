@@ -8,7 +8,7 @@ This reviewed release is a mixed-source general-reading compilation, **not one u
 - 82 ETHIO81 works
 - 1 supplemental work
 - 1,520 chapters
-- 38,938 verses
+- 38,487 verses
 
 ## Source groups
 
@@ -21,7 +21,10 @@ This reviewed release is a mixed-source general-reading compilation, **not one u
 
 ## Source-record status
 
-- 83 provisional source records
+- 73 verified source records
+- 13 exact matches
+- 60 rebuilt from verified sources
+- 10 source records in progress
 - KJV fallback works (6): baruch, bel-and-the-dragon, letter-of-jeremiah, prayer-of-azariah, prayer-of-manasseh, susanna
 
 ## Output gaps

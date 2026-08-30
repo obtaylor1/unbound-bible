@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import delete, inspect, select, text, update
@@ -362,6 +363,11 @@ def _manifest_work_sources(
 def _work_source_values(
     source: EditionWorkSource | WorkSourceManifest,
 ) -> tuple[object, ...]:
+    def normalized_timestamp(value: datetime | None) -> datetime | None:
+        if value is None or value.tzinfo is None or value.utcoffset() is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
     return (
         source.source_key,
         source.source_label,
@@ -377,6 +383,25 @@ def _work_source_values(
         source.modification_note,
         source.verification_status,
         source.canon_scope,
+        source.source_edition,
+        source.source_revision,
+        str(source.rights_url) if source.rights_url is not None else None,
+        source.rights_jurisdiction,
+        source.artifact_filename,
+        normalized_timestamp(source.artifact_retrieved_at),
+        source.artifact_size,
+        source.artifact_sha256,
+        source.parser_version,
+        source.transformations,
+        source.comparison_exact,
+        source.comparison_formatting,
+        source.comparison_missing,
+        source.comparison_extra,
+        source.comparison_wording,
+        source.comparison_report_sha256,
+        source.reviewer,
+        normalized_timestamp(source.reviewed_at),
+        source.review_note,
     )
 
 
@@ -431,6 +456,29 @@ def _replace_work_sources(
             modification_note=source.modification_note,
             verification_status=source.verification_status,
             canon_scope=source.canon_scope,
+            source_edition=source.source_edition,
+            source_revision=source.source_revision,
+            rights_url=(
+                str(source.rights_url)
+                if source.rights_url is not None
+                else None
+            ),
+            rights_jurisdiction=source.rights_jurisdiction,
+            artifact_filename=source.artifact_filename,
+            artifact_retrieved_at=source.artifact_retrieved_at,
+            artifact_size=source.artifact_size,
+            artifact_sha256=source.artifact_sha256,
+            parser_version=source.parser_version,
+            transformations=source.transformations,
+            comparison_exact=source.comparison_exact,
+            comparison_formatting=source.comparison_formatting,
+            comparison_missing=source.comparison_missing,
+            comparison_extra=source.comparison_extra,
+            comparison_wording=source.comparison_wording,
+            comparison_report_sha256=source.comparison_report_sha256,
+            reviewer=source.reviewer,
+            reviewed_at=source.reviewed_at,
+            review_note=source.review_note,
         ))
     session.flush()
 

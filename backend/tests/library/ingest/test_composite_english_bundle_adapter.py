@@ -1,6 +1,10 @@
 import json
+from collections import Counter
 from hashlib import sha256
+import importlib.util
+import os
 from pathlib import Path
+import shutil
 import stat
 import struct
 import unicodedata
@@ -26,8 +30,27 @@ def _work_source(source_key="world-messianic-bible", *, scope="ethio81"):
         "fallback": False,
         "modified": False,
         "modification_note": None,
-        "verification_status": "verified",
+        "verification_status": "verified_exact",
         "canon_scope": scope,
+        "source_edition": "Test Source Edition",
+        "source_revision": "revision-1",
+        "rights_url": "https://example.com/source/rights",
+        "rights_jurisdiction": "United States",
+        "artifact_filename": "source-bundle.zip",
+        "artifact_retrieved_at": "2025-01-02T03:04:05+00:00",
+        "artifact_size": 1234,
+        "artifact_sha256": "a" * 64,
+        "parser_version": "test-parser/1.0",
+        "transformations": [],
+        "comparison_exact": 2,
+        "comparison_formatting": 0,
+        "comparison_missing": 0,
+        "comparison_extra": 0,
+        "comparison_wording": 0,
+        "comparison_report_sha256": "b" * 64,
+        "reviewer": "Test Reviewer",
+        "reviewed_at": "2025-01-03T04:05:06+00:00",
+        "review_note": None,
     }
 
 
@@ -937,7 +960,7 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
             "26": [19, 20, 21, 22, 23, 24, 25, 26, 27],
         },
     }
-    assert report["corrected_verse_count"] == 38_938
+    assert report["corrected_verse_count"] == 38_487
     assert sum(
         len(verses)
         for chapters in report["known_missing_verses"].values()
@@ -965,22 +988,275 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
         "excluded_alternates": ["G^g", "G^s", "G^{s1}", "G^{s2}"],
     }
 
+    from app.library.verification.registry import APPROVED_SOURCE_DEFINITIONS
+
     manifest = SourceManifest.model_validate_json(
         (first / "manifest.json").read_text()
     )
+    wmb_work_ids = set(
+        APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"].expected_work_ids
+    )
+    work_sources = manifest.adapter_options.work_sources
+    wmb_sources = {work: work_sources[work] for work in wmb_work_ids}
+    pre_rebuild = json.loads(
+        (
+            source_dir
+            / "verification/reports/world-messianic-bible-pre-rebuild.json"
+        ).read_text(encoding="utf-8")
+    )
+    final_report = json.loads(
+        (
+            source_dir / "verification/reports/world-messianic-bible.json"
+        ).read_text(encoding="utf-8")
+    )
+    pre_by_work = {item["work_id"]: item for item in pre_rebuild["works"]}
+    final_by_work = {item["work_id"]: item for item in final_report["works"]}
+    assert Counter(source.verification_status for source in wmb_sources.values()) == Counter({
+        "verified_rebuilt": 27, "verified_exact": 12,
+    })
+    assert all(
+        source.artifact_sha256
+        == "02aef8d71addf7bf01438d1d132536f3d2cceb21820df6427015cddd608cfbf8"
+        and source.artifact_size == 4_283_520
+        and source.reviewer == "Obie Taylor"
+        and source.comparison_missing == 0
+        and source.comparison_extra == 0
+        and source.comparison_wording == 0
+        and source.comparison_report_sha256
+        for source in wmb_sources.values()
+    )
+    for work, source in wmb_sources.items():
+        expected_status = (
+            "verified_rebuilt"
+            if pre_by_work[work]["totals"]["wording"]
+            else "verified_exact"
+        )
+        work_report = (
+            source_dir / f"verification/reports/world-messianic-bible/{work}.json"
+        )
+        assert source.verification_status == expected_status
+        assert source.source_label == "World Messianic Bible"
+        assert source.source_edition == "World Messianic Bible, August 2022 stable text"
+        assert source.source_revision == "Official eBible engwmb VPL archive"
+        assert str(source.provenance_url) == "https://ebible.org/find/show.php?id=engwmb"
+        assert str(source.rights_url) == "https://ebible.org/find/show.php?id=engwmb"
+        assert source.rights_jurisdiction == (
+            "Public-domain dedication; World Messianic Bible naming condition applies"
+        )
+        assert source.artifact_filename == "engwmb_vpl.zip"
+        assert source.artifact_retrieved_at.isoformat() == "2026-08-18T11:09:49+00:00"
+        assert source.parser_version == "wmb-vpl/1"
+        assert source.comparison_report_sha256 == sha256(work_report.read_bytes()).hexdigest()
+        assert source.comparison_report_sha256 == final_by_work[work]["report_sha256"]
+        assert source.comparison_exact == final_by_work[work]["totals"]["exact"]
+        assert "official eBible VPL source" in source.review_note
+        assert "World Messianic Bible" in source.modification_note
+        if expected_status == "verified_rebuilt":
+            assert source.modified is True
+            assert pre_by_work[work]["totals"]["wording"] > 0
+        else:
+            assert source.modified is False
+            assert pre_by_work[work]["totals"]["wording"] == 0
+    assert sum(source.comparison_exact for source in wmb_sources.values()) == 23_145
+    murdock_work_ids = set(
+        APPROVED_SOURCE_DEFINITIONS["murdock-peshitta-1852"].expected_work_ids
+    )
+    murdock_sources = {work: work_sources[work] for work in murdock_work_ids}
+    murdock_pre = json.loads((
+        source_dir
+        / "verification/reports/murdock-peshitta-1852-pre-rebuild.json"
+    ).read_text(encoding="utf-8"))
+    murdock_final = json.loads((
+        source_dir / "verification/reports/murdock-peshitta-1852.json"
+    ).read_text(encoding="utf-8"))
+    murdock_pre_by_work = {item["work_id"]: item for item in murdock_pre["works"]}
+    murdock_final_by_work = {
+        item["work_id"]: item for item in murdock_final["works"]
+    }
+    assert Counter(
+        source.verification_status for source in murdock_sources.values()
+    ) == Counter({"verified_rebuilt": 26, "verified_exact": 1})
+    assert sum(source.comparison_exact for source in murdock_sources.values()) == 7_947
+    for work, source in murdock_sources.items():
+        changed = bool(
+            murdock_pre_by_work[work]["totals"]["wording"]
+            or murdock_pre_by_work[work]["totals"]["formatting"]
+        )
+        report_path = (
+            source_dir / f"verification/reports/murdock-peshitta-1852/{work}.json"
+        )
+        expected_status = "verified_rebuilt" if changed else "verified_exact"
+        assert source.verification_status == expected_status
+        assert source.reviewer == "OpenAI Codex (AI-assisted source verification)"
+        assert source.reviewed_at.isoformat() == "2026-08-29T19:56:29+00:00"
+        assert source.modified is changed
+        assert source.artifact_filename == "murdock-source.zip"
+        assert source.artifact_size == 396_427
+        assert source.artifact_sha256 == (
+            "4f0adeba385acbfa37921f66677d4aaf99e23b4e65ca162f122832689036641f"
+        )
+        assert source.parser_version == "murdock-sword/1"
+        assert source.source_revision == (
+            "CrossWire SWORD module Murdock 1.2 (2002-01-01); locked 1915 "
+            "ninth-edition scan witness"
+        )
+        assert source.comparison_report_sha256 == sha256(
+            report_path.read_bytes()
+        ).hexdigest()
+        assert source.comparison_report_sha256 == (
+            murdock_final_by_work[work]["report_sha256"]
+        )
+        assert source.comparison_exact == (
+            murdock_final_by_work[work]["totals"]["exact"]
+        )
+        assert source.comparison_formatting == 0
+        assert source.comparison_missing == 0
+        assert source.comparison_extra == 0
+        assert source.comparison_wording == 0
+        assert "39 exact OCR-window" in source.review_note
+        assert "41 locked-PDF visual" in source.review_note
+        assert "one disclosed formatting variance" in source.review_note
+        assert "0 unresolved" in source.review_note
+        assert any(
+            "0x86" in transformation and "†" in transformation
+            for transformation in source.transformations
+        )
+        assert "Only" not in source.modification_note
+        if work == "matthew":
+            assert "Matthew 27:42" in source.modification_note
+        if work == "jude":
+            assert "shootingstars" in source.review_note
+            assert "shooting-stars" in source.review_note
+            assert "shootingstars" not in source.modification_note
+    kjv_work_ids = set(
+        APPROVED_SOURCE_DEFINITIONS["kjv-1611-fallback"].expected_work_ids
+    )
+    kjv_sources = {work: work_sources[work] for work in kjv_work_ids}
+    assert Counter(
+        source.verification_status for source in kjv_sources.values()
+    ) == Counter({"verified_rebuilt": 6})
+    assert sum(source.comparison_exact for source in kjv_sources.values()) == 387
+    for work, source in kjv_sources.items():
+        report_path = source_dir / f"verification/reports/kjv-1611-fallback/{work}.json"
+        assert source.fallback is True
+        assert "KJV" in source.source_label and "fallback" in source.source_label
+        assert source.reviewer == "OpenAI Codex (AI-assisted source verification)"
+        assert source.reviewed_at.isoformat() == "2026-08-30T01:18:59+00:00"
+        assert source.reviewed_at > source.artifact_retrieved_at
+        assert source.artifact_filename == "project-gutenberg-124.txt"
+        assert source.artifact_size == 835_071
+        assert source.artifact_sha256 == (
+            "83de0c18742ba22b3d442c3a5bc828fe9e91dff27ae3c298e9b5c9a6ecfbf4d4"
+        )
+        assert source.parser_version == "gutenberg-kjv-apocrypha/1+scan-reviewed"
+        assert source.comparison_report_sha256 == sha256(report_path.read_bytes()).hexdigest()
+        assert source.comparison_formatting == 0
+        assert source.comparison_missing == 0
+        assert source.comparison_extra == 0
+        assert source.comparison_wording == 0
+        assert "no human visual review is claimed" in source.review_note
+    assert all(
+        source.verification_status == "in_progress"
+        for work, source in work_sources.items()
+        if work not in wmb_work_ids | murdock_work_ids | kjv_work_ids | {"jubilees"}
+    )
+    assert sum(
+        source.verification_status == "in_progress"
+        for source in work_sources.values()
+    ) == 10
+    readme = (source_dir / "README.md").read_text(encoding="utf-8")
+    assert "not a complete English translation" in readme
+    assert "`engwmb_vpl.zip`" in readme
+    assert "02aef8d71addf7bf01438d1d132536f3d2cceb21820df6427015cddd608cfbf8" in readme
+    assert "12 works verified exact" in readme
+    assert "27 works rebuilt from the verified source" in readme
+    assert "World Messianic Bible name is a trademark" in readme
+    for generated_name in ("corrected-bundle.zip", "data-quality-report.json", "manifest.json"):
+        generated_checksum = sha256((source_dir / generated_name).read_bytes()).hexdigest()
+        assert f"`{generated_name}`: `{generated_checksum}`" in readme
     shutil.copy2(first / "corrected-bundle.zip", tmp_path / "corrected-bundle.zip")
+    shutil.copytree(source_dir / "verification/reports", tmp_path / "verification/reports")
     rows = parse_composite_english_bundle(manifest, tmp_path)
     assert len(rows) == report["corrected_verse_count"]
     assert len({row.work_id for row in rows}) == 83
     assert len({(row.work_id, row.chapter) for row in rows}) == 1_520
     assert len({(row.work_id, row.chapter, row.verse) for row in rows}) == len(rows)
+    from app.library.verification.adapters.wmb_vpl import parse_wmb_vpl
+    official_wmb = parse_wmb_vpl(
+        source_dir / "verification/artifacts/engwmb_vpl.zip",
+        APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"],
+    )
+    installed_wmb = {
+        (row.work_id, row.chapter, row.verse, row.text)
+        for row in rows
+        if row.work_id in APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"].expected_work_ids
+    }
+    assert installed_wmb == {
+        (row.work_id, row.chapter, row.verse, row.text) for row in official_wmb
+    }
+    from app.library.verification.adapters.murdock_sword import parse_murdock_sword
+    murdock_definition = APPROVED_SOURCE_DEFINITIONS["murdock-peshitta-1852"]
+    official_murdock = parse_murdock_sword(
+        source_dir / "verification/artifacts/murdock-source.zip",
+        murdock_definition,
+    )
+    installed_murdock = {
+        (row.work_id, row.chapter, row.verse, row.text)
+        for row in rows if row.work_id in murdock_definition.expected_work_ids
+    }
+    assert installed_murdock == {
+        (row.work_id, row.chapter, row.verse, row.text) for row in official_murdock
+    }
+    from app.library.verification.adapters.gutenberg_kjv_apocrypha import (
+        reviewed_gutenberg_kjv_apocrypha,
+    )
+    kjv_definition = APPROVED_SOURCE_DEFINITIONS["kjv-1611-fallback"]
+    official_kjv = reviewed_gutenberg_kjv_apocrypha(
+        source_dir / "verification/artifacts/project-gutenberg-124.txt",
+        kjv_definition,
+    )
+    installed_kjv = {
+        (row.work_id, row.chapter, row.verse, row.text)
+        for row in rows if row.work_id in kjv_definition.expected_work_ids
+    }
+    assert installed_kjv == {
+        (row.work_id, row.chapter, row.verse, row.text) for row in official_kjv
+    }
+    from app.library.verification.adapters.charles_jubilees import (
+        SOURCE_ARTIFACT_SHA256 as JUBILEES_ARTIFACT_SHA256,
+        parse_charles_jubilees,
+    )
+    jubilees_definition = APPROVED_SOURCE_DEFINITIONS["rh-charles-jubilees-1902"]
+    official_jubilees = parse_charles_jubilees(
+        source_dir / "verification/artifacts/rh-charles-jubilees-1917-authorized-reprint.html",
+        jubilees_definition, expected_sha256=JUBILEES_ARTIFACT_SHA256,
+    )
+    installed_jubilees = {
+        (row.work_id, row.chapter, row.verse, row.text)
+        for row in rows if row.work_id == "jubilees"
+    }
+    assert installed_jubilees == {
+        (row.work_id, row.chapter, row.verse, row.text) for row in official_jubilees
+    }
+    assert work_sources["jubilees"].verification_status == "verified_rebuilt"
+    assert work_sources["jubilees"].comparison_exact == 1307
+    assert report["replacements"]["official_wmb"] == list(
+        APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"].expected_work_ids
+    )
+    assert report["replacements"]["official_murdock"] == list(
+        murdock_definition.expected_work_ids
+    )
+    assert report["replacements"]["reviewed_kjv_fallback"] == list(
+        kjv_definition.expected_work_ids
+    )
+    assert report["replacements"]["reviewed_charles_jubilees"] == ["jubilees"]
     validation = validate_edition(
         rows,
         manifest.expected_works,
         known_missing_verses=manifest.adapter_options.known_missing_verses,
     )
     assert validation.error_count == 0
-    assert validation.warning_count == 130
+    assert validation.warning_count == 125
     assert any(
         row.work_id == "1-enoch" and row.chapter == 80 and row.verse == 1
         and row.text
@@ -1058,6 +1334,285 @@ def test_reviewed_corrected_ethiopian_composite_bundle_is_reproducible_and_truth
     assert str(options.work_sources["1-enoch"].provenance_url) == (
         "https://www.gutenberg.org/ebooks/77935"
     )
+
+
+def _copied_wmb_evidence(tmp_path):
+    from app.library.verification.registry import APPROVED_SOURCE_DEFINITIONS
+
+    source_dir = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en"
+    )
+    copied = tmp_path / "source"
+    shutil.copytree(source_dir / "verification/reports", copied / "verification/reports")
+    shutil.copy2(
+        source_dir / "verification/source-artifacts.lock.json",
+        copied / "verification/source-artifacts.lock.json",
+    )
+    artifact_dir = copied / "verification/artifacts"
+    artifact_dir.mkdir(parents=True)
+    os.link(
+        source_dir / "verification/artifacts/engwmb_vpl.zip",
+        artifact_dir / "engwmb_vpl.zip",
+    )
+
+    script = source_dir / "build_manifest.py"
+    spec = importlib.util.spec_from_file_location(
+        f"eotc_manifest_tamper_test_{tmp_path.name}", script,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return (
+        module,
+        copied,
+        APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"].expected_work_ids,
+    )
+
+
+def _copied_kjv_evidence(tmp_path):
+    from app.library.verification.registry import APPROVED_SOURCE_DEFINITIONS
+
+    source_dir = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en"
+    )
+    copied = tmp_path / "source"
+    shutil.copytree(source_dir / "verification", copied / "verification")
+    script = source_dir / "build_manifest.py"
+    spec = importlib.util.spec_from_file_location(
+        f"eotc_manifest_kjv_tamper_test_{tmp_path.name}", script,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return (
+        module,
+        copied,
+        APPROVED_SOURCE_DEFINITIONS["kjv-1611-fallback"].expected_work_ids,
+    )
+
+
+def test_kjv_manifest_gate_rejects_mutated_approved_transformations(tmp_path):
+    module, copied, work_ids = _copied_kjv_evidence(tmp_path)
+    report = copied / "verification/reports/kjv-1611-fallback.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["transformations"][0] = "silently normalize every source difference"
+    report.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="transformation|KJV fallback"):
+        module._load_kjv_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+def _rewrite_wmb_child_and_summary(copied, family, work_id, mutate):
+    reports = copied / "verification/reports"
+    child = reports / family / f"{work_id}.json"
+    payload = json.loads(child.read_text(encoding="utf-8"))
+    mutate(payload)
+    child_bytes = (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    child.write_bytes(child_bytes)
+    summary_path = reports / f"{family}.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = next(item for item in summary["works"] if item["work_id"] == work_id)
+    item["report_sha256"] = sha256(child_bytes).hexdigest()
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_wmb_manifest_evidence_rejects_tampered_pre_rebuild_work_report(tmp_path):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    report = copied / "verification/reports/world-messianic-bible-pre-rebuild/genesis.json"
+    report.write_bytes(report.read_bytes() + b" ")
+
+    with pytest.raises(ValueError, match="pre-rebuild WMB work report checksum mismatch"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "mutate"),
+    [
+        ("world-messianic-bible", lambda value: value.__setitem__("work_id", "exodus")),
+        ("world-messianic-bible", lambda value: value["totals"].__setitem__("exact", "1533")),
+        ("world-messianic-bible", lambda value: value["differences"].append({
+            "chapter": 1, "verse": 1, "classification": "wording",
+            "current_text": "tampered", "source_text": "source",
+        })),
+        ("world-messianic-bible", lambda value: value.__setitem__("parser_version", "other/1")),
+        ("world-messianic-bible", lambda value: value.__setitem__("source_artifact_sha256", "1" * 64)),
+        ("world-messianic-bible", lambda value: value.__setitem__("current_publication_sha256", "2" * 64)),
+        ("world-messianic-bible", lambda value: value.__setitem__("unexpected", True)),
+        ("world-messianic-bible", lambda value: value.pop("rules")),
+    ],
+    ids=(
+        "identity", "totals-type", "differences", "parser", "source",
+        "publication", "extra-field", "missing-field",
+    ),
+)
+def test_wmb_manifest_evidence_strictly_validates_rebound_child_reports(
+    tmp_path, family, mutate,
+):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    _rewrite_wmb_child_and_summary(copied, family, "genesis", mutate)
+
+    with pytest.raises(ValueError, match="WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+@pytest.mark.parametrize("change", ["unknown", "duplicate", "missing"])
+def test_wmb_manifest_evidence_requires_exact_child_inventory(tmp_path, change):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    directory = copied / "verification/reports/world-messianic-bible"
+    if change == "unknown":
+        shutil.copy2(directory / "genesis.json", directory / "unknown.json")
+    elif change == "duplicate":
+        _rewrite_wmb_child_and_summary(
+            copied, "world-messianic-bible", "exodus",
+            lambda value: value.__setitem__("work_id", "genesis"),
+        )
+    else:
+        (directory / "genesis.json").unlink()
+
+    with pytest.raises(ValueError, match="WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+def test_wmb_manifest_evidence_binds_final_totals_to_source_rows(tmp_path):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    _rewrite_wmb_child_and_summary(
+        copied, "world-messianic-bible", "genesis",
+        lambda value: value["totals"].__setitem__("exact", 1534),
+    )
+    _rewrite_wmb_child_and_summary(
+        copied, "world-messianic-bible", "exodus",
+        lambda value: value["totals"].__setitem__("exact", 1212),
+    )
+    summary_path = copied / "verification/reports/world-messianic-bible.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["works"][0]["totals"]["exact"] = 1534
+    summary["works"][1]["totals"]["exact"] = 1212
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper", ["same-size", "unexpected-size", "repacked", "repacked-text", "symlink"],
+)
+def test_wmb_manifest_evidence_verifies_locked_artifact_before_parsing(
+    tmp_path, tamper,
+):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    artifact = copied / "verification/artifacts/engwmb_vpl.zip"
+    original = artifact.read_bytes()
+    artifact.unlink()
+    if tamper == "same-size":
+        changed = bytearray(original)
+        changed[len(changed) // 2] ^= 1
+        artifact.write_bytes(changed)
+    elif tamper == "unexpected-size":
+        artifact.write_bytes(original + b"x")
+    elif tamper in {"repacked", "repacked-text"}:
+        source = tmp_path / "original.zip"
+        source.write_bytes(original)
+        with ZipFile(source) as incoming, ZipFile(artifact, "w", ZIP_DEFLATED) as outgoing:
+            for info in incoming.infolist():
+                payload = incoming.read(info)
+                if tamper == "repacked-text" and info.filename == "engwmb_vpl.txt":
+                    payload = payload.replace(b"GEN 1:1 ", b"GEN 1:1 changed ", 1)
+                outgoing.writestr(info.filename, payload)
+    else:
+        target = tmp_path / "artifact-target.zip"
+        target.write_bytes(original)
+        artifact.symlink_to(target)
+
+    with pytest.raises(ValueError, match="artifact|WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("family_id", "murdock-peshitta-1852"),
+        ("artifact_path", "renamed.zip"),
+        ("source_url", "https://ebible.org/Scriptures/other.zip"),
+        ("landing_url", "https://ebible.org/other"),
+        ("retrieved_at", "2026-08-19T11:09:49Z"),
+        ("size_bytes", 4_283_519),
+        ("sha256", "1" * 64),
+    ],
+)
+def test_wmb_manifest_evidence_requires_exact_reviewed_lock(
+    tmp_path, field, value,
+):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    lock_path = copied / "verification/source-artifacts.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["artifacts"]["world-messianic-bible"][field] = value
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="artifact|lock|WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
+
+
+def test_wmb_manifest_evidence_anchors_all_pre_rebuild_reports(tmp_path):
+    module, copied, work_ids = _copied_wmb_evidence(tmp_path)
+    family = "world-messianic-bible-pre-rebuild"
+    replacement = "3" * 64
+    for work_id in work_ids:
+        _rewrite_wmb_child_and_summary(
+            copied, family, work_id,
+            lambda value: value.__setitem__("current_publication_sha256", replacement),
+        )
+    summary_path = copied / "verification/reports/world-messianic-bible-pre-rebuild.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["current_publication_sha256"] = replacement
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="pre-rebuild|WMB"):
+        module._load_wmb_verification(
+            copied,
+            "238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693",
+            work_ids,
+        )
 
 
 def test_corrected_bundle_builder_canonicalizes_lexicographic_chapters(tmp_path):
@@ -1144,3 +1699,61 @@ def test_corrected_manifest_rejects_bundle_appended_after_quality_report(tmp_pat
 
     with pytest.raises(ValueError, match="corrected bundle checksum mismatch"):
         manifest.build(source_dir, tmp_path)
+
+
+def _copied_canonical_publication(tmp_path):
+    source_dir = (
+        Path(__file__).resolve().parents[3]
+        / "data/scripture/eotc-composite-en"
+    )
+    copied = tmp_path / "publication"
+    copied.mkdir()
+    shutil.copy2(source_dir / "corrected-bundle.zip", copied / "corrected-bundle.zip")
+    shutil.copytree(
+        source_dir / "verification/reports", copied / "verification/reports"
+    )
+    payload = json.loads((source_dir / "manifest.json").read_text(encoding="utf-8"))
+    return copied, payload
+
+
+def test_canonical_adapter_rejects_scripture_rebound_without_matching_reports(tmp_path):
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+
+    copied, payload = _copied_canonical_publication(tmp_path)
+    original = copied / "corrected-bundle.zip"
+    rewritten = copied / "rewritten.zip"
+    with ZipFile(original) as source, ZipFile(rewritten, "w", ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            content = source.read(info.filename)
+            if info.filename == "data/gen.json":
+                chapters = json.loads(content)
+                chapters[0]["v"][0]["t"] = "Tampered publication text."
+                content = json.dumps(chapters, separators=(",", ":")).encode("utf-8")
+            target.writestr(info, content)
+    rewritten.replace(original)
+    payload["source_files"][0]["sha256"] = sha256(original.read_bytes()).hexdigest()
+    manifest = SourceManifest.model_validate(payload)
+
+    with pytest.raises(ValueError, match="publication checksum|comparison report"):
+        parse_composite_english_bundle(manifest, copied)
+
+
+def test_canonical_adapter_rejects_rehashed_report_with_wrong_work_binding(tmp_path):
+    from app.library.ingest.adapters.composite_english_bundle import (
+        parse_composite_english_bundle,
+    )
+
+    copied, payload = _copied_canonical_publication(tmp_path)
+    report_path = copied / "verification/reports/world-messianic-bible/genesis.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["work_id"] = "exodus"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    payload["adapter_options"]["work_sources"]["genesis"][
+        "comparison_report_sha256"
+    ] = sha256(report_path.read_bytes()).hexdigest()
+    manifest = SourceManifest.model_validate(payload)
+
+    with pytest.raises(ValueError, match="work identity|comparison report"):
+        parse_composite_english_bundle(manifest, copied)

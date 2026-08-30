@@ -9,10 +9,10 @@ const workSource = (sourceLabel, sourceTradition = 'Protestant') => ({
   canon_scope: 'ethio81',
 })
 const compositeGenesisSource = {
-  source_label: 'World Messianic Bible (archive revision unverified)',
+  source_label: 'World Messianic Bible',
   source_tradition: 'Hebrew Masoretic tradition',
   source_language: 'Hebrew',
-  verification_status: 'provisional',
+  verification: { status: 'verified_rebuilt', verified_at: '2026-08-29T00:38:39Z' },
   canon_scope: 'ethio81',
 }
 const row = (translation, name, text, verse = 1, tradition = 'Protestant') => ({
@@ -23,7 +23,7 @@ const row = (translation, name, text, verse = 1, tradition = 'Protestant') => ({
 
 const rows = [
   {
-    ...row('EOTC-COMPOSITE-EN', 'Ethiopian Orthodox Bible — Composite English Edition', 'In the beginning God created the heavens and the earth.'),
+    ...row('EOTC-COMPOSITE-EN', 'Ethiopian Canon Research Collection — Mixed-source English', 'In the beginning God created the heavens and the earth.'),
     work_source: compositeGenesisSource,
   },
   row('KJV', 'King James Version', 'In the beginning God created the heaven and the earth.'),
@@ -77,10 +77,10 @@ test('compares the recommended composite edition with the KJV by default', async
   await openComparison(page)
 
   await expectSourceCount(page, 2)
-  const composite = page.getByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+  const composite = page.getByRole('article', { name: 'Ethiopian Canon Research Collection — Mixed-source English' })
   await expect(composite).toContainText('In the beginning God created the heavens and the earth.')
-  await expect(composite).toContainText('World Messianic Bible (archive revision unverified)')
-  await expect(composite).toContainText('Provisional source')
+  await expect(composite).toContainText('World Messianic Bible')
+  await expect(page.getByText('Rebuilt from verified source', { exact: true })).toBeVisible()
   await expect(page.getByRole('article', { name: 'King James Version' })).toContainText('In the beginning God created the heaven and the earth.')
   await expect(page.getByRole('dialog', { name: 'Study Tools' })).toBeHidden()
 })

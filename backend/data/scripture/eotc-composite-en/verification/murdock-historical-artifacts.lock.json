@@ -1,0 +1,57 @@
+{
+  "artifacts": [
+    {
+      "filename": "syriacnewtestam00murdgoog.djvu",
+      "landing_url": "https://archive.org/details/syriacnewtestam00murdgoog",
+      "retrieved_at": "2026-08-29T09:31:34Z",
+      "role": "historical_scan",
+      "sha1": "7c9b8edcd7b292d6823bb8651fe6c73352e9168b",
+      "sha256": "8777ab6536ba7242e017b0aca426858c85fa791ba5d1ed601f93c069a5775f9e",
+      "size_bytes": 25984230,
+      "source_url": "https://archive.org/download/syriacnewtestam00murdgoog/syriacnewtestam00murdgoog.djvu"
+    },
+    {
+      "filename": "syriacnewtestam00murdgoog_djvu.txt",
+      "landing_url": "https://archive.org/details/syriacnewtestam00murdgoog",
+      "retrieved_at": "2026-08-29T06:02:27Z",
+      "role": "ocr_plain_text_derivative",
+      "sha1": "9d6c20db9df8f1a0a090667f21427d63dc809349",
+      "sha256": "cf6177896ffd5c4fe882650115bef249574d583ddeca12dbf2b1a16583104751",
+      "size_bytes": 1572696,
+      "source_url": "https://archive.org/download/syriacnewtestam00murdgoog/syriacnewtestam00murdgoog_djvu.txt"
+    },
+    {
+      "filename": "syriacnewtestam00murdgoog_scandata.xml",
+      "landing_url": "https://archive.org/details/syriacnewtestam00murdgoog",
+      "retrieved_at": "2026-08-29T06:02:46Z",
+      "role": "scan_leaf_mapping_derivative",
+      "sha1": "3ffb73016d32b6d401e350550f29a92030a2f27e",
+      "sha256": "0ba6968c1a4995dec7e432ead7bf4bd77bf78e34abbca4845795ebb4a5d67fa3",
+      "size_bytes": 188168,
+      "source_url": "https://archive.org/download/syriacnewtestam00murdgoog/syriacnewtestam00murdgoog_scandata.xml"
+    },
+    {
+      "filename": "syriacnewtestam00murdgoog_djvu.xml",
+      "landing_url": "https://archive.org/details/syriacnewtestam00murdgoog",
+      "retrieved_at": "2026-08-29T07:12:51Z",
+      "role": "page_structured_ocr_derivative",
+      "sha1": "13a2fe38fd6d5bfa46e0dbaf54916ef20a108c7f",
+      "sha256": "a6ba38a2e524e3c64e5713f51c0fcf2940d4cc1ba9262cf22b1c5fad26b99639",
+      "size_bytes": 20240247,
+      "source_url": "https://archive.org/download/syriacnewtestam00murdgoog/syriacnewtestam00murdgoog_djvu.xml"
+    },
+    {
+      "filename": "syriacnewtestam00murdgoog.pdf",
+      "landing_url": "https://archive.org/details/syriacnewtestam00murdgoog",
+      "retrieved_at": "2026-08-29T18:44:41Z",
+      "role": "visual_pdf_derivative",
+      "sha1": "76b33ccd3a0d80d6aeb8e7f56a2be80ae0732257",
+      "sha256": "be4d1425fe69b4ff24fa418e15a2a2fbfb924db50d7e06861a937cfd3c81bc05",
+      "size_bytes": 16716405,
+      "source_url": "https://archive.org/download/syriacnewtestam00murdgoog/syriacnewtestam00murdgoog.pdf"
+    }
+  ],
+  "edition": "1915 ninth edition of James Murdock's 1852 translation",
+  "internet_archive_identifier": "syriacnewtestam00murdgoog",
+  "schema_version": 1
+}

@@ -101,7 +101,7 @@ def _add_composite_coverage(application, work_id='genesis', *, canon_scope='ethi
             fallback=False,
             modified=True,
             modification_note='Normalized into the application verse schema.',
-            verification_status='provisional',
+            verification_status='in_progress',
             canon_scope=canon_scope,
         ))
         session.commit()
@@ -190,13 +190,68 @@ def test_reader_chapter_rows_expose_the_actual_edition_work_source(test_settings
         'license': 'PD',
         'attribution': 'Public-domain World Messianic Bible text.',
         'provenance_url': 'https://ebible.org/engwmb/',
+        'rights_url': None,
+        'rights_jurisdiction': None,
+        'source_edition': None,
+        'source_revision': None,
         'fallback': False,
         'modified': True,
         'modification_note': 'Normalized into the application verse schema.',
-        'verification_status': 'provisional',
+        'verification_status': 'in_progress',
+        'transformations': [],
+        'verification': {
+            'status': 'in_progress',
+            'label': 'Source verification in progress',
+            'verified_at': None,
+        },
         'canon_scope': 'ethio81',
     }
     assert kjv['work_source'] is None
+
+
+def test_reader_edition_disclosures_use_the_same_path_redaction(test_settings):
+    application = create_application(test_settings)
+    _add_reader_fixture(application)
+    with application.state.session_factory() as session:
+        edition = session.get(TextEdition, 'GEEZ1980-RESEARCH')
+        edition.name = 'Edition from /Users/admin/private/edition.txt'
+        edition.reading_language = r'C:\Users\admin\language.txt'
+        edition.source_language = 'file:///private/source-language.txt'
+        edition.script = '%252FUsers%252Fadmin%252Fscript.txt'
+        edition.publisher = 'token=do-not-disclose'
+        edition.attribution = 'Generated from ~/private/attribution.txt'
+        edition.provenance_url = (
+            'https://example.org/?file=%252FUsers%252Fadmin%252Fsource.txt'
+        )
+        edition.source_tradition = 'Generated from /custom/private/tradition.txt'
+        edition.versification = 'https://example.org/not-a-description'
+        session.commit()
+
+    row = next(
+        row for row in TestClient(application).get(
+            '/api/biblical-texts/chapter-content?book=Genesis&chapter=1'
+        ).json()['content']
+        if row['translation'] == 'GEEZ1980-RESEARCH'
+    )
+
+    assert row['edition'] == {
+        'code': 'GEEZ1980-RESEARCH',
+        'name': 'Not disclosed',
+        'language': 'Not disclosed',
+        'source_language': 'Not disclosed',
+        'script': 'Not disclosed',
+        'publisher': None,
+        'license': 'CC-BY-NC-ND-4.0',
+        'attribution': None,
+        'provenance_url': None,
+        'source_tradition': None,
+        'relationship': 'exact_ethiopian',
+        'versification': None,
+        'verification_status': 'verified',
+    }
+    serialized = str(row['edition']).casefold()
+    assert '/users/' not in serialized
+    assert 'do-not-disclose' not in serialized
 
 
 def test_reader_source_resolution_uses_book_alias_without_cross_edition_leakage(test_settings):
@@ -214,7 +269,7 @@ def test_reader_source_resolution_uses_book_alias_without_cross_edition_leakage(
             attribution='Research edition fixture.',
             fallback=False,
             modified=False,
-            verification_status='verified',
+            verification_status='verified_exact',
             canon_scope='ethio81',
         ))
         session.execute(text('''

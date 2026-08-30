@@ -1,6 +1,9 @@
+from datetime import datetime
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -9,6 +12,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -103,12 +107,45 @@ class EditionWorkSource(Base):
             name='uq_edition_work_sources_edition_work',
         ),
         CheckConstraint(
-            "verification_status IN ('provisional', 'verified')",
+            "verification_status IN ('in_progress', 'verified_exact', "
+            "'verified_formatting', 'verified_rebuilt', 'review_required')",
             name='ck_edition_work_sources_verification_status',
         ),
         CheckConstraint(
             "canon_scope IN ('ethio81', 'supplemental')",
             name='ck_edition_work_sources_canon_scope',
+        ),
+        CheckConstraint(
+            'comparison_exact >= 0',
+            name='ck_edition_work_sources_comparison_exact_nonnegative',
+        ),
+        CheckConstraint(
+            'comparison_formatting >= 0',
+            name='ck_edition_work_sources_comparison_formatting_nonnegative',
+        ),
+        CheckConstraint(
+            'comparison_missing >= 0',
+            name='ck_edition_work_sources_comparison_missing_nonnegative',
+        ),
+        CheckConstraint(
+            'comparison_extra >= 0',
+            name='ck_edition_work_sources_comparison_extra_nonnegative',
+        ),
+        CheckConstraint(
+            'comparison_wording >= 0',
+            name='ck_edition_work_sources_comparison_wording_nonnegative',
+        ),
+        CheckConstraint(
+            'artifact_size IS NULL OR artifact_size >= 0',
+            name='ck_edition_work_sources_artifact_size_nonnegative',
+        ),
+        CheckConstraint(
+            'artifact_sha256 IS NULL OR length(artifact_sha256) = 64',
+            name='ck_edition_work_sources_artifact_sha256_length',
+        ),
+        CheckConstraint(
+            'comparison_report_sha256 IS NULL OR length(comparison_report_sha256) = 64',
+            name='ck_edition_work_sources_comparison_report_sha256_length',
         ),
         Index('ix_edition_work_sources_work_id', 'work_id'),
     )
@@ -130,8 +167,43 @@ class EditionWorkSource(Base):
     fallback: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     modified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     modification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    verification_status: Mapped[str] = mapped_column(String(16))
+    verification_status: Mapped[str] = mapped_column(String(32))
     canon_scope: Mapped[str] = mapped_column(String(16))
+    source_edition: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_revision: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    rights_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    rights_jurisdiction: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    artifact_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    artifact_retrieved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    artifact_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    transformations: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
+    comparison_exact: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text('0')
+    )
+    comparison_formatting: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text('0')
+    )
+    comparison_missing: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text('0')
+    )
+    comparison_extra: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text('0')
+    )
+    comparison_wording: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text('0')
+    )
+    comparison_report_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewer: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class EditionCoverage(Base):

@@ -37,13 +37,14 @@ python -m app.library.ingest.cli publish --run-id <run-id> --confirm --database-
 
 The reader displays the human edition name and the persisted provenance metadata. It does not relabel the edition as a synthetic `ETHIO81` translation; `ETHIO81` remains the canon selector.
 
-## Ethiopian Orthodox Bible — Composite English Edition
+## Ethiopian Canon Research Collection — Mixed-source English
 
 - Edition code: `EOTC-COMPOSITE-EN`
 - Reading language: English
-- Relationship: provisional mixed-source general-reading compilation
+- Relationship: mixed-source general-reading research collection
 - Canon relationship: 82 covered `ETHIO81` works plus Prayer of Manasseh as one supplemental `LIBRARY` work
-- Reviewed output: 38,938 rows across 1,520 chapters
+- Reviewed output: 38,487 rows across 1,520 chapters
+- Work review status: **73 verified** source-remediation works and 10 readable `in_progress` works
 
 This edition is **not** an official Ethiopian Orthodox edition, a uniform translation, or a complete English translation of the traditional canon. It combines separately attributed public-domain and openly licensed readings so users can read available English text while seeing the literal source for each work. `GEEZ1980-RESEARCH` remains a separate Ge'ez research edition and is unchanged by this compilation.
 
@@ -75,15 +76,17 @@ The manifest declares exactly 48 absent source or alignment labels without place
 
 Every reader response carries per-work provenance. Do not describe the collection as a single translation.
 
+The verified remediation inventory is exactly **39 WMB + 27 Murdock + 6 permanent KJV fallback + 1 Jubilees = 73 verified works**. The remaining ten supplied works—1 Enoch, 1–3 Meqabyan, 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom of Solomon, and Sirach—remain readable with their existing provenance and `in_progress` status.
+
 | Works | Literal source family | Status and reuse responsibility |
 |---|---|---|
-| 39 Old Testament works | World Messianic Bible (WMB), user-archive revision | Public-domain archive text; upstream revision is unverified. Source chapter identifiers were normalized to numeric order and app work names were standardized; scripture prose and source verse labels were not changed. Retain the provisional label and attribution. |
-| 27 New Testament works | James Murdock's 1852 English Peshitta | Public domain; translated from Syriac Aramaic. Source chapter identifiers and app work names were standardized, `FI`/`RF` apparatus was removed, ten blank positions were declared, and four U+000F separators were normalized; scripture words outside source apparatus and source verse labels were not changed. Retain the provisional archive-revision label. |
+| 39 Old Testament works | [Official eBible World Messianic Bible August 2022 stable VPL](https://ebible.org/find/show.php?id=engwmb) | Public domain with the World Messianic Bible trademark naming condition. Twelve works are `verified_exact`; 27 are `verified_rebuilt` from the locked official artifact. The final comparison has no missing, extra, formatting, or wording differences. |
+| 27 New Testament works | [Locked CrossWire Murdock SWORD module 1.2](https://crosswire.org/sword/modules/ModInfo.jsp?modName=Murdock) | Public domain; translated from Syriac Aramaic. Three John is `verified_exact`; the other 26 works are `verified_rebuilt` after the documented removal of source apparatus, declaration of ten blank positions, normalization of four source separators, and recovery of one unique Philemon spill marker. Final reports contain no unexplained differences. |
 | 1 Esdras, 2 Esdras, Tobit, Judith, Wisdom, and Sirach | [Official eBible World English Bible British Edition with Deuterocanon (WEBBE)](https://ebible.org/details.php?id=eng-webbe) | Public domain. The official VPL's 24 explicit blank Sirach rows and 12 additional absent numeric labels were omitted and declared; every nonblank scripture row retains its official chapter and verse identity. Preserve the official source link and provisional verification status. |
-| Baruch, Letter of Jeremiah, Prayer of Azariah, Susanna, Bel and the Dragon, and Prayer of Manasseh | KJV 1611 archive fallback | Public-domain archive text, recorded as unmodified. Always show a literal **KJV fallback** label. These are not distinct Ethiopian Orthodox translations. |
+| Baruch, Letter of Jeremiah, Prayer of Azariah, Susanna, Bel and the Dragon, and Prayer of Manasseh | Reviewed rebuilt permanent KJV fallback | Project Gutenberg eBook 124 supplies the reviewed electronic transcription, checked against locked 1611 Great HE scan leaves. All six are `verified_rebuilt`, and all permanently retain the literal **KJV fallback** label. These are not distinct Ethiopian Orthodox translations. |
 | 1–3 Meqabyan | Wikisource translations from Ge'ez | CC BY-SA 4.0. Source extraction and JSON formatting were applied without changing scripture prose; 2 Meqabyan also records its two absent labels. Reuse must credit contributors, identify changes, link the license, and preserve ShareAlike terms. Use permanent revisions [1 Meqabyan oldid 16044809](https://en.wikisource.org/w/index.php?title=Translation:1_Meqabyan&oldid=16044809), [2 Meqabyan oldid 16044810](https://en.wikisource.org/w/index.php?title=Translation:2_Meqabyan&oldid=16044810), and [3 Meqabyan oldid 16044811](https://en.wikisource.org/w/index.php?title=Translation:3_Meqabyan&oldid=16044811). |
 | 1 Enoch | [R. H. Charles, Project Gutenberg ebook 77935](https://www.gutenberg.org/ebooks/77935) | Public domain in the USA. The Ethiopic (`E`) main reading, excluded alternates, joined fragments, normalized whitespace, and structural numbering are disclosed below and in the per-work source record. |
-| Jubilees | R. H. Charles-related archive text | Public-domain archive text with unavailable exact upstream provenance. Source chapter identifiers were normalized to numeric order and the app work identifier was standardized; scripture prose was not changed. Retain the provisional warning. |
+| Jubilees | [R. H. Charles 1902 translation; authorized 1917 reprint transcription](https://www.globalgreyebooks.com/online-ebooks/r-h-charles_book-of-jubilees_complete-text.html) | Public domain in the USA. The transcription is locked to SHA-256 `e48d840d060a64cfdee1c7cec640770fdf1c3f2daf76c84383163ce9126dd54a` and correlated to the original 1902 A. and C. Black scan. Nine fixed samples detected no revision in the sampled passages; this is not a full-edition collation. A pinned renderer reproduces 18 crop hashes covering the samples, seven exact parser repairs, and full-page evidence for chapter 27 positions 1–13. The app installs exactly the primary edition's 1,307 numbered positions after the narrowly documented structural and apparatus transformations; Jubilees is `verified_rebuilt`. |
 
 Source and license claims remain the responsibility of anyone redistributing the texts. In particular, downstream Meqabyan reuse must satisfy CC BY-SA 4.0, and operators must not erase per-work attribution, fallback, verification, canon-placement, modification, or provenance fields.
 
@@ -96,9 +99,9 @@ The build preserves source wording while making only disclosed structural and pr
 | Original `Ethiopian Orthodox Bible (Non-KJV Edition).zip` | `0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27026066dbb9f92ce34b183a2` |
 | Official `eng-webbe_vpl.zip` | `dc16460ed5e890e7b169cd3caeaa7e4adb4f7a6b5031bff85e4503389cd03b11` |
 | Project Gutenberg `project-gutenberg-77935.txt` | `10d325355a810badf67bbbd1fe6bda77dc6e294eae78c2f6c69290188af45b14` |
-| Generated `corrected-bundle.zip` | `4383d4af7c6768fdd093ff37fecb61dcaf657673dcea184ad27bb1ee1eaecf63` |
-| Generated `data-quality-report.json` | `4abb0c1af30388949c936c94ed9b9155935d743c2fef5c45bb35f4259baa6e01` |
-| Generated `manifest.json` | `da05b54e112dc5b834732bd14e981f85348d18a36671783b2d30b352a5dafe15` |
+| Generated `corrected-bundle.zip` | `238bc987c8033f73fee8ffd0dd7401edb076b596c5e35afab3a7a4f3e8eb4693` |
+| Generated `data-quality-report.json` | `3b20766cbc215da8a0e00d94293a52675599dd5fa9b050055d6fb8877d9ac93b` |
+| Generated `manifest.json` | `f3210ba80b1c845b722464b6352745b2a2f81ddb9027efa5d231c0710df98dbf` |
 
 ### Reproducible build and validation
 
@@ -149,7 +152,7 @@ PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli publish --run-id 
 PYTHONPATH=backend ./venv/bin/python -m app.library.ingest.cli coverage-report --run-id "$COMPOSITE_RUN_ID" --edition EOTC-COMPOSITE-EN --database-url "$COMPOSITE_DB_URL"
 ```
 
-The staged and published counts must be 38,938, validation must report zero errors, persisted coverage must total 83 populated works and 1,520 chapters, and the 13 unavailable `ETHIO81` works must remain absent. Before publishing to any non-disposable database, back it up, review the active edition and per-work source records, and obtain the required operational approval.
+The staged and published counts must be 38,487, validation must report zero errors, persisted coverage must total 83 populated works and 1,520 chapters, and the 13 unavailable `ETHIO81` works must remain absent. Before publishing to any non-disposable database, back it up, review the active edition and per-work source records, and obtain the required operational approval.
 
 Rollback restores only the immediate distinct predecessor and therefore requires an earlier published snapshot. It is expected to fail on a fresh one-publication rehearsal. Where a reviewed predecessor exists, audit first, run the atomic rollback, then audit again:
 

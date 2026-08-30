@@ -17,7 +17,17 @@ FROZEN_SCOPE = {
     "ethio81_works": 82,
     "supplemental_works": 1,
     "chapters": 1520,
-    "verses": 38938,
+    "verses": 38487,
+}
+FROZEN_VERIFICATION_STATUS_COUNTS = {
+    "in_progress": 10,
+    "verified_exact": 13,
+    "verified_rebuilt": 60,
+}
+FROZEN_VERIFICATION_WORK_ID_SHA256 = {
+    "in_progress": "b0da357f8409a140105fc4855b31ed0808643f41f77fde68cce61c5014562f9b",
+    "verified_exact": "313e145bf23a360b987a2d0c9d151e3babecdaff7e40c8ae4ee179eb1b28c8f5",
+    "verified_rebuilt": "8776367977c9eac0ac23368285ca2e5deabc8c78067088a360db1aad6dc106fd",
 }
 FROZEN_SOURCE_GROUP_WORK_COUNTS = {
     "extra": 2,
@@ -230,11 +240,15 @@ def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
             "manifest and quality-report known_missing_verses do not match"
         )
 
-    provisional_work_ids = sorted(
-        work_id
-        for work_id, source in work_sources.items()
-        if isinstance(source, dict) and source.get("verification_status") == "provisional"
-    )
+    verification_work_ids = {
+        status: sorted(
+            work_id
+            for work_id, source in work_sources.items()
+            if isinstance(source, dict)
+            and source.get("verification_status") == status
+        )
+        for status in FROZEN_VERIFICATION_STATUS_COUNTS
+    }
     fallback_work_ids = sorted(
         work_id
         for work_id, source in work_sources.items()
@@ -251,11 +265,24 @@ def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
             errors.append(
                 f"KJV fallback work {work_id} must use source group kjv_apocrypha"
             )
-    if (
-        set(provisional_work_ids) != manifest_work_ids
-        or len(provisional_work_ids) != 83
-    ):
-        errors.append("all 83 reviewed works must remain provisional")
+    observed_status_counts = {
+        status: len(work_ids)
+        for status, work_ids in verification_work_ids.items()
+    }
+    if observed_status_counts != FROZEN_VERIFICATION_STATUS_COUNTS:
+        errors.append(
+            "manifest verification-status counts differ from the frozen reviewed set"
+        )
+    if set().union(*map(set, verification_work_ids.values())) != manifest_work_ids:
+        errors.append(
+            "every reviewed work must use a frozen supported verification status"
+        )
+    for status, work_ids in verification_work_ids.items():
+        observed_hash = sha256("\n".join(work_ids).encode("utf-8")).hexdigest()
+        if observed_hash != FROZEN_VERIFICATION_WORK_ID_SHA256[status]:
+            errors.append(
+                f"manifest {status} work IDs differ from the frozen reviewed set"
+            )
 
     _fail_if_any(errors)
     source_groups = dict(FROZEN_SOURCE_GROUP_WORK_COUNTS)
@@ -266,12 +293,17 @@ def audit_composite_release(bundle_dir: Path) -> dict[str, Any]:
         "scope": actual_scope,
         "source_groups": source_groups,
         "undeclared_output_gaps": undeclared_output_gaps,
-        "provisional_works": len(provisional_work_ids),
+        "verified_works": sum(
+            len(work_ids)
+            for status, work_ids in verification_work_ids.items()
+            if status.startswith("verified_")
+        ),
+        "in_progress_works": len(verification_work_ids["in_progress"]),
         "fallback_works": len(fallback_work_ids),
         "source_group_work_counts": source_group_work_counts,
-        "provisional_source_records": {
-            "count": len(provisional_work_ids),
-            "work_ids": provisional_work_ids,
+        "verification_status_records": {
+            status: {"count": len(work_ids), "work_ids": work_ids}
+            for status, work_ids in verification_work_ids.items()
         },
         "kjv_fallback_works": fallback_work_ids,
         "gap_status": {
@@ -288,7 +320,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     """Render the human-readable audit record for a validated bundle."""
     scope = report["scope"]
     source_groups = report["source_group_work_counts"]
-    provisional = report["provisional_source_records"]
+    verification = report["verification_status_records"]
     fallback_works = report["kjv_fallback_works"]
     gaps = report["gap_status"]
     group_lines = "\n".join(
@@ -317,7 +349,10 @@ This reviewed release is a mixed-source general-reading compilation, **not one u
 
 ## Source-record status
 
-- {provisional["count"]} provisional source records
+- {report["verified_works"]} verified source records
+- {verification["verified_exact"]["count"]} exact matches
+- {verification["verified_rebuilt"]["count"]} rebuilt from verified sources
+- {report["in_progress_works"]} source records in progress
 - KJV fallback works ({len(fallback_works)}): {fallback_list}
 
 ## Output gaps

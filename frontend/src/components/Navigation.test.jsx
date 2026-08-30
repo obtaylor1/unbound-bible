@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { AuthContext } from '../auth/authContext'
 import Navigation from './Navigation'
 
 describe('Navigation', () => {
@@ -25,6 +27,29 @@ describe('Navigation', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('exposes source verification only to an authenticated administrator', () => {
+    const onPageChange = vi.fn()
+    const { rerender } = render(
+      <AuthContext.Provider value={{ user: { username: 'reader', role: 'member' } }}>
+        <Navigation currentPage="home" onPageChange={onPageChange} />
+      </AuthContext.Provider>,
+    )
+    expect(screen.queryByRole('button', { name: 'Source verification' })).not.toBeInTheDocument()
+
+    rerender(
+      <AuthContext.Provider value={{ user: { username: 'admin', role: 'admin' } }}>
+        <Navigation currentPage="home" onPageChange={onPageChange} />
+      </AuthContext.Provider>,
+    )
+    const adminTarget = screen.getByRole('button', { name: 'Source verification' })
+    expect(adminTarget).toHaveClass('nav-admin-link')
+    const stylesheet = readFileSync('src/components/Navigation.css', 'utf8')
+    expect(stylesheet).toMatch(/\.nav-admin-link\s*\{[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/s)
+    expect(stylesheet).toMatch(/\.nav-admin-link\s*\{\s*width:\s*44px;/s)
+    fireEvent.click(adminTarget)
+    expect(onPageChange).toHaveBeenCalledWith('scripture-verification-admin')
   })
 
   it.each([

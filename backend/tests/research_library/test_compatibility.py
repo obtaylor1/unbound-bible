@@ -107,7 +107,7 @@ def _seed(session):
         provenance_url='https://archive.example/genesis',
         fallback=False,
         modified=False,
-        verification_status='verified',
+        verification_status='verified_exact',
         canon_scope='ethio81',
     )
     coverage_duplicate = EditionCoverage(

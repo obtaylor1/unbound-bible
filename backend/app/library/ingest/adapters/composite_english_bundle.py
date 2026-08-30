@@ -31,6 +31,12 @@ _SOURCE_KEYS = {
     "meqabyan": "wikisource-meqabyan-geez",
     "extra": "rh-charles-ethiopic",
 }
+_VERIFIED_REPORT_DIRECTORIES = {
+    "world-messianic-bible": "world-messianic-bible",
+    "murdock-peshitta-1852": "murdock-peshitta-1852",
+    "kjv-1611-fallback": "kjv-1611-fallback",
+}
+_CANONICAL_EDITION_CODE = "EOTC-COMPOSITE-EN"
 _DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 
 
@@ -205,6 +211,68 @@ def _read_json(archive: ZipFile, member: str) -> Any:
         return json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"invalid UTF-8 JSON archive member: {member}") from error
+
+
+def _verified_report_path(work_id: str, source_key: str) -> str | None:
+    if work_id == "jubilees" and source_key == "rh-charles-ethiopic":
+        family = "rh-charles-jubilees-1902"
+    else:
+        family = _VERIFIED_REPORT_DIRECTORIES.get(source_key)
+    if family is None:
+        return None
+    return f"verification/reports/{family}/{work_id}.json"
+
+
+def _validate_verified_report_bindings(
+    manifest: SourceManifest, manifest_directory: Path, publication_sha256: str
+) -> None:
+    """Bind canonical verified claims to committed per-work evidence files."""
+    if manifest.edition_code != _CANONICAL_EDITION_CODE:
+        return
+    for work_id, source in manifest.adapter_options.work_sources.items():
+        if not source.verification_status.startswith("verified_"):
+            continue
+        relative_path = _verified_report_path(work_id, source.source_key)
+        if relative_path is None:
+            raise ValueError(
+                f"verified work {work_id!r} has no approved comparison report path."
+            )
+        with _open_source_archive(manifest_directory, relative_path) as stream:
+            encoded = stream.read(8 * 1024 * 1024 + 1)
+        if len(encoded) > 8 * 1024 * 1024:
+            raise ValueError(f"comparison report is too large: {relative_path}")
+        if sha256(encoded).hexdigest() != source.comparison_report_sha256:
+            raise ValueError(
+                f"comparison report checksum mismatch for {work_id!r}."
+            )
+        try:
+            report = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"comparison report is not valid UTF-8 JSON for {work_id!r}."
+            ) from error
+        totals = report.get("totals") if isinstance(report, dict) else None
+        expected_totals = {
+            "exact": source.comparison_exact,
+            "formatting": source.comparison_formatting,
+            "missing": source.comparison_missing,
+            "extra": source.comparison_extra,
+            "wording": source.comparison_wording,
+        }
+        if not isinstance(report, dict) or report.get("work_id") != work_id:
+            raise ValueError(f"comparison report work identity mismatch for {work_id!r}.")
+        if report.get("current_publication_sha256") != publication_sha256:
+            raise ValueError(
+                f"comparison report publication checksum mismatch for {work_id!r}."
+            )
+        if (
+            report.get("source_artifact_sha256") != source.artifact_sha256
+            or report.get("parser_version") != source.parser_version
+            or totals != expected_totals
+            or report.get("differences") != []
+            or report.get("is_verified_candidate") is not True
+        ):
+            raise ValueError(f"comparison report evidence mismatch for {work_id!r}.")
 
 
 def _strict_positive_integer(value: object, label: str) -> int:
@@ -421,6 +489,9 @@ def parse_composite_english_bundle(
             raise ValueError(
                 f"source archive checksum does not match manifest: {source.path}"
             )
+        _validate_verified_report_bindings(
+            manifest, manifest_directory, source.sha256
+        )
         with _validated_archive(opened_source, source.path) as archive:
             by_id = _validate_index(_read_json(archive, _INDEX_MEMBER), options)
             rows: list[NormalizedVerse] = []

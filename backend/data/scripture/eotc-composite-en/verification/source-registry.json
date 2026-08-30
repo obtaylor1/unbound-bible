@@ -1,0 +1,137 @@
+{
+  "families": {
+    "kjv-1611-fallback": {
+      "adapter_id": "gutenberg_kjv_apocrypha",
+      "allowed_source_hosts": [
+        "www.gutenberg.org",
+        "gutenberg.org"
+      ],
+      "artifact_filename": "project-gutenberg-124.txt",
+      "artifact_url": "https://www.gutenberg.org/cache/epub/124/pg124.txt",
+      "expected_work_ids": [
+        "baruch",
+        "letter-of-jeremiah",
+        "prayer-of-azariah",
+        "susanna",
+        "bel-and-the-dragon",
+        "prayer-of-manasseh"
+      ],
+      "family_id": "kjv-1611-fallback",
+      "landing_url": "https://www.gutenberg.org/ebooks/124",
+      "max_artifact_bytes": 2097152,
+      "rights_jurisdiction": "Public domain in the USA"
+    },
+    "murdock-peshitta-1852": {
+      "adapter_id": "murdock_sword",
+      "allowed_source_hosts": [
+        "crosswire.org",
+        "www.crosswire.org"
+      ],
+      "artifact_filename": "murdock-source.zip",
+      "artifact_url": "https://crosswire.org/ftpmirror/pub/sword/packages/rawzip/Murdock.zip",
+      "expected_work_ids": [
+        "matthew",
+        "mark",
+        "luke",
+        "john",
+        "acts",
+        "romans",
+        "1-corinthians",
+        "2-corinthians",
+        "galatians",
+        "ephesians",
+        "philippians",
+        "colossians",
+        "1-thessalonians",
+        "2-thessalonians",
+        "1-timothy",
+        "2-timothy",
+        "titus",
+        "philemon",
+        "hebrews",
+        "james",
+        "1-peter",
+        "2-peter",
+        "1-john",
+        "2-john",
+        "3-john",
+        "jude",
+        "revelation"
+      ],
+      "family_id": "murdock-peshitta-1852",
+      "landing_url": "https://crosswire.org/sword/modules/ModInfo.jsp?modName=Murdock",
+      "max_artifact_bytes": 104857600,
+      "rights_jurisdiction": "Public domain; historical edition cross-check required"
+    },
+    "rh-charles-jubilees-1902": {
+      "adapter_id": "charles_jubilees",
+      "allowed_source_hosts": [
+        "www.globalgreyebooks.com",
+        "globalgreyebooks.com"
+      ],
+      "artifact_filename": "rh-charles-jubilees-1917-authorized-reprint.html",
+      "artifact_url": "https://www.globalgreyebooks.com/online-ebooks/r-h-charles_book-of-jubilees_complete-text.html",
+      "expected_work_ids": [
+        "jubilees"
+      ],
+      "family_id": "rh-charles-jubilees-1902",
+      "landing_url": "https://www.globalgreyebooks.com/online-ebooks/r-h-charles_book-of-jubilees_complete-text.html",
+      "max_artifact_bytes": 2097152,
+      "rights_jurisdiction": "Public domain in the USA; authorized 1917 reprint of the 1902 translation"
+    },
+    "world-messianic-bible": {
+      "adapter_id": "wmb_vpl",
+      "allowed_source_hosts": [
+        "ebible.org"
+      ],
+      "artifact_filename": "engwmb_vpl.zip",
+      "artifact_url": "https://ebible.org/Scriptures/engwmb_vpl.zip",
+      "expected_work_ids": [
+        "genesis",
+        "exodus",
+        "leviticus",
+        "numbers",
+        "deuteronomy",
+        "joshua",
+        "judges",
+        "ruth",
+        "1-samuel",
+        "2-samuel",
+        "1-kings",
+        "2-kings",
+        "1-chronicles",
+        "2-chronicles",
+        "ezra",
+        "nehemiah",
+        "esther",
+        "job",
+        "psalms",
+        "proverbs",
+        "ecclesiastes",
+        "song-of-solomon",
+        "isaiah",
+        "jeremiah",
+        "lamentations",
+        "ezekiel",
+        "daniel",
+        "hosea",
+        "joel",
+        "amos",
+        "obadiah",
+        "jonah",
+        "micah",
+        "nahum",
+        "habakkuk",
+        "zephaniah",
+        "haggai",
+        "zechariah",
+        "malachi"
+      ],
+      "family_id": "world-messianic-bible",
+      "landing_url": "https://ebible.org/find/show.php?id=engwmb",
+      "max_artifact_bytes": 104857600,
+      "rights_jurisdiction": "Public-domain dedication; World Messianic Bible naming condition applies"
+    }
+  },
+  "version": 1
+}

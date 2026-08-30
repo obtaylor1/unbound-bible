@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError
 import sqlite3
+from unittest.mock import ANY
 from uuid import uuid4
 
 import pytest
@@ -58,7 +59,9 @@ def set_composite_manifest(
     *,
     label='Genesis composite source',
     source_verification='provisional',
-    work_verification='provisional',
+    work_verification='in_progress',
+    reviewer='Test Reviewer',
+    artifact_sha256='a' * 64,
 ):
     set_run_manifest(
         run,
@@ -81,6 +84,25 @@ def set_composite_manifest(
                     'modification_note': 'Normalized source formatting.',
                     'verification_status': work_verification,
                     'canon_scope': 'ethio81',
+                    'source_edition': 'Test Source Edition',
+                    'source_revision': 'revision-1',
+                    'rights_url': 'https://example.org/composite/rights',
+                    'rights_jurisdiction': 'United States',
+                    'artifact_filename': 'genesis-source.usfm',
+                    'artifact_retrieved_at': '2025-01-02T03:04:05+00:00',
+                    'artifact_size': 1234,
+                    'artifact_sha256': artifact_sha256,
+                    'parser_version': 'test-parser/1.0',
+                    'transformations': ['Normalized source formatting.'],
+                    'comparison_exact': 10,
+                    'comparison_formatting': 1,
+                    'comparison_missing': 0,
+                    'comparison_extra': 0,
+                    'comparison_wording': 0,
+                    'comparison_report_sha256': 'b' * 64,
+                    'reviewer': reviewer,
+                    'reviewed_at': '2025-01-03T04:05:06+00:00',
+                    'review_note': 'Reviewed against the immutable artifact.',
                 },
             },
             'supplemental_works': [],
@@ -116,6 +138,25 @@ def work_source_snapshot(session, edition_code):
             source.modification_note,
             source.verification_status,
             source.canon_scope,
+            source.source_edition,
+            source.source_revision,
+            source.rights_url,
+            source.rights_jurisdiction,
+            source.artifact_filename,
+            source.artifact_retrieved_at,
+            source.artifact_size,
+            source.artifact_sha256,
+            source.parser_version,
+            source.transformations,
+            source.comparison_exact,
+            source.comparison_formatting,
+            source.comparison_missing,
+            source.comparison_extra,
+            source.comparison_wording,
+            source.comparison_report_sha256,
+            source.reviewer,
+            source.reviewed_at,
+            source.review_note,
         )
         for source in work_source_rows(session, edition_code)
     )
@@ -231,7 +272,7 @@ def test_publish_promotes_manifest_metadata_and_failure_preserves_live_catalog(
     )
 
 
-def test_publish_promotes_composite_source_snapshot_and_provisional_status(
+def test_publish_promotes_composite_source_snapshot_and_all_evidence_fields(
     ingest_session,
 ):
     from app.library.ingest.publish import publish_run
@@ -260,8 +301,27 @@ def test_publish_promotes_composite_source_snapshot_and_provisional_status(
         False,
         True,
         'Normalized source formatting.',
-        'provisional',
+        'in_progress',
         'ethio81',
+        'Test Source Edition',
+        'revision-1',
+        'https://example.org/composite/rights',
+        'United States',
+        'genesis-source.usfm',
+        ANY,
+        1234,
+        'a' * 64,
+        'test-parser/1.0',
+        ['Normalized source formatting.'],
+        10,
+        1,
+        0,
+        0,
+        0,
+        'b' * 64,
+        'Test Reviewer',
+        ANY,
+        'Reviewed against the immutable artifact.',
     ),)
 
 
@@ -345,6 +405,27 @@ def test_composite_source_replacement_is_idempotent_and_isolated_by_edition(
     ) == geez_edition_before
 
 
+def test_evidence_only_change_creates_a_new_publication(ingest_session):
+    from app.library.ingest.publish import publish_run
+    from .conftest import make_ingest_run
+
+    create_legacy_texts(ingest_session)
+    first = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Same text')
+    set_composite_manifest(first, reviewer='First Reviewer')
+    first_result = publish_run(ingest_session, first.id)
+
+    updated = make_ingest_run(ingest_session, 'EOTC-COMPOSITE-EN', 'Same text')
+    set_composite_manifest(updated, reviewer='Second Reviewer')
+    updated_result = publish_run(ingest_session, updated.id)
+
+    assert first_result.changed is True
+    assert updated_result.changed is True
+    assert updated_result.publication_version == first_result.publication_version + 1
+    assert work_source_rows(
+        ingest_session, 'EOTC-COMPOSITE-EN'
+    )[0].reviewer == 'Second Reviewer'
+
+
 def test_source_metadata_and_verses_rollback_together_after_injected_failure(
     ingest_session, monkeypatch
 ):
@@ -369,7 +450,9 @@ def test_source_metadata_and_verses_rollback_together_after_injected_failure(
         candidate,
         label='Candidate source',
         source_verification='verified',
-        work_verification='verified',
+        work_verification='verified_exact',
+        reviewer='Candidate Reviewer',
+        artifact_sha256='c' * 64,
     )
     ingest_session.flush()
 
@@ -391,7 +474,9 @@ def test_source_metadata_and_verses_rollback_together_after_injected_failure(
         publisher.publish_run(ingest_session, candidate.id)
 
     assert source_seen_before_verse_replacement[0][2] == 'Candidate source'
-    assert source_seen_before_verse_replacement[0][13] == 'verified'
+    assert source_seen_before_verse_replacement[0][13] == 'verified_exact'
+    assert source_seen_before_verse_replacement[0][22] == 'c' * 64
+    assert source_seen_before_verse_replacement[0][31] == 'Candidate Reviewer'
     ingest_session.expire_all()
     assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN') == before_sources
     assert (
@@ -421,7 +506,9 @@ def test_rollback_restores_composite_source_snapshot_and_verification_status(
         new,
         label='New verified source',
         source_verification='verified',
-        work_verification='verified',
+        work_verification='verified_exact',
+        reviewer='New Reviewer',
+        artifact_sha256='d' * 64,
     )
     publish_run(ingest_session, new.id)
     assert ingest_session.get(
@@ -436,6 +523,12 @@ def test_rollback_restores_composite_source_snapshot_and_verification_status(
     assert work_source_snapshot(ingest_session, 'EOTC-COMPOSITE-EN')[0][2] == (
         'Old provisional source'
     )
+    assert work_source_snapshot(
+        ingest_session, 'EOTC-COMPOSITE-EN'
+    )[0][22] == 'a' * 64
+    assert work_source_snapshot(
+        ingest_session, 'EOTC-COMPOSITE-EN'
+    )[0][31] == 'Test Reviewer'
     assert legacy_rows(ingest_session, 'EOTC-COMPOSITE-EN')[0].text == 'Old text'
     assert work_source_snapshot(ingest_session, 'GEEZ1980-RESEARCH') == preserved_before
 

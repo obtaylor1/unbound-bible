@@ -1,5 +1,5 @@
 import copy
-from datetime import date
+from datetime import date, datetime, timezone
 
 import jsonschema
 import pytest
@@ -60,7 +60,26 @@ def work_source(**changes):
         'fallback': False,
         'modified': False,
         'modification_note': None,
-        'verification_status': 'verified',
+        'source_edition': 'World English Bible 2020',
+        'source_revision': '2020-01-01',
+        'rights_url': 'https://example.org/web/rights',
+        'rights_jurisdiction': 'United States',
+        'artifact_filename': 'web-genesis.usfm',
+        'artifact_retrieved_at': '2025-01-02T03:04:05+00:00',
+        'artifact_size': 12345,
+        'artifact_sha256': 'b' * 64,
+        'parser_version': 'usfm-parser/1.0',
+        'transformations': [],
+        'comparison_exact': 1533,
+        'comparison_formatting': 0,
+        'comparison_missing': 0,
+        'comparison_extra': 0,
+        'comparison_wording': 0,
+        'comparison_report_sha256': 'c' * 64,
+        'reviewer': 'Test Reviewer',
+        'reviewed_at': '2025-01-03T04:05:06+00:00',
+        'review_note': None,
+        'verification_status': 'verified_exact',
         'canon_scope': 'ethio81',
     }
     value.update(changes)
@@ -76,7 +95,7 @@ def composite_options(**changes):
                 source_key='ENO',
                 source_label='Provisional Enoch translation',
                 provenance_url=None,
-                verification_status='provisional',
+                verification_status='in_progress',
                 canon_scope='supplemental',
             ),
         },
@@ -101,9 +120,92 @@ def composite_manifest(**changes):
     return value
 
 
-def test_verified_work_source_requires_provenance_url():
-    with pytest.raises(ValidationError, match='verified work source requires provenance_url'):
-        WorkSourceManifest.model_validate(work_source(provenance_url=None))
+def test_complete_verified_exact_work_source_is_accepted():
+    source = WorkSourceManifest.model_validate(work_source())
+
+    assert source.verification_status == 'verified_exact'
+    assert source.artifact_retrieved_at == datetime(
+        2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize(
+    'missing_field',
+    (
+        'provenance_url', 'source_edition', 'source_revision', 'rights_url',
+        'rights_jurisdiction', 'artifact_filename', 'artifact_retrieved_at',
+        'artifact_size', 'artifact_sha256', 'parser_version',
+        'comparison_report_sha256', 'reviewer', 'reviewed_at',
+    ),
+)
+def test_verified_work_source_requires_complete_immutable_review_evidence(
+    missing_field,
+):
+    with pytest.raises(ValidationError, match=missing_field):
+        WorkSourceManifest.model_validate(work_source(**{missing_field: None}))
+
+
+@pytest.mark.parametrize(
+    'comparison_field',
+    ('comparison_missing', 'comparison_extra', 'comparison_wording'),
+)
+def test_verified_work_source_rejects_unresolved_comparison_counts(
+    comparison_field,
+):
+    with pytest.raises(ValidationError, match=comparison_field):
+        WorkSourceManifest.model_validate(work_source(**{comparison_field: 1}))
+
+
+def test_verified_formatting_requires_a_transformation():
+    with pytest.raises(ValidationError, match='transformation'):
+        WorkSourceManifest.model_validate(work_source(
+            verification_status='verified_formatting', transformations=[]
+        ))
+
+
+@pytest.mark.parametrize(
+    'changes',
+    (
+        {'verification_status': 'verified_rebuilt', 'modified': False},
+        {
+            'verification_status': 'verified_rebuilt',
+            'modified': True,
+            'modification_note': None,
+        },
+    ),
+)
+def test_verified_rebuilt_requires_modified_and_modification_note(changes):
+    with pytest.raises(ValidationError, match='verified_rebuilt|modification_note'):
+        WorkSourceManifest.model_validate(work_source(**changes))
+
+
+@pytest.mark.parametrize('field', ('artifact_retrieved_at', 'reviewed_at'))
+def test_work_source_rejects_naive_timestamps(field):
+    with pytest.raises(ValidationError, match='timezone-aware'):
+        WorkSourceManifest.model_validate(work_source(
+            **{field: '2025-01-02T03:04:05'}
+        ))
+
+
+def test_in_progress_work_source_accepts_partial_evidence():
+    source = WorkSourceManifest.model_validate(work_source(
+        verification_status='in_progress',
+        provenance_url=None,
+        source_edition=None,
+        source_revision=None,
+        rights_url=None,
+        rights_jurisdiction=None,
+        artifact_filename=None,
+        artifact_retrieved_at=None,
+        artifact_size=None,
+        artifact_sha256=None,
+        parser_version=None,
+        comparison_report_sha256=None,
+        reviewer=None,
+        reviewed_at=None,
+    ))
+
+    assert source.verification_status == 'in_progress'
 
 
 def test_modified_work_source_requires_modification_note():
@@ -150,7 +252,7 @@ def test_composite_adapter_rejects_duplicate_book_map_targets():
         {
             'genesis': work_source(),
             '1-enoch': work_source(
-                source_key='ENO', verification_status='provisional',
+                source_key='ENO', verification_status='in_progress',
                 provenance_url=None, canon_scope='supplemental',
             ),
             'jubilees': work_source(source_key='JUB'),
@@ -252,14 +354,14 @@ def test_composite_supplemental_works_must_be_mapped_targets():
             'genesis': work_source(),
             '1-enoch': work_source(
                 source_key='ENO', provenance_url=None,
-                verification_status='provisional', canon_scope='ethio81',
+                verification_status='in_progress', canon_scope='ethio81',
             ),
         }),
         ([], {
             'genesis': work_source(),
             '1-enoch': work_source(
                 source_key='ENO', provenance_url=None,
-                verification_status='provisional', canon_scope='supplemental',
+                verification_status='in_progress', canon_scope='supplemental',
             ),
         }),
     ),
@@ -274,14 +376,18 @@ def test_composite_work_source_canon_scope_agrees_with_supplemental_membership(
         )))
 
 
-def test_verified_source_manifest_rejects_provisional_work_source():
+@pytest.mark.parametrize('work_status', ('in_progress', 'review_required'))
+def test_verified_source_manifest_rejects_unverified_work_source(work_status):
     value = composite_manifest(source_verification='verified')
+    value['adapter_options']['work_sources']['1-enoch']['verification_status'] = (
+        work_status
+    )
 
     with pytest.raises(ValidationError, match='verified source_verification requires all work sources'):
         SourceManifest.model_validate(value)
 
 
-def test_provisional_source_manifest_accepts_provisional_work_source():
+def test_provisional_source_manifest_accepts_in_progress_work_source():
     manifest = SourceManifest.model_validate(composite_manifest())
     assert manifest.source_verification == 'provisional'
 

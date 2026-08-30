@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl
 
@@ -55,6 +55,36 @@ AdapterId = Literal[
     'composite_english_bundle',
 ]
 Checksum = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
+VerificationStatus = Literal[
+    'in_progress',
+    'verified_exact',
+    'verified_formatting',
+    'verified_rebuilt',
+    'review_required',
+]
+VERIFIED_STATUSES = {
+    'verified_exact', 'verified_formatting', 'verified_rebuilt',
+}
+SourceEdition = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+SourceRevision = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+RightsJurisdiction = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
+ArtifactFilename = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)
+]
+ParserVersion = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+Transformation = Annotated[
+    StrictStr, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+]
+Transformations = Annotated[list[Transformation], Field(max_length=100)]
+ComparisonCount = Annotated[StrictInt, Field(ge=0)]
 ChapterCount = Annotated[StrictInt, Field(gt=0, le=200)]
 VerseCount = Annotated[StrictInt, Field(gt=0, le=1000)]
 MissingVerseNumber = Annotated[StrictInt, Field(ge=1, le=1000)]
@@ -245,22 +275,104 @@ class WorkSourceManifest(BaseModel):
     fallback: StrictBool = False
     modified: StrictBool = False
     modification_note: Attribution | None = None
-    verification_status: Literal['provisional', 'verified']
+    verification_status: VerificationStatus
     canon_scope: Literal['ethio81', 'supplemental']
+    source_edition: SourceEdition | None = None
+    source_revision: SourceRevision | None = None
+    rights_url: HttpUrl | None = None
+    rights_jurisdiction: RightsJurisdiction | None = None
+    artifact_filename: ArtifactFilename | None = None
+    artifact_retrieved_at: datetime | None = None
+    artifact_size: Annotated[StrictInt, Field(ge=0)] | None = None
+    artifact_sha256: Checksum | None = None
+    parser_version: ParserVersion | None = None
+    transformations: Transformations = Field(default_factory=list)
+    comparison_exact: ComparisonCount = 0
+    comparison_formatting: ComparisonCount = 0
+    comparison_missing: ComparisonCount = 0
+    comparison_extra: ComparisonCount = 0
+    comparison_wording: ComparisonCount = 0
+    comparison_report_sha256: Checksum | None = None
+    reviewer: Contributor | None = None
+    reviewed_at: datetime | None = None
+    review_note: Attribution | None = None
 
-    @field_validator('provenance_url')
+    @field_validator('provenance_url', 'rights_url')
     @classmethod
-    def provenance_url_is_commit_safe(cls, value: HttpUrl | None) -> HttpUrl | None:
+    def evidence_url_is_commit_safe(cls, value: HttpUrl | None) -> HttpUrl | None:
         if value is not None:
             _validate_commit_safe_url(value)
         return value
 
+    @field_validator('artifact_filename')
+    @classmethod
+    def artifact_filename_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = unicodedata.normalize('NFC', value)
+        if normalized in {'.', '..'} or '/' in normalized or '\\' in normalized:
+            raise ValueError('artifact_filename must be a filename without path segments.')
+        if re.match(r'^[A-Za-z]:', normalized):
+            raise ValueError('artifact_filename must not contain a drive prefix.')
+        if any(unicodedata.category(character).startswith('C') for character in normalized):
+            raise ValueError('artifact_filename must not contain control characters.')
+        return normalized
+
+    @field_validator('artifact_retrieved_at', 'reviewed_at', mode='before')
+    @classmethod
+    def parse_evidence_timestamp(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except ValueError as error:
+                raise ValueError('evidence timestamp must be valid ISO-8601.') from error
+        return value
+
+    @field_validator('artifact_retrieved_at', 'reviewed_at')
+    @classmethod
+    def evidence_timestamp_is_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (
+            value.tzinfo is None or value.utcoffset() is None
+        ):
+            raise ValueError('evidence timestamp must be timezone-aware.')
+        return value
+
     @model_validator(mode='after')
     def provenance_and_modification_are_complete(self) -> WorkSourceManifest:
-        if self.verification_status == 'verified' and self.provenance_url is None:
-            raise ValueError('verified work source requires provenance_url.')
         if self.modified and self.modification_note is None:
             raise ValueError('modified work source requires modification_note.')
+        if self.verification_status not in VERIFIED_STATUSES:
+            return self
+
+        required_evidence = (
+            'provenance_url', 'source_edition', 'source_revision', 'rights_url',
+            'rights_jurisdiction', 'artifact_filename', 'artifact_retrieved_at',
+            'artifact_size', 'artifact_sha256', 'parser_version',
+            'comparison_report_sha256', 'reviewer', 'reviewed_at',
+        )
+        for field_name in required_evidence:
+            if getattr(self, field_name) is None:
+                raise ValueError(
+                    f'verified work source requires {field_name}.'
+                )
+        for field_name in (
+            'comparison_missing', 'comparison_extra', 'comparison_wording'
+        ):
+            if getattr(self, field_name) != 0:
+                raise ValueError(
+                    f'verified work source requires {field_name} to be zero.'
+                )
+        if (
+            self.verification_status == 'verified_formatting'
+            and not self.transformations
+        ):
+            raise ValueError(
+                'verified_formatting work source requires a transformation.'
+            )
+        if self.verification_status == 'verified_rebuilt' and not self.modified:
+            raise ValueError('verified_rebuilt work source requires modified=true.')
         return self
 
 
@@ -580,7 +692,7 @@ class SourceManifest(BaseModel):
         if not isinstance(self.adapter_options, CompositeEnglishBundleAdapterOptions):
             return self
         if self.source_verification == 'verified' and any(
-            source.verification_status == 'provisional'
+            source.verification_status not in VERIFIED_STATUSES
             for source in self.adapter_options.work_sources.values()
         ):
             raise ValueError(

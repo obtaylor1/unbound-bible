@@ -23,6 +23,7 @@ const SavedStudies = lazy(() => import('./components/SavedStudies'))
 const CanonComparison = lazy(() => import('./components/CanonComparison'))
 const RaceMisuse = lazy(() => import('./components/RaceMisuse'))
 const Factbook = lazy(() => import('./components/Factbook'))
+const ScriptureVerificationPage = lazy(() => import('./admin/ScriptureVerificationPage'))
 
 export function ReaderLoadingFallback() {
   return (
@@ -186,6 +187,9 @@ function App() {
             <SavedStudies reference={pageContext} />
           </div>
         )
+
+      case 'scripture-verification-admin':
+        return <ScriptureVerificationPage />
       
       default:
         return <HomePage />

@@ -26,7 +26,7 @@ def test_fresh_database_migration_creates_scripture_compatibility_table(
 
     scripts = ScriptDirectory.from_config(config)
     assert [head.revision for head in scripts.get_revisions("heads")] == [
-        "0015_administrator_role"
+        "0016_merge_heads"
     ]
 
     command.upgrade(config, "head")

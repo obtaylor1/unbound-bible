@@ -169,6 +169,16 @@ function Navigation({ currentPage, onPageChange }) {
         </div>
 
         <div className="nav-actions">
+          {user?.role === 'admin' && (
+            <button
+              className={`nav-admin-link ${currentPage === 'scripture-verification-admin' ? 'active' : ''}`}
+              type="button"
+              aria-label="Source verification"
+              onClick={() => navigate('scripture-verification-admin')}
+            >
+              <span aria-hidden="true">✓</span><span className="nav-admin-link__label">Verify sources</span>
+            </button>
+          )}
           <button className="nav-action-btn" type="button" aria-label="Search" onClick={() => setSearchOpen(true)}>
             <span aria-hidden="true">⌕</span>
           </button>

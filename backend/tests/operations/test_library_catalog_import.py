@@ -196,7 +196,7 @@ def test_import_accepts_a_fresh_alembic_head_target(tmp_path, monkeypatch):
             source_tradition="Fixture",
             license_spdx="CC0-1.0",
             attribution="Fixture",
-            verification_status="provisional",
+            verification_status="in_progress",
             canon_scope="ethio81",
         ))
         session.commit()

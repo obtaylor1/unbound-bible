@@ -524,6 +524,18 @@
   border-color: var(--reader-gold);
 }
 
+.text-source-disclosure__badge--verified_exact,
+.text-source-disclosure__badge--verified_formatting,
+.text-source-disclosure__badge--verified_rebuilt {
+  border-color: var(--reader-teal);
+}
+
+.text-source-disclosure__badge--in_progress,
+.text-source-disclosure__badge--review_required,
+.text-source-disclosure__badge--unknown {
+  border-style: dashed;
+}
+
 .translation-overview {
   min-width: 0;
   padding: 0.4rem 1rem 0.65rem;
@@ -769,6 +781,17 @@
 .text-source-disclosure dd {
   min-width: 0;
   margin: 0;
+}
+
+.text-source-disclosure__transformations {
+  margin: 0;
+  padding-inline-start: 1.2rem;
+}
+
+.text-source-disclosure__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
 }
 
 .text-source-disclosure a {

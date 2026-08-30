@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import TextualComparisonWorkspace from './TextualComparisonWorkspace'
 
@@ -44,7 +44,11 @@ const compositeRow = {
     attribution: 'Public-domain archive text.',
     provenance_url: 'https://example.test/kjv',
     fallback: true,
-    verification_status: 'provisional',
+    verification: {
+      status: 'verified_exact',
+      label: 'Untrusted API label',
+      verified_at: '2026-08-17T13:00:00Z',
+    },
     canon_scope: 'ethio81',
   },
 }
@@ -144,10 +148,118 @@ describe('TextualComparisonWorkspace', () => {
 
     const card = await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
     expect(screen.getByRole('combobox', { name: 'Base reference' })).toHaveValue('eotc-composite-en')
-    expect(card).toHaveTextContent('KJV fallback')
-    expect(card).toHaveTextContent('Provisional source')
+    const sourceSection = screen.getByRole('region', {
+      name: 'Ethiopian Orthodox Bible — Composite English Edition source verification',
+    })
+    expect(within(sourceSection).getByText('Source verified')).toBeVisible()
+    expect(within(sourceSection).getByText('KJV fallback')).toBeVisible()
+    expect(within(sourceSection).queryByText('Source status')).not.toBeInTheDocument()
     expect(card).toHaveTextContent('KJV 1611 fallback')
     expect(card).toHaveTextContent('Translated by King James Version translators')
+  })
+
+  it.each(['toString', 'constructor', '__proto__'])(
+    'renders prototype-like comparison status %s as unavailable without crashing',
+    async (status) => {
+      installFetch({ rows: [{
+        ...compositeRow,
+        work_source: {
+          ...compositeRow.work_source,
+          verification: { status, label: 'Unsafe label', verified_at: null },
+        },
+      }, ...genesisRows] })
+      render(<TextualComparisonWorkspace />)
+
+      const sourceSection = await screen.findByRole('region', {
+        name: 'Ethiopian Orthodox Bible — Composite English Edition source verification',
+      })
+      expect(within(sourceSection).getByText('Source status unavailable')).toBeVisible()
+      expect(within(sourceSection).getByText('KJV fallback')).toBeVisible()
+    },
+  )
+
+  it('associates source verification and fallback with each source in chapter view', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [compositeRow, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    await user.click(screen.getByRole('button', { name: 'Chapter view' }))
+
+    const chapterSource = screen.getByRole('article', {
+      name: 'Ethiopian Orthodox Bible — Composite English Edition, verse 1',
+    })
+    expect(within(chapterSource).getByText('Source verified')).toBeVisible()
+    expect(within(chapterSource).getByText('KJV fallback')).toBeVisible()
+  })
+
+  it('preserves work-level source status when a selected chapter source has no verse row', async () => {
+    const user = userEvent.setup()
+    installFetch({ rows: [compositeRow, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    await user.click(screen.getByRole('button', { name: 'Chapter view' }))
+
+    const unavailableSource = screen.getByRole('article', {
+      name: 'Ethiopian Orthodox Bible — Composite English Edition, verse 2',
+    })
+    expect(within(unavailableSource).getByText('Text unavailable')).toBeVisible()
+    expect(within(unavailableSource).getByText('Source verified')).toBeVisible()
+    expect(within(unavailableSource).getByText('KJV fallback')).toBeVisible()
+  })
+
+  it.each([
+    ['in_progress', 'Source verification in progress'],
+    ['verified_exact', 'Source verified'],
+    ['verified_formatting', 'Verified with documented formatting changes'],
+    ['verified_rebuilt', 'Rebuilt from verified source'],
+    ['review_required', 'Source review required'],
+  ])('uses the shared %s source status label in comparison results', async (status, label) => {
+    installFetch({ rows: [{
+      ...compositeRow,
+      work_source: {
+        ...compositeRow.work_source,
+        verification: { status, label: 'Do not trust this label', verified_at: null },
+      },
+    }, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    expect(screen.getByText(label)).toBeVisible()
+    expect(screen.getByText('KJV fallback')).toBeVisible()
+  })
+
+  it('rejects suspicious source links in comparison cards', async () => {
+    installFetch({ rows: [{
+      ...compositeRow,
+      work_source: {
+        ...compositeRow.work_source,
+        provenance_url: 'https://example.org/%0d%0aHeader:value',
+      },
+    }, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+
+    await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    expect(screen.queryByRole('link', { name: /view source record/i })).not.toBeInTheDocument()
+  })
+
+  it('redacts local paths and secrets before comparison source details render', async () => {
+    const secret = `ghp_${'A'.repeat(36)}`
+    installFetch({ rows: [{
+      ...compositeRow,
+      work_source: {
+        ...compositeRow.work_source,
+        source_label: '/Users/obie/private/source.txt',
+        translator: secret,
+        attribution: 'Psalm 23/1 retains Hebrew/Aramaic chapter/verse markers.',
+      },
+    }, ...genesisRows] })
+    render(<TextualComparisonWorkspace />)
+
+    const card = await screen.findByRole('article', { name: 'Ethiopian Orthodox Bible — Composite English Edition' })
+    expect(card).toHaveTextContent('Source details unavailable')
+    expect(card).toHaveTextContent('Psalm 23/1 retains Hebrew/Aramaic chapter/verse markers.')
+    expect(card).not.toHaveTextContent('/Users/obie/private/source.txt')
+    expect(card).not.toHaveTextContent(secret)
   })
 
   it('keeps an explicit same-passage route source through hash navigation and browser back', async () => {

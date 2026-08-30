@@ -18,7 +18,8 @@ const HASH_TO_PAGE = {
   library: 'notes',
   notes: 'notes',
   community: 'forum',
-  forum: 'forum'
+  forum: 'forum',
+  'admin-scripture-verification': 'scripture-verification-admin'
 }
 
 const PAGE_TO_HASH = {
@@ -35,7 +36,8 @@ const PAGE_TO_HASH = {
   media: '#media',
   map: '#map',
   notes: '#library',
-  forum: '#community'
+  forum: '#community',
+  'scripture-verification-admin': '#admin-scripture-verification'
 }
 
 export const pageFromHash = (hash = '') => {
@@ -63,7 +65,8 @@ const PAGE_TITLES = {
   media: 'Interactive Media',
   map: 'Biblical Map',
   notes: 'My Library',
-  forum: 'Community'
+  forum: 'Community',
+  'scripture-verification-admin': 'Scripture source verification'
 }
 
 export const titleForPage = (page) => PAGE_TITLES[page] ?? 'The Unbound Bible'

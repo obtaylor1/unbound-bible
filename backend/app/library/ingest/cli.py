@@ -7,6 +7,7 @@ never downloads source material and never guesses a database target.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from hashlib import sha256
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.database import create_database_engine, create_session_factory
+from app.library.canon import WORKS
 from app.library.ingest.manifest import SourceManifest
 from app.library.ingest.models import (
     ScriptureIngestRun,
@@ -37,7 +39,7 @@ from app.library.ingest.adapters.composite_english_bundle import (
 )
 from app.library.ingest.adapters.weahadu_bundle import parse_weahadu_bundle
 from app.library.ingest.validate import validate_edition
-from app.library.models import EditionCoverage, TextEdition
+from app.library.models import EditionCoverage, EditionWorkSource, TextEdition
 from app.library.seed import seed_ethiopian_canon
 
 
@@ -384,7 +386,20 @@ def coverage_report(
                     raise RuntimeError('--run-id and --edition refer to different editions.')
                 edition = run.edition_code
             coverage = []
+            inventory = None
+            active_publication = None
             if edition is not None:
+                active_publication = session.scalar(
+                    select(ScripturePublication).where(
+                        ScripturePublication.edition_code == edition,
+                        ScripturePublication.active.is_(True),
+                    )
+                )
+                coverage_rows = tuple(session.scalars(
+                    select(EditionCoverage)
+                    .where(EditionCoverage.edition_code == edition)
+                    .order_by(EditionCoverage.work_id)
+                ))
                 coverage = [
                     {
                         'work_id': row.work_id,
@@ -392,20 +407,41 @@ def coverage_report(
                         'chapter_count': row.chapter_count,
                         'verse_count': row.verse_count,
                     }
-                    for row in session.scalars(
-                        select(EditionCoverage)
-                        .where(EditionCoverage.edition_code == edition)
-                        .order_by(EditionCoverage.work_id)
-                    )
+                    for row in coverage_rows
                 ]
-            if run is None and edition is not None:
-                active = session.scalar(
-                    select(ScripturePublication).where(
-                        ScripturePublication.edition_code == edition,
-                        ScripturePublication.active.is_(True),
-                    )
+                source_rows = tuple(session.scalars(
+                    select(EditionWorkSource)
+                    .where(EditionWorkSource.edition_code == edition)
+                    .order_by(EditionWorkSource.work_id)
+                ))
+                status_totals = Counter(
+                    row.verification_status for row in source_rows
                 )
-                run = _get_run(session, active.run_id) if active is not None else None
+                populated_work_ids = {row.work_id for row in coverage_rows}
+                unavailable_work_ids = sorted(
+                    {work.id for work in WORKS} - populated_work_ids
+                )
+                inventory = {
+                    'populated_work_count': len(populated_work_ids),
+                    'chapter_count': sum(
+                        row.chapter_count or 0 for row in coverage_rows
+                    ),
+                    'verse_count': sum(row.verse_count or 0 for row in coverage_rows),
+                    'verified_work_count': sum(
+                        count for status, count in status_totals.items()
+                        if status.startswith('verified_')
+                    ),
+                    'in_progress_work_count': status_totals['in_progress'],
+                    'fallback_work_count': sum(row.fallback for row in source_rows),
+                    'catalog_unavailable_work_count': len(unavailable_work_ids),
+                    'catalog_unavailable_work_ids': unavailable_work_ids,
+                    'verification_status_totals': dict(sorted(status_totals.items())),
+                }
+            if run is None and edition is not None:
+                run = (
+                    _get_run(session, active_publication.run_id)
+                    if active_publication is not None else None
+                )
             if run is None and edition is None:
                 run_count = session.scalar(select(func.count()).select_from(ScriptureIngestRun))
                 _emit(next_action='stage', runs=run_count, coverage=[])
@@ -415,7 +451,10 @@ def coverage_report(
                     edition_code=edition,
                     next_action='validate or publish a candidate',
                     status='unpublished',
+                    active_run_id=None,
+                    is_active=False,
                     coverage=coverage,
+                    inventory=inventory,
                 )
                 return
             _emit(
@@ -428,7 +467,16 @@ def coverage_report(
                 warnings=run.warning_count if run else 0,
                 next_action='review coverage',
                 status=run.status if run else None,
+                active_run_id=(
+                    str(active_publication.run_id)
+                    if active_publication is not None else None
+                ),
+                is_active=(
+                    active_publication is not None
+                    and active_publication.run_id == run.id
+                ),
                 coverage=coverage,
+                inventory=inventory,
             )
 
 

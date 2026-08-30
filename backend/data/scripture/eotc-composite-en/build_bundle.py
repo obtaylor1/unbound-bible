@@ -14,14 +14,41 @@ import sys
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+BACKEND_DIRECTORY = Path(__file__).resolve().parents[3]
+if str(BACKEND_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIRECTORY))
+
+from app.library.verification.adapters.wmb_vpl import parse_wmb_vpl  # noqa: E402
+from app.library.verification.adapters.murdock_sword import (  # noqa: E402
+    parse_murdock_sword,
+)
+from app.library.verification.adapters.gutenberg_kjv_apocrypha import (  # noqa: E402
+    reviewed_gutenberg_kjv_apocrypha,
+)
+from app.library.verification.adapters.charles_jubilees import (  # noqa: E402
+    HISTORICAL_EVIDENCE_FILENAME as JUBILEES_EVIDENCE_FILENAME,
+    SOURCE_ARTIFACT_SHA256 as JUBILEES_ARTIFACT_SHA256,
+    parse_charles_jubilees,
+    validate_historical_evidence as validate_jubilees_evidence,
+)
+from app.library.verification.registry import APPROVED_SOURCE_DEFINITIONS  # noqa: E402
+
 
 RAW_ARCHIVE = "Ethiopian Orthodox Bible (Non-KJV Edition).zip"
 WEB_ARCHIVE = "eng-webbe_vpl.zip"
 ENOCH_TEXT = "project-gutenberg-77935.txt"
+WMB_ARCHIVE = "verification/artifacts/engwmb_vpl.zip"
+MURDOCK_ARCHIVE = "verification/artifacts/murdock-source.zip"
+KJV_FALLBACK_TEXT = "verification/artifacts/project-gutenberg-124.txt"
+JUBILEES_TEXT = "verification/artifacts/rh-charles-jubilees-1917-authorized-reprint.html"
 INPUT_CHECKSUMS = {
     RAW_ARCHIVE: "0f4bdff8e24ee7e67afbd939d68a8dc40c0f1cf27026066dbb9f92ce34b183a2",
     WEB_ARCHIVE: "dc16460ed5e890e7b169cd3caeaa7e4adb4f7a6b5031bff85e4503389cd03b11",
     ENOCH_TEXT: "10d325355a810badf67bbbd1fe6bda77dc6e294eae78c2f6c69290188af45b14",
+    WMB_ARCHIVE: "02aef8d71addf7bf01438d1d132536f3d2cceb21820df6427015cddd608cfbf8",
+    MURDOCK_ARCHIVE: "4f0adeba385acbfa37921f66677d4aaf99e23b4e65ca162f122832689036641f",
+    KJV_FALLBACK_TEXT: "83de0c18742ba22b3d442c3a5bc828fe9e91dff27ae3c298e9b5c9a6ecfbf4d4",
+    JUBILEES_TEXT: JUBILEES_ARTIFACT_SHA256,
 }
 
 BOOK_MAP = {
@@ -101,7 +128,7 @@ WEB_ABSENT_WITHOUT_ROWS = {
         26: [20, 21, 22, 23, 24, 25, 26, 27],
     },
 }
-EXPECTED_CORRECTED_VERSE_COUNT = 38_938
+EXPECTED_CORRECTED_VERSE_COUNT = 38_487
 
 _LINE = re.compile(r"([^\s]+) ([1-9]\d*):([1-9]\d*) (.*)")
 _ROMAN_CHAPTER = re.compile(r"^([IVXLCDM]+)\.\s*(.*)$")
@@ -136,6 +163,25 @@ def _roman_to_int(value: str) -> int:
 
 def _clean_text(value: str) -> str:
     return " ".join(value.replace("\u00a0", " ").split())
+
+
+def _parse_jubilees(path: Path) -> list[dict[str, Any]]:
+    definition = APPROVED_SOURCE_DEFINITIONS["rh-charles-jubilees-1902"]
+    verification_root = path.parent.parent
+    validate_jubilees_evidence(
+        verification_root / JUBILEES_EVIDENCE_FILENAME,
+        verification_root,
+        definition,
+    )
+    rows = parse_charles_jubilees(
+        path, definition, expected_sha256=JUBILEES_ARTIFACT_SHA256,
+    )
+    chapters: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        chapters[row.chapter].append({"n": row.verse, "t": row.text})
+    return [
+        {"c": chapter, "v": chapters[chapter]} for chapter in sorted(chapters)
+    ]
 
 
 def _parse_enoch(path: Path) -> list[dict[str, Any]]:
@@ -296,6 +342,75 @@ def _parse_web(path: Path) -> dict[str, list[dict[str, Any]]]:
     return output
 
 
+def _parse_wmb(path: Path) -> dict[str, list[dict[str, Any]]]:
+    definition = APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"]
+    grouped: dict[str, dict[int, list[dict[str, Any]]]] = {
+        work_id: defaultdict(list) for work_id in definition.expected_work_ids
+    }
+    for row in parse_wmb_vpl(path, definition):
+        grouped[row.work_id][row.chapter].append({"n": row.verse, "t": row.text})
+    output = {
+        work_id: [
+            {"c": chapter, "v": chapters[chapter]}
+            for chapter in sorted(chapters)
+        ]
+        for work_id, chapters in grouped.items()
+    }
+    if set(output) != set(definition.expected_work_ids):
+        raise ValueError("official WMB source must contain the exact reviewed 39 works")
+    if sum(
+        len(chapter["v"]) for chapters in output.values() for chapter in chapters
+    ) != 23_145:
+        raise ValueError("official WMB source row count changed")
+    return output
+
+
+def _parse_murdock(path: Path) -> dict[str, list[dict[str, Any]]]:
+    definition = APPROVED_SOURCE_DEFINITIONS["murdock-peshitta-1852"]
+    grouped: dict[str, dict[int, list[dict[str, Any]]]] = {
+        work_id: defaultdict(list) for work_id in definition.expected_work_ids
+    }
+    for row in parse_murdock_sword(path, definition):
+        grouped[row.work_id][row.chapter].append({"n": row.verse, "t": row.text})
+    output = {
+        work_id: [
+            {"c": chapter, "v": chapters[chapter]}
+            for chapter in sorted(chapters)
+        ]
+        for work_id, chapters in grouped.items()
+    }
+    if set(output) != set(definition.expected_work_ids):
+        raise ValueError("official Murdock source must contain the exact reviewed 27 works")
+    if sum(
+        len(chapter["v"]) for chapters in output.values() for chapter in chapters
+    ) != 7_947:
+        raise ValueError("official Murdock source row count changed")
+    return output
+
+
+def _parse_kjv_fallback(path: Path) -> dict[str, list[dict[str, Any]]]:
+    definition = APPROVED_SOURCE_DEFINITIONS["kjv-1611-fallback"]
+    grouped: dict[str, dict[int, list[dict[str, Any]]]] = {
+        work_id: defaultdict(list) for work_id in definition.expected_work_ids
+    }
+    for row in reviewed_gutenberg_kjv_apocrypha(path, definition):
+        grouped[row.work_id][row.chapter].append({"n": row.verse, "t": row.text})
+    output = {
+        work_id: [
+            {"c": chapter, "v": chapters[chapter]}
+            for chapter in sorted(chapters)
+        ]
+        for work_id, chapters in grouped.items()
+    }
+    if set(output) != set(definition.expected_work_ids):
+        raise ValueError("reviewed KJV fallback must contain the exact six works")
+    if sum(
+        len(chapter["v"]) for chapters in output.values() for chapter in chapters
+    ) != 387:
+        raise ValueError("reviewed KJV fallback row count changed")
+    return output
+
+
 def _raw_audit(archive: ZipFile, records: list[dict[str, Any]]) -> dict[str, int]:
     positions: dict[tuple[str, int, int], list[str]] = defaultdict(list)
     chapters = 0
@@ -397,6 +512,10 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
     _verify_inputs(source_dir)
     web = _parse_web(source_dir / WEB_ARCHIVE)
     enoch = _parse_enoch(source_dir / ENOCH_TEXT)
+    wmb = _parse_wmb(source_dir / WMB_ARCHIVE)
+    murdock = _parse_murdock(source_dir / MURDOCK_ARCHIVE)
+    kjv_fallback = _parse_kjv_fallback(source_dir / KJV_FALLBACK_TEXT)
+    jubilees = _parse_jubilees(source_dir / JUBILEES_TEXT)
 
     with ZipFile(source_dir / RAW_ARCHIVE) as raw:
         index = json.loads(raw.read("data/index.json").decode("utf-8"))
@@ -410,10 +529,19 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
         per_source: Counter[str] = Counter()
         for record in records:
             source_id = record["id"]
-            if source_id in web:
+            work_id = BOOK_MAP[source_id]
+            if record["src"] == "wmb":
+                chapters = wmb[work_id]
+            elif record["src"] == "peshitta":
+                chapters = murdock[work_id]
+            elif record["src"] == "kjv_apocrypha":
+                chapters = kjv_fallback[work_id]
+            elif source_id in web:
                 chapters = web[source_id]
             elif source_id == "ENO":
                 chapters = enoch
+            elif source_id == "JUB":
+                chapters = jubilees
             else:
                 chapters = _canonical_untouched(
                     source_id,
@@ -429,7 +557,6 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
             corrected_index.append(corrected_record)
             members[record["file"]] = _json_bytes(chapters)
             count = sum(len(chapter["v"]) for chapter in chapters)
-            work_id = BOOK_MAP[source_id]
             per_work[work_id] = {
                 "source_id": source_id, "source_group": record["src"],
                 "chapters": len(chapters), "verses": count,
@@ -478,8 +605,18 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
         "per_source_group_verses": dict(sorted(per_source.items())),
         "source_group_work_counts": SOURCE_GROUP_COUNTS,
         "replacements": {
+            "official_wmb": list(
+                APPROVED_SOURCE_DEFINITIONS["world-messianic-bible"].expected_work_ids
+            ),
+            "official_murdock": list(
+                APPROVED_SOURCE_DEFINITIONS["murdock-peshitta-1852"].expected_work_ids
+            ),
+            "reviewed_kjv_fallback": list(
+                APPROVED_SOURCE_DEFINITIONS["kjv-1611-fallback"].expected_work_ids
+            ),
             "official_webbe": sorted(BOOK_MAP[source] for source in WEB_REPLACEMENTS),
             "project_gutenberg_enoch": ["1-enoch"],
+            "reviewed_charles_jubilees": ["jubilees"],
         },
         "web_reserved_blank_labels": {
             "sirach": {
@@ -499,7 +636,9 @@ def build(source_dir: Path, output_dir: Path) -> dict[str, Any]:
             "excluded_alternates": ["G^g", "G^s", "G^{s1}", "G^{s2}"],
         },
         "archive_presentation_cleanup": {
-            "murdock_peshitta": "Removed FI formatting delimiters and RF translator-note blocks; omitted and declared ten blank reserved positions; normalized four U+000F source separators across three verse texts to spaces; scripture words outside source apparatus and source verse labels were preserved."
+            "murdock_peshitta": "Rebuilt all 27 works from the locked CrossWire Murdock 1.2 module; removed FI presentation delimiters and RF translator-note blocks; omitted and declared ten blank reserved positions; normalized four U+000F source separators across three verse texts to spaces; decoded only the reviewed 0x86 Matthew 27:42 dagger marker; recovered Philemon 1:1 from its unique source spill marker after validating the module's duplicate index pointer; scripture words outside source apparatus and source verse labels were preserved.",
+            "kjv_fallback": "Rebuilt the exact six permanent KJV fallback works from locked Project Gutenberg eBook 124 after 1611 Great HE scan corroboration; mapped Baruch 6 to Letter of Jeremiah, Song 2-68 to Prayer of Azariah 1-67, and the unnumbered Prayer of Manasses to 1:1; excluded Song 1 and editorial canonical Daniel prose; corrected only four scan-confirmed electronic transcription defects: drinck, dour, life up, and iniquites. The KJV fallback disclosure remains permanent.",
+            "jubilees": "Rebuilt Jubilees to the 1,307 numbered positions established by the locked R. H. Charles 1902 scan and its authorized 1917 reprint transcription; excluded editorial matter, footnotes, page headers, marginal A.M. labels, and end matter; normalized Unicode, HTML whitespace, and marker whitespace; corrected only seven scan-confirmed marker defects and recovered the collapsed chapter-27 paragraph only from explicit scan-confirmed markers.",
         },
         "known_missing_verses": {
             work: {str(chapter): verses for chapter, verses in chapters.items()}

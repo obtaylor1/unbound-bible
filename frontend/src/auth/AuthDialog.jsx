@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from './authContext'
 
-export default function AuthDialog({ open, onClose }) {
+export default function AuthDialog({ open, onClose, onAuthenticated }) {
   const { login, register } = useAuth()
   const [mode, setMode] = useState('login')
   const [error, setError] = useState('')
@@ -12,7 +12,11 @@ export default function AuthDialog({ open, onClose }) {
     const data = new FormData(event.currentTarget)
     const payload = { email: data.get('email'), password: data.get('password') }
     if (mode === 'register') payload.username = data.get('username')
-    try { await (mode === 'login' ? login(payload) : register(payload)); onClose() }
+    try {
+      const user = await (mode === 'login' ? login(payload) : register(payload))
+      onAuthenticated?.(user)
+      onClose()
+    }
     catch (caught) { setError(caught.message) }
   }
 

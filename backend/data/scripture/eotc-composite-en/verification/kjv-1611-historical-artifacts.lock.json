@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "landing_url": "https://colenda.library.upenn.edu/catalog/81431-p3rv0df45",
+  "catalog_metadata": {
+    "title": "The Holy Bible, conteyning the Old Testament, and the New",
+    "publisher": "Robert Barker",
+    "date": "1611",
+    "edition": "Great HE editio princeps"
+  },
+  "rights": "NoC-US",
+  "review_scope": "The complete scan leaves containing Baruch through the Prayer of Manasses, p. 1144-p. 1158 inclusive, plus predecessor p. 1143 as boundary proof.",
+  "artifacts": [
+    {
+      "role": "catalog_metadata",
+      "artifact_path": "upenn-1611-great-he-catalog.html",
+      "source_url": "https://colenda.library.upenn.edu/catalog/81431-p3rv0df45",
+      "retrieved_at": "2026-08-29T19:24:41Z",
+      "size_bytes": 9337,
+      "sha256": "b2b5c1aaa0a91548c2d3113202939604152605ec11b6347374e1d8a1afb107a3"
+    },
+    {
+      "role": "iiif_manifest",
+      "artifact_path": "upenn-1611-great-he-iiif-manifest.json",
+      "source_url": "https://colenda.library.upenn.edu/items/ark:/81431/p3rv0df45/manifest",
+      "retrieved_at": "2026-08-29T19:25:04Z",
+      "size_bytes": 1349933,
+      "sha256": "4f48c2f54f39a4cb9bf197ba96b0834293741cd64f5c5daa2154eae3ce7097a5"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1143",
+      "artifact_path": "upenn-1611-great-he-pages/p1143.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/efb0d59a-1a78-43a0-a1b4-c0f148b204ec/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1215945, "sha256": "b87117fad670b58085c71d5cd59a59243f542845f12fe15ab12972225462e6de"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1144",
+      "artifact_path": "upenn-1611-great-he-pages/p1144.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/7bb8542b-8a8a-4ff1-aff9-62132cf5c5c3/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 927513, "sha256": "8e059804e067dc0ef91c0f1c36e7bda6a949f652c68520c646974a581e35ef52"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1145",
+      "artifact_path": "upenn-1611-great-he-pages/p1145.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/9bcedcc4-1686-46a6-b109-92eabdf13f24/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1232941, "sha256": "2ee5c3bc121777a3ceb9aa027abc87fd75f327567ed3d130e0fa2b02fb597211"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1146",
+      "artifact_path": "upenn-1611-great-he-pages/p1146.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/15679514-8dec-41d2-9a0f-b1933a4479b7/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 965502, "sha256": "5ab0c1cf19894f3d6a6900ab0b35fea33f0892cea83d4be9aa1d61acf151f32c"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1147",
+      "artifact_path": "upenn-1611-great-he-pages/p1147.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/8c825b73-a881-4417-a30e-e9227954944f/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1225792, "sha256": "ae80ec0f3ebde2ae36149b9368d6b342bd98dcb9018270355cafd9952745cb9c"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1148",
+      "artifact_path": "upenn-1611-great-he-pages/p1148.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/241978c5-8c1c-456b-9b52-81e9d6b9608f/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 939534, "sha256": "22e8d1c0356f66aaba58d007b707add9c6a8ab7a0b3e21791747cd9e1659fc04"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1149",
+      "artifact_path": "upenn-1611-great-he-pages/p1149.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/9976bf3f-ae54-404f-927e-457cbfc2f5ed/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1258595, "sha256": "292a6eb16caab1710347276458e844ee75c229ee906fc0143e4c3605557ea605"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1150",
+      "artifact_path": "upenn-1611-great-he-pages/p1150.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/b1127111-ff87-428d-b60c-f5afe08c52d7/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 960665, "sha256": "2ca0bb52b0ad3f8ff368d9b0df6b4db89305760c0f4d0f473687859094318696"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1151",
+      "artifact_path": "upenn-1611-great-he-pages/p1151.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/29b8bdfd-734f-416f-a9a6-8cba22947bad/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1233660, "sha256": "3b9d1317dd90227c840e2dd577411ec39165c35b2fa00b4d2f633e6839076419"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1152",
+      "artifact_path": "upenn-1611-great-he-pages/p1152.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/088e525a-e981-4b20-ab37-d436c80ba9b7/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 921058, "sha256": "97e284eaf481ee38f727a1dc694cc4d7e05e4c89b024613e3f9cad0f752458ab"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1153",
+      "artifact_path": "upenn-1611-great-he-pages/p1153.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/d89230c1-4403-43c1-946f-dcb0056cb779/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1169520, "sha256": "6d588f2613c5bb717ffc6c6b47a876c10ff355f52ec76de939ee91d9737a01a7"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1154",
+      "artifact_path": "upenn-1611-great-he-pages/p1154.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/f11e0cc7-5ba5-4247-aed6-fc8f3a4a4b2f/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 911377, "sha256": "19ecb76f10ec2e0b5b569c9b5f76ab581dfba74ea6c7c50f987d80066550c09c"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1155",
+      "artifact_path": "upenn-1611-great-he-pages/p1155.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/cd15f42c-92c5-4cd5-a692-e0399eb09a98/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1217261, "sha256": "d428b8d01cdcf918b879193954876381d29a0d2d1d2425f177ce9e86cb36b671"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1156",
+      "artifact_path": "upenn-1611-great-he-pages/p1156.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/1f411a98-9974-41fc-9119-4f38f27c2dab/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 932028, "sha256": "312234eaf3a601f9351e45722ffc924e14ad7eec1eacddb724fcd808861480d2"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1157",
+      "artifact_path": "upenn-1611-great-he-pages/p1157.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/ab6c7152-9b05-489f-810f-dbd4b07c20b9/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1949, "height": 2986,
+      "size_bytes": 1244499, "sha256": "2a0db72728305dbb5aafc0ecb1e19b193186fb73a01757038ea2d129f69a5b90"
+    },
+    {
+      "role": "page_image", "canvas_label": "p. 1158",
+      "artifact_path": "upenn-1611-great-he-pages/p1158.jpg",
+      "iiif_url": "https://iiif-images.library.upenn.edu/iiif/2/e6348525-7136-4199-9d6a-34600731533d/full/full/0/default.jpg",
+      "retrieved_at": "2026-08-29T20:00:58Z", "width": 1889, "height": 2862,
+      "size_bytes": 967757, "sha256": "c591b33d92ba536cf0f32f3516a03ec78f208cd605e4c2c41c586e9043cbeb90"
+    }
+  ]
+}
