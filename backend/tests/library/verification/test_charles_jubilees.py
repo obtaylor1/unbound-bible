@@ -304,7 +304,15 @@ def test_pdf_review_renderer_is_bounded_and_reproduces_all_locked_crops(
         module._ppm(oversized)
 
     renderer = shutil.which("pdftoppm")
-    assert renderer
+    if renderer is None:
+        pytest.skip("Poppler is unavailable; locked crop reproduction cannot run")
+    version = module._run_checked(
+        [renderer, "-v"], timeout_seconds=module.VERSION_TIMEOUT_SECONDS,
+    )
+    if b"pdftoppm version 26.05.0" not in version:
+        with pytest.raises(ValueError, match="recorded Poppler 26.05.0"):
+            module.verify(Path(renderer))
+        pytest.skip("The recorded Poppler 26.05.0 renderer is unavailable")
     assert module.verify(Path(renderer)) == 18
 
 
