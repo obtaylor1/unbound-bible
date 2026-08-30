@@ -34,6 +34,8 @@ jobs:
         with:
           version: "0.8.13"
           enable-cache: true
+      - name: Install source-verification system dependencies
+        run: sudo apt-get update && sudo apt-get install --yes poppler-utils
       - run: uv sync --frozen
       - run: uv run pytest backend/tests -q
 
